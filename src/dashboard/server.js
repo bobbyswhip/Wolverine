@@ -27,6 +27,8 @@ class DashboardServer {
     this.tokenTracker = options.tokenTracker;
     this.skills = options.skills;
     this.repairHistory = options.repairHistory;
+    this.processMonitor = options.processMonitor;
+    this.routeProber = options.routeProber;
 
     this.auth = new AdminAuth();
     this._sseClients = new Set();
@@ -60,6 +62,8 @@ class DashboardServer {
       if (req.url === "/api/brain") return this._handleBrain(req, res);
       if (req.url === "/api/usage") return this._handleUsage(req, res);
       if (req.url === "/api/repairs") return this._handleRepairs(req, res);
+      if (req.url === "/api/process") return this._handleProcess(req, res);
+      if (req.url === "/api/routes") return this._handleRoutes(req, res);
       if (req.url === "/api/usage/history") return this._handleUsageHistory(req, res);
       if (req.url === "/api/auth/verify" && req.method === "POST") return this._handleAuthVerify(req, res);
       if (req.url === "/api/command" && req.method === "POST") return this._handleCommand(req, res);
@@ -863,6 +867,18 @@ ${context ? "\nBrain:\n" + context : ""}`,
     res.end(JSON.stringify(this.tokenTracker ? this.tokenTracker.getAggregates() : {}));
   }
 
+  _handleProcess(req, res) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(this.processMonitor ? this.processMonitor.getMetrics() : {}));
+  }
+
+  _handleRoutes(req, res) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    const metrics = this.routeProber ? this.routeProber.getMetrics() : {};
+    const summary = this.routeProber ? this.routeProber.getSummary() : {};
+    res.end(JSON.stringify({ routes: metrics, summary }));
+  }
+
   _handleRepairs(req, res) {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(this.repairHistory ? { repairs: this.repairHistory.getAll(), stats: this.repairHistory.getStats() } : { repairs: [], stats: {} }));
@@ -986,6 +1002,7 @@ main{overflow-y:auto;padding:24px}
   <a class="active" data-panel="overview">📊 Overview</a>
   <a data-panel="events">📋 Events</a>
   <a data-panel="perf">⚡ Performance</a>
+  <a data-panel="analytics">📊 Analytics</a>
   <div class="sep"></div>
   <div class="label">Agent</div>
   <a data-panel="command">💬 Command</a>
@@ -1016,6 +1033,19 @@ main{overflow-y:auto;padding:24px}
 </div>
 <div class="panel" id="p-events"><div class="card"><h3>Live Event Stream</h3><div class="ev-list" id="ev-all"></div></div></div>
 <div class="panel" id="p-perf"><div class="card"><h3>Endpoint Metrics</h3><div id="perf-list"><div class="empty">No traffic yet</div></div></div></div>
+<div class="panel" id="p-analytics">
+  <div class="stats" style="grid-template-columns:repeat(4,1fr)">
+    <div class="stat-card heal"><div class="stat-val" id="a-mem">-</div><div class="stat-lbl">Memory (RSS)</div></div>
+    <div class="stat-card up"><div class="stat-val" id="a-cpu">-</div><div class="stat-lbl">CPU %</div></div>
+    <div class="stat-card brain"><div class="stat-val" id="a-routes">-</div><div class="stat-lbl">Routes Monitored</div></div>
+    <div class="stat-card err"><div class="stat-val" id="a-health">-</div><div class="stat-lbl">Route Health</div></div>
+  </div>
+  <div class="row2">
+    <div class="card"><h3>Memory Over Time</h3><div id="a-mem-chart" style="height:150px"></div></div>
+    <div class="card"><h3>CPU Over Time</h3><div id="a-cpu-chart" style="height:150px"></div></div>
+  </div>
+  <div class="card"><h3>Route Response Times</h3><div id="a-route-list"><div class="empty">Waiting for first probe cycle...</div></div></div>
+</div>
 <div class="panel" id="p-command">
   <div id="cmd-auth" class="auth-gate">
     <h2>🔐 Admin Authentication</h2>
@@ -1159,7 +1189,7 @@ function addEvent(ev){
 
 async function refresh(){
   try{
-    const [sr,mr,br2,brn,usage,repairs]=await Promise.all([fetch(B+'/api/stats').then(r=>r.json()),fetch(B+'/api/metrics').then(r=>r.json()),fetch(B+'/api/backups').then(r=>r.json()),fetch(B+'/api/brain').then(r=>r.json()),fetch(B+'/api/usage').then(r=>r.json()).catch(()=>({})),fetch(B+'/api/repairs').then(r=>r.json()).catch(()=>({repairs:[],stats:{}}))]);
+    const [sr,mr,br2,brn,usage,repairs,proc,routeData]=await Promise.all([fetch(B+'/api/stats').then(r=>r.json()),fetch(B+'/api/metrics').then(r=>r.json()),fetch(B+'/api/backups').then(r=>r.json()),fetch(B+'/api/brain').then(r=>r.json()),fetch(B+'/api/usage').then(r=>r.json()).catch(()=>({})),fetch(B+'/api/repairs').then(r=>r.json()).catch(()=>({repairs:[],stats:{}})),fetch(B+'/api/process').then(r=>r.json()).catch(()=>({})),fetch(B+'/api/routes').then(r=>r.json()).catch(()=>({routes:{},summary:{}}))]);
     if(sr.session){$('s-heals').textContent=sr.session.heals||0;$('s-errors').textContent=sr.session.errors||0;$('s-rollbacks').textContent=sr.session.rollbacks||0;$('h-events').textContent=sr.session.totalEvents||0;
       const s=Math.round((sr.session.uptime||0)/1000),m=Math.floor(s/60),h=Math.floor(m/60);
       const ut=h>0?h+'h '+m%60+'m':m>0?m+'m '+s%60+'s':s+'s';$('s-uptime').textContent=ut;$('h-uptime').textContent=ut;}
@@ -1223,6 +1253,44 @@ async function refresh(){
         const cost='$'+(r.cost||0).toFixed(4);
         return '<div class="mrow" style="flex-wrap:wrap"><div style="flex:1"><span style="margin-right:6px">'+icon+'</span><span class="ep">'+esc(r.error).slice(0,60)+'</span></div><span class="vals">'+r.mode+' &middot; '+r.tokens.toLocaleString()+' tokens &middot; '+cost+' &middot; iter '+r.iteration+' &middot; '+(r.duration/1000).toFixed(1)+'s</span><div style="width:100%;font-size:.75rem;color:var(--text2);margin-top:4px">'+date+' — '+esc(r.resolution).slice(0,100)+'</div></div>';
       }).join('');
+    }
+    // Analytics: process + routes
+    if(proc&&proc.current){
+      $('a-mem').textContent=proc.current.rss+'MB';
+      $('a-cpu').textContent=proc.current.cpu+'%';
+    }
+    if(routeData&&routeData.summary){
+      const rs=routeData.summary;
+      $('a-routes').textContent=rs.totalRoutes||0;
+      $('a-health').textContent=(rs.healthy||0)+'/'+(rs.totalRoutes||0);
+    }
+    // Memory chart
+    if(proc&&proc.samples&&proc.samples.length>1){
+      const s=proc.samples,max=Math.max(...s.map(e=>e.rss))||1,w=$('a-mem-chart').offsetWidth||500,h=140;
+      const bw=Math.max(3,Math.floor(w/s.length)-1);
+      let svg='<svg width="'+w+'" height="'+h+'">';
+      s.forEach((e,i)=>{const bh=Math.max(2,Math.round((e.rss/max)*h*0.85));svg+='<rect x="'+(i*(bw+1))+'" y="'+(h-bh)+'" width="'+bw+'" height="'+bh+'" fill="var(--blue)" rx="1"><title>'+e.rss+'MB</title></rect>';});
+      svg+='</svg>';$('a-mem-chart').innerHTML=svg;
+    }
+    // CPU chart
+    if(proc&&proc.samples&&proc.samples.length>1){
+      const s=proc.samples,max=Math.max(...s.map(e=>e.cpu),1),w=$('a-cpu-chart').offsetWidth||500,h=140;
+      const bw=Math.max(3,Math.floor(w/s.length)-1);
+      let svg='<svg width="'+w+'" height="'+h+'">';
+      s.forEach((e,i)=>{const bh=Math.max(2,Math.round((e.cpu/max)*h*0.85));const c=e.cpu>80?'var(--red)':e.cpu>50?'var(--yellow)':'var(--green)';svg+='<rect x="'+(i*(bw+1))+'" y="'+(h-bh)+'" width="'+bw+'" height="'+bh+'" fill="'+c+'" rx="1"><title>'+e.cpu+'%</title></rect>';});
+      svg+='</svg>';$('a-cpu-chart').innerHTML=svg;
+    }
+    // Route list
+    if(routeData&&routeData.routes){
+      const routes=Object.entries(routeData.routes);
+      if(routes.length>0){
+        const trendIcon={stable:'→',degrading:'↗',improving:'↘'};
+        $('a-route-list').innerHTML=routes.sort((a,b)=>b[1].avgMs-a[1].avgMs).map(([p,m])=>{
+          const icon=m.healthy?'🟢':'🔴';
+          const trend=trendIcon[m.trend]||'→';
+          return '<div class="mrow"><span>'+icon+' <span class="ep">'+esc(p)+'</span></span><span class="vals"><b>'+m.avgMs+'ms</b> avg ('+m.minMs+'-'+m.maxMs+') '+trend+' &middot; '+m.errors+' errs &middot; '+m.samples+' probes</span></div>';
+        }).join('');
+      }
     }
   }catch(e){}
 }

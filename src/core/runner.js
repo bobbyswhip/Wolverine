@@ -16,6 +16,8 @@ const { TokenTracker } = require("../logger/token-tracker");
 const { RepairHistory } = require("../logger/repair-history");
 const { setTokenTracker } = require("./ai-client");
 const { SkillRegistry } = require("../skills/skill-registry");
+const { ProcessMonitor } = require("../monitor/process-monitor");
+const { RouteProber } = require("../monitor/route-prober");
 const { Notifier } = require("../notifications/notifier");
 
 /**
@@ -77,6 +79,16 @@ class WolverineRunner {
       port,
     });
 
+    // Process monitor — heartbeat, memory, CPU, leak detection
+    this.processMonitor = new ProcessMonitor({ logger: this.logger });
+
+    // Route prober — tests all routes periodically
+    this.routeProber = new RouteProber({
+      port,
+      logger: this.logger,
+      brain: this.brain,
+    });
+
     // Brain — semantic memory + project context
     this.brain = new Brain(this.cwd);
 
@@ -105,6 +117,8 @@ class WolverineRunner {
       tokenTracker: this.tokenTracker,
       skills: this.skills,
       repairHistory: this.repairHistory,
+      processMonitor: this.processMonitor,
+      routeProber: this.routeProber,
     });
 
     // Stability tracking
@@ -178,6 +192,8 @@ class WolverineRunner {
     this._clearStabilityTimer();
     this.healthMonitor.stop();
     this.perfMonitor.stop();
+    this.processMonitor.stop();
+    this.routeProber.stop();
     this.mcp.shutdown();
     this.tokenTracker.save();
     this.dashboard.stop();
@@ -214,6 +230,24 @@ class WolverineRunner {
     });
 
     this._startStabilityTimer();
+
+    // Start process monitor (memory, CPU, heartbeat)
+    if (this.child && this.child.pid) {
+      this.processMonitor.reset(this.child.pid);
+      if (!this.processMonitor._running) {
+        this.processMonitor.start(this.child.pid, (reason) => {
+          if (this._healInProgress) return;
+          console.log(chalk.red(`\n🚨 Process monitor triggered restart: ${reason}`));
+          this.logger.error("process.monitor_restart", `Restart: ${reason}`, { reason, pid: this.child?.pid });
+          this.restart();
+        });
+      } else {
+        this.processMonitor.reset(this.child.pid);
+      }
+    }
+
+    // Start route prober (auto-discovers and tests all routes)
+    if (!this.routeProber._running) this.routeProber.start();
 
     // Start health monitoring
     this.healthMonitor.stop();
