@@ -21,6 +21,27 @@ npm start
 
 Dashboard opens at `http://localhost:PORT+1`. Server runs on `PORT`.
 
+### Try a Demo
+
+Demos copy a buggy server into `server/`, let wolverine fix it, then restore your original:
+
+```bash
+npm run demo:list            # See all demos
+npm run demo:01              # Basic typo (ReferenceError)
+npm run demo:02              # Multi-file import mismatch
+npm run demo:03              # Syntax error (extra paren)
+npm run demo:04              # Secret leak in error output
+npm run demo:05              # External service down (human notification)
+npm run demo:06              # JSON config typo
+npm run demo:07              # null.toString() crash
+```
+
+Each demo:
+1. Backs up your current `server/` directory
+2. Copies the buggy demo into `server/`
+3. Runs wolverine — watch it detect, diagnose, fix, verify, and restart
+4. Restores your original `server/` when you press Ctrl+C
+
 ---
 
 ## Architecture
@@ -220,6 +241,45 @@ Vector database that gives wolverine long-term memory:
 **Two-tier search** for speed:
 1. Keyword match (instant, 0ms) — catches most lookups
 2. Semantic embedding search (API call) — only when keywords miss
+
+---
+
+## Process Manager
+
+Wolverine acts as a PM2-like process manager with AI-powered diagnostics:
+
+| Feature | What it does |
+|---------|-------------|
+| **Heartbeat** | Checks if the process is alive every 10 seconds |
+| **Memory monitoring** | Tracks RSS/heap, detects leaks (N consecutive growth samples → restart) |
+| **Memory limit** | Auto-restart when RSS exceeds threshold (default 512MB, configurable) |
+| **CPU tracking** | Samples CPU% with color-coded charting (green/yellow/red) |
+| **Route probing** | Auto-discovers ALL routes from function map, probes every 30s |
+| **Response time trends** | Per-route avg/min/max + trend detection (stable/degrading/improving) |
+| **Frozen detection** | Health check failures trigger force-kill and heal cycle |
+| **Auto-adaptation** | When you add new routes, the prober discovers and monitors them |
+
+The `📊 Analytics` dashboard panel shows memory/CPU charts, route health status, and response time breakdowns — all updating in real-time.
+
+---
+
+## Demos
+
+All demos use the `server/` directory pattern. Each demo:
+1. Backs up your current `server/`
+2. Copies a buggy Express server into `server/`
+3. Runs wolverine — you watch it fix the bug in real-time
+4. Restores your original `server/` on Ctrl+C
+
+| Demo | Bug | What it tests |
+|------|-----|--------------|
+| `01-basic-typo` | `userz` → `users` | Fast path, error parser, backup |
+| `02-multi-file` | Import name mismatch across files | Agent multi-file understanding |
+| `03-syntax-error` | Extra closing paren | Syntax check in verifier |
+| `04-secret-leak` | Env var in error output | Secret redaction before AI |
+| `05-expired-key` | External service 503 | Human notification system |
+| `06-json-config` | Typo in JSON key | Agent edits non-JS files |
+| `07-null-crash` | `null.toString()` | Fast path basic repair |
 
 ---
 

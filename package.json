@@ -11,8 +11,16 @@
     "dev": "node bin/wolverine.js server/index.js",
     "wolverine": "node bin/wolverine.js",
     "server": "node server/index.js",
-    "test:pentest": "node tests/pentest-secrets.js",
-    "test:all": "node tests/run-sequential.js"
+    "demo": "node examples/run-demo.js",
+    "demo:list": "node examples/run-demo.js --list",
+    "demo:01": "node examples/run-demo.js 01-basic-typo",
+    "demo:02": "node examples/run-demo.js 02-multi-file",
+    "demo:03": "node examples/run-demo.js 03-syntax-error",
+    "demo:04": "node examples/run-demo.js 04-secret-leak",
+    "demo:05": "node examples/run-demo.js 05-expired-key",
+    "demo:06": "node examples/run-demo.js 06-json-config",
+    "demo:07": "node examples/run-demo.js 07-null-crash",
+    "test:pentest": "node tests/pentest-secrets.js"
   },
   "keywords": [
     "self-healing",

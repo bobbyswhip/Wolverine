@@ -1,0 +1,9 @@
+{
+  "appName": "MyApp",
+  "version": "1.0.0",
+  "databse": {
+    "host": "localhost",
+    "port": 5432,
+    "name": "myapp_db"
+  }
+}
