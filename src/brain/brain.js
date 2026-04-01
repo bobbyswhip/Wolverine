@@ -99,6 +99,26 @@ const SEED_DOCS = [
     text: "Database best practices enforced by SQL skill: ALWAYS use parameterized queries with ? placeholders, NEVER concatenate user input into SQL strings, use connection pooling, handle connection errors gracefully, use WAL journal mode for SQLite, enable foreign keys, close connections on process exit. The SafeDB class throws an error if string concatenation is detected in a query.",
     metadata: { topic: "skill-sql-best-practices" },
   },
+  {
+    text: "Sub-agent system: wolverine can spawn specialized sub-agents for divide-and-conquer. 7 types: explore (read-only, investigates codebase), plan (read-only, proposes fix strategy), fix (read+write, applies targeted fix), verify (read-only, checks if fix works), research (searches brain+web for solutions), security (audits for vulnerabilities), database (handles DB issues with SQL skill). Each type has restricted tools and a specific model.",
+    metadata: { topic: "sub-agents" },
+  },
+  {
+    text: "Sub-agent workflow: explore→plan→fix. Explorer finds relevant files, Planner proposes a strategy using exploration results, Fixer executes the plan. Used automatically on goal loop iteration 3+ and dashboard LARGE tier commands. Sub-agents can also run in parallel via spawnParallel() for independent tasks like running security audit + explore simultaneously.",
+    metadata: { topic: "sub-agent-workflow" },
+  },
+  {
+    text: "Sub-agent tool restrictions (claw-code pattern): explore gets read_file/glob/grep/git. plan gets read_file/glob/grep/brain. fix gets read_file/write_file/edit_file/glob/grep. verify gets read_file/glob/grep/bash. research gets read_file/grep/web_fetch/brain. security gets read_file/glob/grep. database gets read_file/write_file/edit_file/glob/grep/bash. No agent gets tools it doesn't need.",
+    metadata: { topic: "sub-agent-tools" },
+  },
+  {
+    text: "Heal pipeline escalation: Iteration 1 uses fast path (CODING_MODEL, single file, cheapest). Iteration 2 uses single agent (REASONING_MODEL, multi-file, 8 turns). Iteration 3+ uses sub-agents (explore→plan→fix, 3 specialized agents with restricted tools). Each iteration gets context from previous failures. Deep research (RESEARCH_MODEL) triggers after 2+ failures.",
+    metadata: { topic: "heal-escalation" },
+  },
+  {
+    text: "Process manager: wolverine monitors memory (RSS/heap) every 10s, detects memory leaks (N consecutive growth samples → auto-restart), enforces memory limit (default 512MB), tracks CPU%, probes all routes every 30s, detects response time degradation trends (stable/degrading/improving). Analytics dashboard shows memory/CPU charts and per-route health.",
+    metadata: { topic: "process-manager" },
+  },
 ];
 
 class Brain {
