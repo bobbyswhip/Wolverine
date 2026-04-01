@@ -13,6 +13,7 @@ const { Brain } = require("../brain/brain");
 const { SecretRedactor } = require("../security/secret-redactor");
 const { McpRegistry } = require("../mcp/mcp-registry");
 const { TokenTracker } = require("../logger/token-tracker");
+const { RepairHistory } = require("../logger/repair-history");
 const { setTokenTracker } = require("./ai-client");
 const { SkillRegistry } = require("../skills/skill-registry");
 const { Notifier } = require("../notifications/notifier");
@@ -51,6 +52,7 @@ class WolverineRunner {
     this.logger.setRedactor(this.redactor);
     this.tokenTracker = new TokenTracker(this.cwd);
     setTokenTracker(this.tokenTracker);
+    this.repairHistory = new RepairHistory(this.cwd);
     this.notifier = new Notifier({
       logger: this.logger,
       redactor: this.redactor,
@@ -102,6 +104,7 @@ class WolverineRunner {
       runner: this,
       tokenTracker: this.tokenTracker,
       skills: this.skills,
+      repairHistory: this.repairHistory,
     });
 
     // Stability tracking
@@ -279,6 +282,7 @@ class WolverineRunner {
         brain: this.brain,
         mcp: this.mcp,
         skills: this.skills,
+        repairHistory: this.repairHistory,
       });
 
       if (result.healed) {

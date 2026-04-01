@@ -26,6 +26,7 @@ class DashboardServer {
     this.runner = options.runner;
     this.tokenTracker = options.tokenTracker;
     this.skills = options.skills;
+    this.repairHistory = options.repairHistory;
 
     this.auth = new AdminAuth();
     this._sseClients = new Set();
@@ -58,6 +59,7 @@ class DashboardServer {
       if (req.url === "/api/backups") return this._handleBackups(req, res);
       if (req.url === "/api/brain") return this._handleBrain(req, res);
       if (req.url === "/api/usage") return this._handleUsage(req, res);
+      if (req.url === "/api/repairs") return this._handleRepairs(req, res);
       if (req.url === "/api/usage/history") return this._handleUsageHistory(req, res);
       if (req.url === "/api/auth/verify" && req.method === "POST") return this._handleAuthVerify(req, res);
       if (req.url === "/api/command" && req.method === "POST") return this._handleCommand(req, res);
@@ -402,6 +404,13 @@ ${existingRoutes || "(none)"}`,
 
     const tokens = (result.usage?.prompt_tokens || result.usage?.input_tokens || 0)
       + (result.usage?.completion_tokens || result.usage?.output_tokens || 0);
+
+    // Backup entire server/ before making changes
+    if (this.runner && this.runner.backupManager) {
+      const bid = this.runner.backupManager.createBackup(null);
+      this.runner.backupManager.markVerified(bid);
+      console.log(chalk.gray(`  💾 Backup created: ${bid}`));
+    }
 
     // Execute operations
     const filesModified = [];
@@ -854,6 +863,11 @@ ${context ? "\nBrain:\n" + context : ""}`,
     res.end(JSON.stringify(this.tokenTracker ? this.tokenTracker.getAggregates() : {}));
   }
 
+  _handleRepairs(req, res) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(this.repairHistory ? { repairs: this.repairHistory.getAll(), stats: this.repairHistory.getStats() } : { repairs: [], stats: {} }));
+  }
+
   _handleBrain(req, res) {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(this.brain ? this.brain.getStats() : {}));
@@ -980,6 +994,7 @@ main{overflow-y:auto;padding:24px}
   <a data-panel="backups">💾 Backups</a>
   <a data-panel="brain">🧠 Brain</a>
   <a data-panel="tools">🔧 Tools</a>
+  <a data-panel="repairs">🔧 Repairs</a>
   <a data-panel="usage">📈 Usage</a>
 </nav>
 <main>
@@ -1026,6 +1041,15 @@ main{overflow-y:auto;padding:24px}
   <div class="card" style="margin-top:16px"><h3>Function Map</h3><div id="br-fmap"><div class="empty">Loading...</div></div></div>
 </div>
 <div class="panel" id="p-tools"><div class="card"><h3>Agent Tool Harness</h3><div id="tool-list"></div></div></div>
+<div class="panel" id="p-repairs">
+  <div class="stats" style="grid-template-columns:repeat(4,1fr)">
+    <div class="stat-card heal"><div class="stat-val" id="r-total">0</div><div class="stat-lbl">Total Repairs</div></div>
+    <div class="stat-card up"><div class="stat-val" id="r-rate">0%</div><div class="stat-lbl">Success Rate</div></div>
+    <div class="stat-card err"><div class="stat-val" id="r-cost">$0</div><div class="stat-lbl">Repair Cost</div></div>
+    <div class="stat-card brain"><div class="stat-val" id="r-avg">0</div><div class="stat-lbl">Avg Tokens/Repair</div></div>
+  </div>
+  <div class="card"><h3>Repair History</h3><div id="r-list"><div class="empty">No repairs yet — crashes will be logged here with resolution details</div></div></div>
+</div>
 <div class="panel" id="p-usage">
   <div class="stats" style="grid-template-columns:repeat(3,1fr)">
     <div class="stat-card heal"><div class="stat-val" id="u-total">0</div><div class="stat-lbl">Total Tokens</div></div>
@@ -1135,7 +1159,7 @@ function addEvent(ev){
 
 async function refresh(){
   try{
-    const [sr,mr,br2,brn,usage]=await Promise.all([fetch(B+'/api/stats').then(r=>r.json()),fetch(B+'/api/metrics').then(r=>r.json()),fetch(B+'/api/backups').then(r=>r.json()),fetch(B+'/api/brain').then(r=>r.json()),fetch(B+'/api/usage').then(r=>r.json()).catch(()=>({}))]);
+    const [sr,mr,br2,brn,usage,repairs]=await Promise.all([fetch(B+'/api/stats').then(r=>r.json()),fetch(B+'/api/metrics').then(r=>r.json()),fetch(B+'/api/backups').then(r=>r.json()),fetch(B+'/api/brain').then(r=>r.json()),fetch(B+'/api/usage').then(r=>r.json()).catch(()=>({})),fetch(B+'/api/repairs').then(r=>r.json()).catch(()=>({repairs:[],stats:{}}))]);
     if(sr.session){$('s-heals').textContent=sr.session.heals||0;$('s-errors').textContent=sr.session.errors||0;$('s-rollbacks').textContent=sr.session.rollbacks||0;$('h-events').textContent=sr.session.totalEvents||0;
       const s=Math.round((sr.session.uptime||0)/1000),m=Math.floor(s/60),h=Math.floor(m/60);
       const ut=h>0?h+'h '+m%60+'m':m>0?m+'m '+s%60+'s':s+'s';$('s-uptime').textContent=ut;$('h-uptime').textContent=ut;}
@@ -1183,6 +1207,22 @@ async function refresh(){
       }else{
         $('u-chart').innerHTML='<div class="empty">Chart appears after multiple API calls</div>';
       }
+    }
+    // Repair history
+    if(repairs&&repairs.stats){
+      const rs=repairs.stats;
+      $('r-total').textContent=rs.total||0;
+      $('r-rate').textContent=(rs.successRate||0)+'%';
+      $('r-cost').textContent='$'+(rs.totalCost||0).toFixed(4);
+      $('r-avg').textContent=(rs.avgTokensPerRepair||0).toLocaleString();
+    }
+    if(repairs&&repairs.repairs&&repairs.repairs.length>0){
+      $('r-list').innerHTML=repairs.repairs.slice(-20).reverse().map(r=>{
+        const icon=r.success?'✅':'❌';
+        const date=new Date(r.timestamp).toLocaleString();
+        const cost='$'+(r.cost||0).toFixed(4);
+        return '<div class="mrow" style="flex-wrap:wrap"><div style="flex:1"><span style="margin-right:6px">'+icon+'</span><span class="ep">'+esc(r.error).slice(0,60)+'</span></div><span class="vals">'+r.mode+' &middot; '+r.tokens.toLocaleString()+' tokens &middot; '+cost+' &middot; iter '+r.iteration+' &middot; '+(r.duration/1000).toFixed(1)+'s</span><div style="width:100%;font-size:.75rem;color:var(--text2);margin-top:4px">'+date+' — '+esc(r.resolution).slice(0,100)+'</div></div>';
+      }).join('');
     }
   }catch(e){}
 }

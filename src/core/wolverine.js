@@ -22,7 +22,8 @@ const { EVENT_TYPES } = require("../logger/event-logger");
  *
  * The engine tries fast path first. If that fails verification, it escalates to the agent.
  */
-async function heal({ stderr, cwd, sandbox, redactor, notifier, rateLimiter, backupManager, logger, brain, mcp, skills }) {
+async function heal({ stderr, cwd, sandbox, redactor, notifier, rateLimiter, backupManager, logger, brain, mcp, skills, repairHistory }) {
+  const healStartTime = Date.now();
   // Redact secrets from stderr BEFORE any processing, logging, or AI calls
   const safeStderr = redactor ? redactor.redact(stderr) : stderr;
 
@@ -230,6 +231,30 @@ async function heal({ stderr, cwd, sandbox, redactor, notifier, rateLimiter, bac
   });
 
   backupManager.prune();
+
+  // Record to repair history
+  if (repairHistory) {
+    const duration = Date.now() - healStartTime;
+    const tokenUsage = goalResult.agentStats?.totalTokens || 0;
+    const { calculateCost } = require("../logger/pricing");
+    const model = goalResult.mode === "fast" ? getModel("coding") : getModel("reasoning");
+    const cost = calculateCost(model, tokenUsage * 0.7, tokenUsage * 0.3); // estimate in/out split
+
+    repairHistory.record({
+      error: parsed.errorMessage,
+      file: parsed.filePath,
+      line: parsed.line,
+      resolution: goalResult.explanation,
+      success: goalResult.success,
+      mode: goalResult.mode || "unknown",
+      model,
+      tokens: tokenUsage,
+      cost: cost.total,
+      iteration: goalResult.iteration,
+      duration,
+      filesModified: goalResult.agentStats?.filesModified || [],
+    });
+  }
 
   if (goalResult.success) {
     if (logger) logger.info(EVENT_TYPES.HEAL_SUCCESS, goalResult.explanation, { iteration: goalResult.iteration, mode: goalResult.mode });
