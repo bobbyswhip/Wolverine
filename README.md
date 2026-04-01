@@ -64,7 +64,8 @@ wolverine/
 │   ├── agent/               ← AI agent system
 │   │   ├── agent-engine.js  ← Multi-turn agent with 10 tools
 │   │   ├── goal-loop.js     ← Goal-driven repair loop
-│   │   └── research-agent.js← Deep research + learning from failures
+│   │   ├── research-agent.js← Deep research + learning from failures
+│   │   └── sub-agents.js    ← 7 specialized sub-agents (explore/plan/fix/verify/...)
 │   ├── security/            ← Security stack
 │   │   ├── sandbox.js       ← Directory-locked file access
 │   │   ├── secret-redactor.js← Env value → key name replacement
@@ -83,8 +84,10 @@ wolverine/
 │   │   ├── token-tracker.js ← Token usage + USD cost tracking
 │   │   ├── repair-history.js← Error/resolution audit trail
 │   │   └── pricing.js       ← Model cost calculations
-│   ├── monitor/             ← Performance
-│   │   └── perf-monitor.js  ← Endpoint response times + spam detection
+│   ├── monitor/             ← Performance + process management
+│   │   ├── perf-monitor.js  ← Endpoint response times + spam detection
+│   │   ├── process-monitor.js← Memory/CPU/heartbeat + leak detection
+│   │   └── route-prober.js  ← Auto-discovers and tests all routes
 │   ├── dashboard/           ← Web UI
 │   │   └── server.js        ← Real-time dashboard + command interface
 │   ├── notifications/       ← Alerts
@@ -121,12 +124,16 @@ Server crashes
   → Rate limit check (error loop → exponential backoff)
 
 Goal Loop (iterate until fixed or exhausted):
-  Iteration 1: Fast path (CODING_MODEL, single file)
+  Iteration 1: Fast path (CODING_MODEL, single file, ~1-2k tokens)
     → Apply patch → Verify (syntax check + boot probe) → Pass? Done.
-  Iteration 2: Agent path (REASONING_MODEL, multi-file + tools)
-    → 10-tool agent explores codebase → Fix → Verify → Pass? Done.
-  Iteration 3: Deep research (RESEARCH_MODEL) → Agent retry with findings
-    → Each failure feeds into the next attempt's context
+  Iteration 2: Single agent (REASONING_MODEL, multi-file, 10 tools)
+    → Explores codebase → Fix → Verify → Pass? Done.
+  Iteration 3: Sub-agents (explore → plan → fix)
+    → Explorer finds relevant files (read-only)
+    → Planner proposes fix strategy (read-only)
+    → Fixer executes the plan (write access)
+    → Deep research (RESEARCH_MODEL) feeds into context
+    → Each failure feeds into the next attempt
 
 After fix:
   → Record to repair history (error, resolution, tokens, cost)
@@ -161,6 +168,26 @@ The AI agent has 10 built-in tools (ported from [claw-code](https://github.com/i
 
 Only files in `server/` are editable.
 
+### Sub-Agents
+
+For complex repairs, wolverine spawns specialized sub-agents that run in sequence or parallel:
+
+| Agent | Access | Model | Role |
+|-------|--------|-------|------|
+| `explore` | Read-only | REASONING | Investigate codebase, find relevant files |
+| `plan` | Read-only | REASONING | Analyze problem, propose fix strategy |
+| `fix` | Read+write | CODING | Execute targeted fix from plan |
+| `verify` | Read-only | REASONING | Check if fix actually works |
+| `research` | Read-only | RESEARCH | Search brain + web for solutions |
+| `security` | Read-only | AUDIT | Audit code for vulnerabilities |
+| `database` | Read+write | CODING | Database-specific fixes (SQL skill) |
+
+Each sub-agent gets **restricted tools** — the explorer can't write files, the fixer can't search the web. This prevents agents from overstepping their role.
+
+**Workflows:**
+- `exploreAndFix()` — explore → plan → fix (sequential, 3 agents)
+- `spawnParallel()` — run multiple agents concurrently (e.g., security + explore)
+
 ---
 
 ## Dashboard
@@ -173,11 +200,13 @@ Real-time web UI at `http://localhost:PORT+1`:
 | **Events** | Live SSE event stream with color-coded severity |
 | **Performance** | Endpoint response times, request rates, error rates |
 | **Command** | Admin chat interface — ask questions or build features |
+| **Analytics** | Memory/CPU charts, route health, per-route response times + trends |
+| **Command** | Admin chat interface — ask questions or build features |
 | **Backups** | Full server/ snapshot history with status badges |
-| **Brain** | Vector store stats, namespace counts, function map |
-| **Repairs** | Error/resolution audit trail with tokens and cost |
-| **Tools** | Agent tool harness listing |
-| **Usage** | Token analytics: by model, category, tool + USD cost breakdown |
+| **Brain** | Vector store stats (23 seed docs), namespace counts, function map |
+| **Repairs** | Error/resolution audit trail: error, fix, tokens, cost, duration |
+| **Tools** | Agent tool harness listing (10 built-in + MCP) |
+| **Usage** | Token analytics: by model, by category, by tool + USD cost per call |
 
 ### Command Interface
 
