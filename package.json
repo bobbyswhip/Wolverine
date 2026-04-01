@@ -1,0 +1,38 @@
+{
+  "name": "wolverine-nodejs",
+  "version": "0.1.0",
+  "description": "Self-healing Node.js backend powered by AI. Automatically detects, diagnoses, and repairs runtime errors using OpenAI.",
+  "main": "src/index.js",
+  "bin": {
+    "wolverine": "./bin/wolverine.js"
+  },
+  "scripts": {
+    "start": "node bin/wolverine.js server/index.js",
+    "dev": "node bin/wolverine.js server/index.js",
+    "wolverine": "node bin/wolverine.js",
+    "server": "node server/index.js",
+    "test:pentest": "node tests/pentest-secrets.js",
+    "test:all": "node tests/run-sequential.js"
+  },
+  "keywords": [
+    "self-healing",
+    "ai",
+    "nodejs",
+    "error-recovery",
+    "openai",
+    "wolverine",
+    "claude-code"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "chalk": "^4.1.2",
+    "diff": "^7.0.0",
+    "dotenv": "^16.4.7",
+    "express": "^5.2.1",
+    "openai": "^4.73.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
