@@ -11,6 +11,7 @@ const { BackupManager } = require("../backup/backup-manager");
 const { AgentEngine } = require("../agent/agent-engine");
 const { ResearchAgent } = require("../agent/research-agent");
 const { GoalLoop } = require("../agent/goal-loop");
+const { exploreAndFix, spawnParallel } = require("../agent/sub-agents");
 const { EVENT_TYPES } = require("../logger/event-logger");
 
 /**
@@ -193,13 +194,13 @@ async function heal({ stderr, cwd, sandbox, redactor, notifier, rateLimiter, bac
           backupManager.rollbackTo(bid);
           return { healed: false, explanation: `Fast path error: ${err.message}` };
         }
-      } else {
-        // Agent path — REASONING_MODEL, multi-file
+      } else if (iteration === 2) {
+        // Iteration 2: Single agent — REASONING_MODEL
         console.log(chalk.magenta(`  🤖 Agent path (${getModel("reasoning")})...`));
         const agent = new AgentEngine({
           sandbox, logger, cwd, mcp,
-          maxTurns: iteration >= 3 ? 10 : 8,
-          maxTokens: iteration >= 3 ? 40000 : 25000,
+          maxTurns: 8,
+          maxTokens: 25000,
         });
 
         const agentResult = await agent.run({
@@ -220,6 +221,27 @@ async function heal({ stderr, cwd, sandbox, redactor, notifier, rateLimiter, bac
 
         backupManager.rollbackTo(bid);
         return { healed: false, explanation: agentResult.summary || "Agent could not fix" };
+      } else {
+        // Iteration 3+: Sub-agents — explore → plan → fix (divide and conquer)
+        console.log(chalk.magenta(`  🤖 Sub-agent path (explore → plan → fix)...`));
+
+        const subResult = await exploreAndFix(
+          `Error: ${parsed.errorMessage}\nFile: ${parsed.filePath}\nStack: ${parsed.stackTrace?.slice(0, 300)}`,
+          { sandbox, logger, cwd, mcp, brainContext: fullContext }
+        );
+        rateLimiter.record(errorSignature, subResult.totalTokens);
+
+        if (subResult.success && subResult.filesModified.length > 0) {
+          const verification = await verifyFix(parsed.filePath, cwd, errorSignature);
+          if (verification.verified) {
+            backupManager.markVerified(bid);
+            rateLimiter.clearSignature(errorSignature);
+            return { healed: true, explanation: subResult.summary, backupId: bid, mode: "sub-agents", agentStats: subResult };
+          }
+        }
+
+        backupManager.rollbackTo(bid);
+        return { healed: false, explanation: subResult.summary || "Sub-agents could not fix" };
       }
     },
   });

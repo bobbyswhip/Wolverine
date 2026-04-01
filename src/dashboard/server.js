@@ -215,14 +215,8 @@ class DashboardServer {
         if (plan.tier === "SMALL") {
           progress("develop", `Smart edit (${getModel("coding")}) — 1 AI call...`);
           result = await this._directEdit(safeCommand, chatContext);
-        } else {
-          const tiers = {
-            MEDIUM: { maxTurns: 8,  maxTokens: 25000 },
-            LARGE:  { maxTurns: 15, maxTokens: 60000 },
-          };
-          const tier = tiers[plan.tier] || tiers.MEDIUM;
-          console.log(chalk.gray(`  📐 Tier: ${plan.tier} (${tier.maxTurns} turns, ${tier.maxTokens} tokens)`));
-          progress("agent.turn", `Agent mode (${getModel("reasoning")}) — ${plan.tier} tier, ${tier.maxTurns} turns max`);
+        } else if (plan.tier === "MEDIUM") {
+          progress("agent.turn", `Agent mode (${getModel("reasoning")}) — MEDIUM tier`);
 
           let brainContext = "";
           if (this.brain && this.brain._initialized) {
@@ -233,8 +227,8 @@ class DashboardServer {
             sandbox: this.sandbox,
             logger: this.logger,
             cwd: process.cwd(),
-            maxTurns: tier.maxTurns,
-            maxTokens: tier.maxTokens,
+            maxTurns: 8,
+            maxTokens: 25000,
           });
 
           const agentResult = await agent.run({
@@ -252,7 +246,31 @@ class DashboardServer {
             turns: agentResult.turnCount,
             tokens: agentResult.totalTokens,
             mode: "agent",
-            tier: plan.tier,
+            tier: "MEDIUM",
+          };
+        } else {
+          // LARGE tier — sub-agents: explore → plan → fix
+          const { exploreAndFix } = require("../agent/sub-agents");
+          progress("agent.spawn", `Sub-agents (explore → plan → fix) — LARGE tier`);
+
+          let brainContext = "";
+          if (this.brain && this.brain._initialized) {
+            try { brainContext = await this.brain.getContext(command); } catch {}
+          }
+
+          const subResult = await exploreAndFix(
+            safeCommand + (chatContext ? "\n\nConversation:\n" + chatContext : ""),
+            { sandbox: this.sandbox, logger: this.logger, cwd: process.cwd(), mcp: this.runner?.mcp, brainContext }
+          );
+
+          result = {
+            success: subResult.success,
+            summary: subResult.summary,
+            filesModified: subResult.filesModified || [],
+            turns: (subResult.exploration?.turnCount || 0) + (subResult.plan?.turnCount || 0) + (subResult.fix?.turnCount || 0),
+            tokens: subResult.totalTokens,
+            mode: "sub-agents",
+            tier: "LARGE",
           };
         }
 

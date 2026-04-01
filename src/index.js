@@ -19,6 +19,7 @@ const { TokenTracker } = require("./logger/token-tracker");
 const { AgentEngine } = require("./agent/agent-engine");
 const { ResearchAgent } = require("./agent/research-agent");
 const { GoalLoop } = require("./agent/goal-loop");
+const { spawnAgent, spawnParallel, exploreAndFix } = require("./agent/sub-agents");
 const { McpRegistry } = require("./mcp/mcp-registry");
 const { McpSecurity } = require("./mcp/mcp-security");
 const { PerfMonitor } = require("./monitor/perf-monitor");
@@ -61,6 +62,9 @@ module.exports = {
   AgentEngine,
   ResearchAgent,
   GoalLoop,
+  spawnAgent,
+  spawnParallel,
+  exploreAndFix,
   McpRegistry,
   McpSecurity,
   // Monitor
