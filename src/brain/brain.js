@@ -160,20 +160,44 @@ class Brain {
   }
 
   /**
-   * Recall relevant memories by semantic similarity.
+   * Recall relevant memories — two-tier search for speed.
    *
-   * @param {string} query - What to search for
-   * @param {object} options - { topK, namespace, minScore }
-   * @returns {Array<{ text, metadata, score }>}
+   * Tier 1: Fast keyword search (instant, no API call)
+   * Tier 2: Semantic embedding search (API call, only if keywords miss)
    */
   async recall(query, options = {}) {
-    const queryEmbedding = await embed(query);
-    return this.store.search(queryEmbedding, { topK: 5, ...options });
+    const topK = options.topK || 5;
+
+    // Tier 1: keyword search (instant)
+    const keywordResults = this.store.keywordSearch(query, { topK, namespace: options.namespace, minTokens: 1 });
+    if (keywordResults.length >= topK) {
+      return keywordResults;
+    }
+
+    // Tier 2: semantic search (API call — only if keyword search didn't find enough)
+    try {
+      const queryEmbedding = await embed(query);
+      const semanticResults = this.store.search(queryEmbedding, { topK, ...options });
+
+      // Merge: keyword results first (they're more precise), then semantic
+      const seen = new Set(keywordResults.map(r => r.id));
+      const merged = [...keywordResults];
+      for (const r of semanticResults) {
+        if (!seen.has(r.id)) {
+          merged.push(r);
+          seen.add(r.id);
+        }
+      }
+      return merged.slice(0, topK);
+    } catch {
+      // If embedding API fails, return keyword results only
+      return keywordResults;
+    }
   }
 
   /**
    * Build a full context string for the agent.
-   * Includes: function map summary + relevant memories for the given error.
+   * Includes: function map summary + relevant memories.
    */
   async getContext(errorMessage) {
     const parts = [];
@@ -183,7 +207,7 @@ class Brain {
       parts.push("## Server Function Map\n" + this.functionMap.summary);
     }
 
-    // Semantic recall for relevant context
+    // Two-tier recall: keyword first, semantic fallback
     if (errorMessage) {
       const memories = await this.recall(errorMessage, { topK: 5, minScore: 0.3 });
       if (memories.length > 0) {

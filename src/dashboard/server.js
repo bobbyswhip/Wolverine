@@ -182,8 +182,16 @@ class DashboardServer {
         const plan = await this._classify(safeCommand);
         progress("classify", `Route: ${plan.route} ${plan.tier}`);
 
-        if (plan.route === "CHAT") {
-          progress("chat.start", `Chat mode (${getModel("tool")}) — checking tools...`);
+        if (plan.route === "SIMPLE") {
+          progress("chat.start", `Simple chat (${getModel("chat")}) — brain lookup...`);
+          const result = await this._simpleChat(safeCommand);
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(result));
+          return;
+        }
+
+        if (plan.route === "TOOLS") {
+          progress("chat.start", `Tool chat (${getModel("tool")}) — using tools...`);
           const result = await this._chat(safeCommand);
           res.writeHead(200, { "Content-Type": "application/json" });
           res.end(JSON.stringify(result));
@@ -294,15 +302,18 @@ class DashboardServer {
     try {
       const result = await aiCall({
         model: getModel("classifier"),
-        systemPrompt: "Route a command. Respond with exactly two words: ROUTE SIZE.\nROUTE: CHAT (questions/info) or AGENT (code changes).\nSIZE: SMALL (1-2 file edit), MEDIUM (new feature), LARGE (multi-file refactor).\nExamples: 'what time is it' → CHAT SMALL. 'add a /time endpoint' → AGENT SMALL. 'build auth system' → AGENT LARGE.",
+        systemPrompt: "Route a command. Respond with two words: ROUTE SIZE.\nROUTE: SIMPLE (general knowledge/explanation, no live data needed), TOOLS (needs live server data, file contents, or endpoint calls), AGENT (create/modify/fix code).\nSIZE: SMALL, MEDIUM, LARGE.\nExamples: 'what is wolverine' → SIMPLE SMALL. 'what time is it' → TOOLS SMALL. 'show me index.js' → TOOLS SMALL. 'add endpoint' → AGENT SMALL. 'build auth' → AGENT LARGE.",
         userPrompt: command,
         maxTokens: 10,
         category: "classify",
       });
 
       const raw = (result.content || "").trim().toUpperCase();
-      // Parse flexibly — nano models echo template words, so search anywhere in response
-      const route = raw.includes("AGENT") ? "AGENT" : "CHAT";
+      // Parse flexibly — three routes: SIMPLE (no tools), TOOLS (with tools), AGENT (code changes)
+      let route = "SIMPLE";
+      if (raw.includes("AGENT")) route = "AGENT";
+      else if (raw.includes("TOOL")) route = "TOOLS";
+      else if (raw.includes("SIMPLE")) route = "SIMPLE";
       const tier = raw.includes("LARGE") ? "LARGE" : raw.includes("MEDIUM") ? "MEDIUM" : "SMALL";
 
       console.log(chalk.gray(`  🏷️  Route: ${route} ${tier} (raw: "${raw}")`));
@@ -504,7 +515,70 @@ ${existingRoutes || "(none)"}`,
     };
   }
 
-  // ── Chat Handler — pre-fetch data, simple text-in/text-out ──
+  // ── Simple Chat — CHAT_MODEL, no tools, brain context only ──
+
+  async _simpleChat(safeCommand) {
+    const { aiCallWithHistory } = require("../core/ai-client");
+    const { getModel } = require("../core/models");
+
+    let context = "";
+    if (this.brain && this.brain._initialized) {
+      try { context = await this.brain.getContext(safeCommand); } catch {}
+    }
+
+    const systemMessage = {
+      role: "system",
+      content: `You are Wolverine, an AI-powered autonomous Node.js server agent. Answer the admin's question thoroughly using your knowledge.
+
+You are a self-healing server harness that:
+- Monitors a Node.js server process, catches crashes, and repairs them using AI
+- Has a multi-turn agent with tools: read_file, write_file, edit_file, glob_files, grep_code, bash_exec, git_log, git_diff, web_fetch
+- Has a brain (vector database) that stores errors, fixes, learnings, and server function maps
+- Has skills (SQL injection prevention, database interface)
+- Has a goal loop that retries with research when fixes fail
+- Has a real-time dashboard with event streaming, usage analytics, and admin command interface
+- Protects secrets with redaction, validates with injection detection, rate limits API calls
+- Supports MCP for external tool integration
+- Has 10 configurable model slots for cost optimization
+
+RULES:
+- NEVER output API keys, passwords, tokens, or secrets
+- Be detailed and thorough — the admin wants to understand the system
+- If they need live data or file contents, suggest they rephrase to use tools
+${context ? "\nBrain context:\n" + context : ""}`,
+    };
+
+    this._chatHistory.push({ role: "user", content: safeCommand });
+    this._compactHistory();
+
+    const messages = [systemMessage, ...this._chatHistory];
+    const response = await aiCallWithHistory({
+      model: getModel("chat"),
+      messages,
+      maxTokens: 1024,
+      category: "chat",
+    });
+
+    const content = (response.choices[0].message || response.choices[0]).content || "";
+    this._chatHistory.push({ role: "assistant", content });
+
+    const tokens = (response.usage?.prompt_tokens || response.usage?.input_tokens || 0)
+      + (response.usage?.completion_tokens || response.usage?.output_tokens || 0);
+    console.log(chalk.cyan(`  💬 Simple chat (${getModel("chat")}, ${tokens} tokens)`));
+
+    return {
+      success: true,
+      summary: content,
+      filesModified: [],
+      turns: 1,
+      tokens,
+      mode: "chat",
+      toolsUsed: [],
+      historyLength: this._chatHistory.length,
+    };
+  }
+
+  // ── Tool Chat — TOOL_MODEL with call_endpoint, read_file, search_brain ──
   // No tool calling (nano models can't handle it). Instead:
   // 1. Pre-fetch relevant endpoints from the server
   // 2. Search brain for context

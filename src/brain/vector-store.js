@@ -107,6 +107,52 @@ class VectorStore {
   }
 
   /**
+   * Fast keyword search — no embedding API call, instant.
+   * Tokenizes query and scores entries by keyword overlap.
+   * Use as first-pass before expensive semantic search.
+   */
+  keywordSearch(query, { topK = 5, namespace, minTokens = 2 } = {}) {
+    const tokens = query.toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter(t => t.length > 2);
+
+    if (tokens.length === 0) return [];
+
+    const results = [];
+    let entryIds;
+    if (namespace && this._nsIndex.has(namespace)) {
+      entryIds = this._nsIndex.get(namespace);
+    } else {
+      entryIds = this._entries.keys();
+    }
+
+    for (const id of entryIds) {
+      const entry = this._entries.get(id);
+      if (!entry) continue;
+
+      const textLower = entry.text.toLowerCase();
+      let score = 0;
+      for (const token of tokens) {
+        if (textLower.includes(token)) score++;
+      }
+
+      if (score >= minTokens) {
+        results.push({
+          id: entry.id,
+          namespace: entry.namespace,
+          text: entry.text,
+          metadata: entry.metadata,
+          score: score / tokens.length, // normalize 0-1
+        });
+      }
+    }
+
+    results.sort((a, b) => b.score - a.score);
+    return results.slice(0, topK);
+  }
+
+  /**
    * Get all entries in a namespace.
    */
   getNamespace(namespace) {

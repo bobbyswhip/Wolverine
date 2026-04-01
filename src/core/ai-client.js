@@ -51,15 +51,27 @@ function isResponsesModel(model) {
 }
 
 /**
+ * Detect if a model uses internal reasoning tokens (o-series, gpt-5-nano, etc.)
+ * These models need higher token limits because reasoning consumes most of the budget.
+ */
+function isReasoningModel(model) {
+  return /^o[1-9]|^gpt-5-nano|^gpt-5\.4-nano/.test(model);
+}
+
+/**
  * Build the token limit param for Chat Completions API.
+ * Reasoning models get 4x the limit to accommodate thinking tokens.
  */
 function tokenParam(model, limit) {
+  // Reasoning models need headroom for chain-of-thought
+  const effectiveLimit = isReasoningModel(model) ? Math.max(limit * 4, 4096) : limit;
+
   if (isResponsesModel(model)) {
-    return { max_output_tokens: limit };
+    return { max_output_tokens: effectiveLimit };
   }
   const usesNewParam = /^(o[1-9]|gpt-5|gpt-4o)/.test(model) || model.includes("nano");
   if (usesNewParam) {
-    return { max_completion_tokens: limit };
+    return { max_completion_tokens: effectiveLimit };
   }
   return { max_tokens: limit };
 }
