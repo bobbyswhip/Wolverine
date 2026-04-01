@@ -1,123 +1,305 @@
 # Wolverine Node.js
 
-Self-healing Node.js backend powered by AI. Wolverine watches your server process, catches crashes, and automatically repairs the source code using OpenAI — then restarts.
+**Self-healing Node.js servers powered by an AI coding harness.**
 
-Inspired by [claw-code](https://github.com/instructkr/claw-code) and the concept of AI-powered developer tools.
+Wolverine watches your server process, catches crashes, diagnoses errors with AI, generates fixes, verifies them, and restarts — automatically. It also has a dashboard with a command interface where you can tell the agent to build features, and it will modify your server code directly.
 
-## How It Works
+Built on patterns from [claw-code](https://github.com/instructkr/claw-code) — the open-source Claude Code harness.
 
-```
-Your Server Crashes → Wolverine Catches Error → AI Analyzes & Generates Fix → Patch Applied → Server Restarts
-```
-
-1. **Error Detection**: Wolverine runs your Node.js script as a child process and captures stderr
-2. **Error Parsing**: Extracts the file path, line number, and error message from the stack trace
-3. **AI Repair**: Sends the error context + source code to OpenAI, which returns a minimal fix
-4. **Patch Application**: Applies the fix to the source file (with automatic backup/rollback)
-5. **Restart**: Restarts the server process with the patched code
+---
 
 ## Quick Start
 
 ```bash
-# 1. Clone the repo
-git clone https://github.com/YOUR_USERNAME/wolverine-nodejs.git
-cd wolverine-nodejs
-
-# 2. Install dependencies
+git clone https://github.com/bobbyswhip/Wolverine.git
+cd Wolverine
 npm install
-
-# 3. Configure your API key
 cp .env.example .env.local
-# Edit .env.local and add your OPENAI_API_KEY
-
-# 4. Run the demo (buggy server that wolverine will fix)
-npm run demo
+# Edit .env.local — add your OPENAI_API_KEY and generate an ADMIN_KEY
+npm start
 ```
 
-## Usage
+Dashboard opens at `http://localhost:PORT+1`. Server runs on `PORT`.
 
-### CLI
+---
 
-```bash
-# Run any Node.js script with wolverine watching
-node bin/wolverine.js your-server.js
-
-# Or use npx after npm link
-wolverine your-server.js
-```
-
-### Programmatic
-
-```javascript
-const { WolverineRunner } = require("wolverine-nodejs");
-
-const runner = new WolverineRunner("./server.js", {
-  cwd: __dirname,
-});
-
-runner.start();
-
-// Graceful shutdown
-process.on("SIGINT", () => runner.stop());
-```
-
-### Single Error Repair
-
-```javascript
-const { heal } = require("wolverine-nodejs");
-
-const result = await heal({
-  stderr: "ReferenceError: userData is not defined\n    at ...",
-  cwd: "/path/to/project",
-});
-
-console.log(result.healed);      // true/false
-console.log(result.explanation);  // "The variable was misspelled..."
-```
-
-## Configuration
-
-| Environment Variable | Default | Description |
-|---------------------|---------|-------------|
-| `OPENAI_API_KEY` | (required) | Your OpenAI API key |
-| `OPENAI_MODEL` | `gpt-4o` | OpenAI model to use |
-| `WOLVERINE_MAX_RETRIES` | `3` | Max repair attempts before giving up |
-| `PORT` | `3000` | Port for demo server |
-
-## Project Structure
+## Architecture
 
 ```
-wolverine-nodejs/
-├── bin/
-│   └── wolverine.js        # CLI entry point
+wolverine/
+├── server/                  ← YOUR server code (agent can edit)
+│   ├── index.js             ← Entry point
+│   └── routes/              ← Route modules
 ├── src/
-│   ├── index.js             # Public API
-│   └── core/
-│       ├── ai-client.js     # OpenAI integration
-│       ├── error-parser.js  # Stack trace parsing
-│       ├── patcher.js       # File patching with backup/rollback
-│       ├── runner.js        # Process manager
-│       └── wolverine.js     # Healing engine orchestrator
-├── examples/
-│   └── buggy-server.js      # Demo server with intentional bug
-├── .env.example             # Environment template
-└── package.json
+│   ├── core/                ← Wolverine engine
+│   │   ├── wolverine.js     ← Heal pipeline + goal loop
+│   │   ├── runner.js        ← Process manager (PM2-like)
+│   │   ├── ai-client.js     ← OpenAI client (Chat + Responses API)
+│   │   ├── models.js        ← 10-model configuration system
+│   │   ├── verifier.js      ← Fix verification (syntax + boot probe)
+│   │   ├── error-parser.js  ← Stack trace parsing
+│   │   ├── patcher.js       ← File patching with sandbox
+│   │   └── health-monitor.js← PM2-style health checks
+│   ├── agent/               ← AI agent system
+│   │   ├── agent-engine.js  ← Multi-turn agent with 10 tools
+│   │   ├── goal-loop.js     ← Goal-driven repair loop
+│   │   └── research-agent.js← Deep research + learning from failures
+│   ├── security/            ← Security stack
+│   │   ├── sandbox.js       ← Directory-locked file access
+│   │   ├── secret-redactor.js← Env value → key name replacement
+│   │   ├── injection-detector.js ← AI-powered prompt injection scan
+│   │   ├── rate-limiter.js  ← Error explosion protection
+│   │   └── admin-auth.js    ← Dashboard admin authentication
+│   ├── brain/               ← Semantic memory
+│   │   ├── brain.js         ← Vector store + function map + learning
+│   │   ├── vector-store.js  ← In-memory cosine similarity search
+│   │   ├── embedder.js      ← Embedding + text compaction pipeline
+│   │   └── function-map.js  ← Live project scanner
+│   ├── backup/              ← Smart backup system
+│   │   └── backup-manager.js← Full server/ snapshots with retention
+│   ├── logger/              ← Observability
+│   │   ├── event-logger.js  ← Structured event bus + JSONL persistence
+│   │   ├── token-tracker.js ← Token usage + USD cost tracking
+│   │   ├── repair-history.js← Error/resolution audit trail
+│   │   └── pricing.js       ← Model cost calculations
+│   ├── monitor/             ← Performance
+│   │   └── perf-monitor.js  ← Endpoint response times + spam detection
+│   ├── dashboard/           ← Web UI
+│   │   └── server.js        ← Real-time dashboard + command interface
+│   ├── notifications/       ← Alerts
+│   │   └── notifier.js      ← Human-required error detection
+│   ├── mcp/                 ← External tools
+│   │   ├── mcp-client.js    ← MCP protocol client (stdio + HTTP)
+│   │   ├── mcp-registry.js  ← Server discovery + tool registration
+│   │   └── mcp-security.js  ← Allowlists + injection scan on MCP results
+│   └── skills/              ← Reusable capabilities
+│       ├── skill-registry.js← Auto-discovery + prompt injection
+│       └── sql.js           ← SQL injection prevention + safe DB interface
+├── bin/wolverine.js         ← CLI entry point
+├── tests/                   ← Test suite
+└── .wolverine/              ← Runtime state (gitignored)
+    ├── brain/               ← Vector store persistence
+    ├── events/              ← Event log (JSONL)
+    ├── backups/             ← Server snapshots
+    ├── usage.json           ← Token usage aggregates
+    ├── usage-history.jsonl  ← Full token usage timeline
+    ├── repair-history.json  ← Error/resolution audit trail
+    └── mcp.json             ← MCP server configuration
 ```
 
-## How the Demo Works
+---
 
-The `examples/buggy-server.js` has an intentional bug — it references `userData` instead of `users`. When you run `npm run demo`:
+## How Self-Healing Works
 
-1. Wolverine starts the buggy server
-2. The server crashes with `ReferenceError: userData is not defined`
-3. Wolverine sends the error + source to OpenAI
-4. OpenAI responds with the fix: change `userData` to `users`
-5. Wolverine patches the file and restarts
-6. Server runs successfully on port 3000
+```
+Server crashes
+  → Error parsed (file, line, message)
+  → Secrets redacted from error output
+  → Prompt injection scan (AUDIT_MODEL)
+  → Human-required check (expired keys, service down → notify, don't waste tokens)
+  → Rate limit check (error loop → exponential backoff)
 
-## Security Notes
+Goal Loop (iterate until fixed or exhausted):
+  Iteration 1: Fast path (CODING_MODEL, single file)
+    → Apply patch → Verify (syntax check + boot probe) → Pass? Done.
+  Iteration 2: Agent path (REASONING_MODEL, multi-file + tools)
+    → 10-tool agent explores codebase → Fix → Verify → Pass? Done.
+  Iteration 3: Deep research (RESEARCH_MODEL) → Agent retry with findings
+    → Each failure feeds into the next attempt's context
 
-See the Security Audit section below for important considerations before using in production.
+After fix:
+  → Record to repair history (error, resolution, tokens, cost)
+  → Store in brain for future reference
+  → Promote backup to stable after 30min uptime
+```
+
+---
+
+## Agent Tool Harness
+
+The AI agent has 10 built-in tools (ported from [claw-code](https://github.com/instructkr/claw-code)):
+
+| Tool | Source | Description |
+|------|--------|-------------|
+| `read_file` | FileReadTool | Read any file with optional offset/limit for large files |
+| `write_file` | FileWriteTool | Write complete file content, creates parent dirs |
+| `edit_file` | FileEditTool | Surgical find-and-replace without rewriting entire file |
+| `glob_files` | GlobTool | Pattern-based file discovery (`**/*.js`, `src/**/*.json`) |
+| `grep_code` | GrepTool | Regex search across codebase with context lines |
+| `bash_exec` | BashTool | Sandboxed shell execution with blocked dangerous commands |
+| `git_log` | gitOperationTracking | View recent commit history |
+| `git_diff` | gitOperationTracking | View uncommitted changes |
+| `web_fetch` | WebFetchTool | Fetch URL content for documentation/research |
+| `done` | — | Signal task completion with summary |
+
+**Blocked commands** (from claw-code's `destructiveCommandWarning`):
+`rm -rf /`, `git push --force`, `git reset --hard`, `npm publish`, `curl | bash`, `eval()`
+
+**Protected paths** — the agent can NEVER modify:
+`src/`, `bin/`, `tests/`, `node_modules/`, `.env`, `package.json`
+
+Only files in `server/` are editable.
+
+---
+
+## Dashboard
+
+Real-time web UI at `http://localhost:PORT+1`:
+
+| Panel | What it shows |
+|-------|--------------|
+| **Overview** | Heals, errors, rollbacks, memories, uptime + recent events |
+| **Events** | Live SSE event stream with color-coded severity |
+| **Performance** | Endpoint response times, request rates, error rates |
+| **Command** | Admin chat interface — ask questions or build features |
+| **Backups** | Full server/ snapshot history with status badges |
+| **Brain** | Vector store stats, namespace counts, function map |
+| **Repairs** | Error/resolution audit trail with tokens and cost |
+| **Tools** | Agent tool harness listing |
+| **Usage** | Token analytics: by model, category, tool + USD cost breakdown |
+
+### Command Interface
+
+Three routes (AI-classified per command):
+
+| Route | Model | Tools | When |
+|-------|-------|-------|------|
+| **SIMPLE** | CHAT_MODEL | None | Knowledge questions, explanations |
+| **TOOLS** | TOOL_MODEL | call_endpoint, read_file, search_brain | Live data, file contents |
+| **AGENT** | CODING_MODEL | Full 10-tool harness | Build features, fix code |
+
+Secured with `WOLVERINE_ADMIN_KEY` + localhost-only IP check.
+
+---
+
+## 10-Model Configuration
+
+Every AI task has its own model slot. Customize in `.env.local`:
+
+| Env Variable | Role | Needs Tools? | Cost Impact |
+|---|---|---|---|
+| `REASONING_MODEL` | Multi-file agent | Yes | High (agent loop) |
+| `CODING_MODEL` | Code repair/generation | Responses API | Medium-high |
+| `CHAT_MODEL` | Simple text responses | No | Low |
+| `TOOL_MODEL` | Chat with function calling | **Yes** | Medium |
+| `CLASSIFIER_MODEL` | SIMPLE/TOOLS/AGENT routing | No | ~10 tokens |
+| `AUDIT_MODEL` | Injection detection (every error) | No | Low |
+| `COMPACTING_MODEL` | Text compression for brain | No | Low |
+| `RESEARCH_MODEL` | Deep research on failures | No | High (rare) |
+| `TEXT_EMBEDDING_MODEL` | Brain vector embeddings | No | Very low |
+
+Reasoning models (`o-series`, `gpt-5-nano`) automatically get 4x token limits to accommodate chain-of-thought.
+
+---
+
+## Security
+
+| Layer | What it does |
+|-------|-------------|
+| **Secret Redactor** | Reads `.env.local`, replaces secret values with `process.env.KEY_NAME` in all AI calls, logs, brain, dashboard |
+| **Injection Detector** | Regex layer + AI audit (AUDIT_MODEL) on every error before repair |
+| **Sandbox** | All file operations locked to project directory, symlink escape detection |
+| **Protected Paths** | Agent blocked from modifying wolverine internals (`src/`, `bin/`, etc.) |
+| **Admin Auth** | Dashboard command interface requires key + localhost IP, timing-safe comparison, lockout after 10 failures |
+| **Rate Limiter** | Sliding window, min gap, hourly budget, exponential backoff on error loops |
+| **MCP Security** | Per-server tool allowlists, arg sanitization, result injection scanning |
+| **SQL Skill** | `sqlGuard()` middleware blocks 15 injection pattern families on all endpoints |
+
+---
+
+## Brain (Semantic Memory)
+
+Vector database that gives wolverine long-term memory:
+
+- **Function Map** — scans `server/` on startup, indexes all routes, functions, classes, exports
+- **Error History** — past errors with context for loop prevention
+- **Fix History** — successful and failed repairs for learning
+- **Learnings** — research findings, admin commands, patterns discovered
+- **Skill Knowledge** — embedded docs for SQL skill, best practices, wolverine itself
+
+**Two-tier search** for speed:
+1. Keyword match (instant, 0ms) — catches most lookups
+2. Semantic embedding search (API call) — only when keywords miss
+
+---
+
+## Backup System
+
+Full `server/` directory snapshots:
+
+- Created before every repair attempt and every smart edit
+- Includes all files: `.js`, `.json`, `.sql`, `.db`, `.yaml`, configs
+- **Status lifecycle**: UNSTABLE → VERIFIED (fix passed) → STABLE (30min+ uptime)
+- **Retention**: unstable pruned after 7 days, stable keeps 1/day after 7 days
+- Atomic writes prevent corruption on kill
+
+---
+
+## Skills
+
+Auto-discovered from `src/skills/`. Each skill exports metadata for the registry:
+
+### SQL Skill (`src/skills/sql.js`)
+- **sqlGuard()** — Express middleware blocking SQL injection (UNION, stacked queries, tautologies, timing attacks, etc.)
+- **SafeDB** — Parameterized-only database wrapper (blocks string concatenation in queries)
+- Auto-injected into agent prompts when building database features
+
+Add new skills by creating a file in `src/skills/` with `SKILL_NAME`, `SKILL_DESCRIPTION`, `SKILL_KEYWORDS`, `SKILL_USAGE` exports.
+
+---
+
+## MCP Integration
+
+Connect external tools via [Model Context Protocol](https://modelcontextprotocol.io):
+
+```json
+// .wolverine/mcp.json
+{
+  "servers": {
+    "datadog": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@datadog/mcp-server"],
+      "allowedTools": ["get_metrics", "list_monitors"],
+      "enabled": true
+    }
+  }
+}
+```
+
+Tools appear as `mcp__datadog__get_metrics` in the agent. All MCP data passes through the security stack (redaction, injection scan, rate limiting).
+
+---
+
+## Usage Tracking
+
+Every API call tracked with input/output tokens + USD cost:
+
+- **By Category**: heal, develop, chat, security, classify, research, brain
+- **By Model**: which model costs the most
+- **By Tool**: call_endpoint, search_brain, etc.
+- **Timeline chart**: color-coded SVG bar chart
+- **Persisted**: `.wolverine/usage-history.jsonl` survives restarts
+- **Custom pricing**: override in `.wolverine/pricing.json`
+
+---
+
+## Notifications
+
+Errors the AI can't fix trigger human alerts:
+
+| Category | Examples |
+|----------|---------|
+| **auth** | 401 Unauthorized, expired API key, invalid credentials |
+| **billing** | 429 rate limit, quota exceeded, credits depleted |
+| **service** | ECONNREFUSED, ENOTFOUND, ETIMEDOUT, 503 |
+| **cert** | SSL/TLS errors, self-signed certificate |
+| **permission** | EACCES, EPERM |
+| **disk** | ENOSPC, ENOMEM |
+
+AI summary generated with CHAT_MODEL, secrets redacted, optional webhook delivery.
+
+---
 
 ## License
 
