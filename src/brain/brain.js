@@ -228,8 +228,12 @@ const SEED_DOCS = [
     metadata: { topic: "idempotency" },
   },
   {
-    text: "Heal pipeline no longer requires a file path. When no file is identified from the error (database errors, config problems, port conflicts), the pipeline skips fast path and goes straight to the agent, which uses investigation tools (glob_files, grep_code, list_dir, inspect_db, check_env, check_port) to find the root cause. Agent verification for no-file errors: if agent made changes or ran commands, trust the agent's assessment. For file-based errors, verification uses syntax check + boot probe as before.",
+    text: "Heal pipeline no longer requires a file path. When no file is identified from the error (database errors, config problems, port conflicts), the pipeline skips fast path and goes straight to the agent, which uses investigation tools (glob_files, grep_code, list_dir, inspect_db, check_env, check_port, audit_deps) to find the root cause. Agent verification for no-file errors: if agent made changes or ran commands, trust the agent's assessment. For file-based errors, verification uses syntax check + boot probe + route probe as before.",
     metadata: { topic: "fileless-heal" },
+  },
+  {
+    text: "Dependency manager skill (src/skills/deps.js): structured npm dependency analysis + repair. diagnose(errorMessage, cwd) returns {diagnosed, category, summary, fixes} — categories: missing_install, missing_package, version_conflict, outdated_api, corrupted_modules. healthReport(cwd) returns full health check: npm audit (vulnerabilities), outdated packages, peer dep conflicts, unused packages, lock file status, health score 0-100. getMigration(packageName) returns known upgrade paths: express→fastify (5.6x faster), moment→dayjs (2KB vs 70KB), request→node-fetch (deprecated), body-parser→built-in, callbacks→async/await. Agent tools: audit_deps (full health check), check_migration (upgrade paths). Heal pipeline uses diagnose() in tryOperationalFix before AI — zero tokens for dependency issues.",
+    metadata: { topic: "skill-deps" },
   },
 ];
 

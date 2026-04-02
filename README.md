@@ -204,7 +204,7 @@ The error hook auto-patches Fastify and Express via `--require` preload. No midd
 
 ## Agent Tool Harness
 
-The AI agent has 16 built-in tools (inspired by [claw-code](https://github.com/ultraworkers/claw-code)):
+The AI agent has 18 built-in tools (inspired by [claw-code](https://github.com/ultraworkers/claw-code)):
 
 | Tool | Category | Description |
 |------|----------|-------------|
@@ -222,6 +222,8 @@ The AI agent has 16 built-in tools (inspired by [claw-code](https://github.com/u
 | `run_db_fix` | Database | UPDATE/DELETE/INSERT/ALTER on SQLite (auto-backup before write) |
 | `check_port` | Diagnostic | Check if a port is in use and by what process |
 | `check_env` | Diagnostic | Check environment variables (values auto-redacted) |
+| `audit_deps` | Deps | Full health check: vulnerabilities, outdated, peer conflicts, unused |
+| `check_migration` | Deps | Known upgrade paths (express→fastify, moment→dayjs, etc.) |
 | `web_fetch` | Research | Fetch URL content for documentation/research |
 | `done` | Control | Signal task completion with summary |
 
@@ -491,6 +493,19 @@ Auto-discovered from `src/skills/`. Each skill exports metadata for the registry
 - **idempotencyGuard()** — Prevents double-fire of write requests in cluster mode (see below)
 - **db.idempotent(key, fn)** — Database-level dedup for critical writes (payments, orders)
 - Auto-injected into agent prompts when building database features
+
+### Dependency Manager (`src/skills/deps.js`)
+- **diagnose()** — structured diagnosis of dependency errors before AI runs (zero tokens)
+- **healthReport()** — full audit: vulnerabilities, outdated, peer conflicts, unused packages, lock file, health score
+- **getMigration()** — known upgrade paths with code transformation patterns:
+
+| From | To | Why |
+|------|----|-----|
+| `express` | `fastify` | 5.6x faster, async-first, built-in validation |
+| `moment` | `dayjs` | Maintenance mode, 70KB → 2KB |
+| `request` | `node-fetch` | Deprecated since 2020 |
+| `body-parser` | built-in | Included in Express 4.16+ / Fastify |
+| callbacks | `async/await` | Cleaner error handling, no callback hell |
 
 Add new skills by creating a file in `src/skills/` with `SKILL_NAME`, `SKILL_DESCRIPTION`, `SKILL_KEYWORDS`, `SKILL_USAGE` exports.
 

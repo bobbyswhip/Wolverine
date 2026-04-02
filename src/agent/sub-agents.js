@@ -23,9 +23,9 @@ const { getModel } = require("../core/models");
 
 // Tool restrictions per agent type (claw-code: allowed_tools_for_subagent)
 const AGENT_TOOL_SETS = {
-  explore: ["read_file", "glob_files", "grep_code", "git_log", "git_diff", "list_dir", "check_env", "check_port", "inspect_db", "done"],
-  plan: ["read_file", "glob_files", "grep_code", "list_dir", "inspect_db", "check_env", "search_brain", "done"],
-  fix: ["read_file", "write_file", "edit_file", "glob_files", "grep_code", "bash_exec", "move_file", "run_db_fix", "done"],
+  explore: ["read_file", "glob_files", "grep_code", "git_log", "git_diff", "list_dir", "check_env", "check_port", "inspect_db", "audit_deps", "done"],
+  plan: ["read_file", "glob_files", "grep_code", "list_dir", "inspect_db", "check_env", "audit_deps", "check_migration", "search_brain", "done"],
+  fix: ["read_file", "write_file", "edit_file", "glob_files", "grep_code", "bash_exec", "move_file", "run_db_fix", "audit_deps", "done"],
   verify: ["read_file", "glob_files", "grep_code", "bash_exec", "inspect_db", "check_port", "done"],
   research: ["read_file", "grep_code", "web_fetch", "search_brain", "done"],
   security: ["read_file", "glob_files", "grep_code", "inspect_db", "done"],

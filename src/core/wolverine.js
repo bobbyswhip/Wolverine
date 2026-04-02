@@ -13,6 +13,7 @@ const { ResearchAgent } = require("../agent/research-agent");
 const { GoalLoop } = require("../agent/goal-loop");
 const { exploreAndFix, spawnParallel } = require("../agent/sub-agents");
 const { EVENT_TYPES } = require("../logger/event-logger");
+const { diagnose: diagnoseDeps } = require("../skills/deps");
 
 /**
  * The Wolverine healing engine — v3.
@@ -400,33 +401,19 @@ async function tryOperationalFix(parsed, cwd, logger) {
   const { execSync } = require("child_process");
   const msg = parsed.errorMessage || "";
 
-  // Pattern 1: Cannot find module 'X' — missing npm package
-  const missingModule = msg.match(/Cannot find module '([^']+)'/);
-  if (missingModule) {
-    const moduleName = missingModule[1];
+  // Pattern 1: Dependency issues — use deps skill for structured diagnosis
+  const depsDiag = diagnoseDeps(msg, cwd);
+  if (depsDiag.diagnosed) {
+    console.log(chalk.blue(`  📦 Deps diagnosis: ${depsDiag.category} — ${depsDiag.summary}`));
+    if (logger) logger.info("heal.ops.deps", depsDiag.summary, { category: depsDiag.category });
 
-    // Only npm install if it's a package name (not a relative/absolute path)
-    if (!moduleName.startsWith(".") && !moduleName.startsWith("/") && !moduleName.startsWith("\\")) {
-      // Check if it's already in package.json but not installed
-      const fs = require("fs");
-      const path = require("path");
-      const pkgPath = path.join(cwd, "package.json");
-      let isInPkg = false;
+    for (const fix of (depsDiag.fixes || [])) {
       try {
-        const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
-        const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
-        isInPkg = !!allDeps[moduleName];
-      } catch {}
-
-      try {
-        const cmd = isInPkg ? "npm install" : `npm install ${moduleName}`;
-        console.log(chalk.blue(`  📦 Missing module '${moduleName}' — running: ${cmd}`));
-        if (logger) logger.info("heal.ops", `Running: ${cmd}`, { module: moduleName });
-        execSync(cmd, { cwd, stdio: "pipe", timeout: 60000 });
-        return { fixed: true, action: `Installed missing module '${moduleName}' via: ${cmd}` };
+        console.log(chalk.blue(`  📦 Running: ${fix}`));
+        execSync(fix, { cwd, stdio: "pipe", timeout: 60000 });
+        return { fixed: true, action: `${depsDiag.summary}. Fixed via: ${fix}` };
       } catch (e) {
-        console.log(chalk.yellow(`  ⚠️ npm install failed: ${e.message?.slice(0, 100)}`));
-        // Fall through to AI repair
+        console.log(chalk.yellow(`  ⚠️ ${fix} failed: ${e.message?.slice(0, 80)}`));
       }
     }
   }

@@ -261,6 +261,33 @@ const TOOL_DEFINITIONS = [
       },
     },
   },
+  // ── DEPENDENCY MANAGEMENT ──
+  {
+    type: "function",
+    function: {
+      name: "audit_deps",
+      description: "Run a full dependency health check: npm audit (vulnerabilities), outdated packages, peer dep conflicts, unused packages, lock file status. Returns a health score and actionable fixes. Use BEFORE editing code when the error might be a dependency issue.",
+      parameters: {
+        type: "object",
+        properties: {},
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "check_migration",
+      description: "Check if a package has a known migration/upgrade path. Use when a deprecated API or old package is causing errors. Returns the recommended replacement and code transformation patterns.",
+      parameters: {
+        type: "object",
+        properties: {
+          package: { type: "string", description: "Package name to check (e.g. 'express', 'moment', 'request')" },
+        },
+        required: ["package"],
+      },
+    },
+  },
   // ── COMPLETION ──
   {
     type: "function",
@@ -352,6 +379,10 @@ DIAGNOSTICS:
 - check_port: Check if a port is in use and by what process
 - check_env: Check environment variables (values auto-redacted for security)
 
+DEPENDENCY MANAGEMENT:
+- audit_deps: Full health check (vulnerabilities, outdated, peer conflicts, unused). Use FIRST for dependency errors.
+- check_migration: Check if a package has a known upgrade path (express→fastify, moment→dayjs, etc.)
+
 RESEARCH:
 - web_fetch: Fetch a URL (docs, npm packages, error solutions)
 
@@ -365,7 +396,7 @@ RESEARCH:
 
 | Error Pattern | Category | Diagnostic Steps | Fix |
 |---|---|---|---|
-| Cannot find module 'X' | DEPENDENCY | check package.json | bash_exec: npm install X |
+| Cannot find module 'X' | DEPENDENCY | audit_deps first, check package.json | bash_exec: npm install X |
 | Cannot find module './X' | IMPORT | glob_files to find real path | edit_file: fix require path |
 | ENOENT: no such file | FILE MISSING | list_dir to check structure | write_file or move_file |
 | EACCES/EPERM | PERMISSION | bash_exec: ls -la | bash_exec: chmod 755 |
@@ -530,6 +561,8 @@ Project root: ${this.cwd}${primaryFile ? `\nPrimary crash file: ${primaryFile}` 
       case "check_env":     return this._checkEnv(args);
       case "inspect_db":    return this._inspectDb(args);
       case "run_db_fix":    return this._runDbFix(args);
+      case "audit_deps":    return this._auditDeps(args);
+      case "check_migration": return this._checkMigration(args);
       case "done":          return this._done(args);
       // Legacy aliases
       case "list_files":    return this._globFiles({ pattern: (args.dir || ".") + "/*" + (args.pattern || "") });
@@ -930,6 +963,52 @@ Project root: ${this.cwd}${primaryFile ? `\nPrimary crash file: ${primaryFile}` 
       console.log(chalk.green(`    🗃️ DB fix applied: ${args.sql.slice(0, 60)} (changes: ${result.changes})`));
       return { content: `SQL executed. Changes: ${result.changes}. Backup at: ${backupPath}` };
     } catch (e) { return { content: `DB error: ${e.message}` }; }
+  }
+
+  _auditDeps() {
+    try {
+      const { healthReport } = require("../skills/deps");
+      const report = healthReport(this.cwd);
+      const { redact } = require("../security/secret-redactor");
+      const lines = [
+        `Dependency Health Score: ${report.score}/100 (${report.summary})`,
+        "",
+        `Vulnerabilities: ${report.audit.vulnerabilities} (${report.audit.critical} critical, ${report.audit.high} high, ${report.audit.moderate} moderate)`,
+        report.audit.fixes.length > 0 ? `Fix: ${report.audit.fixes.join(", ")}` : "",
+        "",
+        `Outdated: ${report.outdated.length} packages`,
+        ...report.outdated.slice(0, 10).map(p => `  ${p.name}: ${p.current} → ${p.latest}`),
+        report.outdated.length > 10 ? `  ... and ${report.outdated.length - 10} more` : "",
+        "",
+        `Peer Dependency Issues: ${report.peerDeps.length}`,
+        ...report.peerDeps.slice(0, 5).map(p => `  ${p.package}: ${p.requires}`),
+        "",
+        `Unused Packages: ${report.unused.length}`,
+        report.unused.length > 0 ? `  ${report.unused.join(", ")}` : "",
+        "",
+        `Lock File: ${report.lockFile.healthy ? "OK" : report.lockFile.issue}`,
+        report.lockFile.fix ? `  Fix: ${report.lockFile.fix}` : "",
+      ].filter(l => l !== undefined);
+      console.log(chalk.gray(`    📦 Deps audit: score ${report.score}/100, ${report.audit.vulnerabilities} vulns, ${report.outdated.length} outdated`));
+      return { content: redact(lines.join("\n")) };
+    } catch (e) { return { content: `Deps audit error: ${e.message}` }; }
+  }
+
+  _checkMigration(args) {
+    try {
+      const { getMigration } = require("../skills/deps");
+      const migration = getMigration(args.package);
+      if (!migration) return { content: `No known migration path for '${args.package}'.` };
+      const lines = [
+        `Migration: ${args.package} → ${migration.to}`,
+        `Reason: ${migration.reason}`,
+        "",
+        "Code patterns:",
+        ...migration.patterns.map(p => `  ${p.from}\n  → ${p.to}`),
+      ];
+      console.log(chalk.gray(`    📦 Migration: ${args.package} → ${migration.to}`));
+      return { content: lines.join("\n") };
+    } catch (e) { return { content: `Migration check error: ${e.message}` }; }
   }
 
   _done(args) {

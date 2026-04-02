@@ -34,6 +34,7 @@ const { detect: detectSystem } = require("./core/system-info");
 const { ClusterManager } = require("./core/cluster-manager");
 const { loadConfig, getConfig } = require("./core/config");
 const { sqlGuard, SafeDB, scanForInjection, idempotencyGuard, idempotencyAfterHook } = require("./skills/sql");
+const { diagnose: diagnoseDeps, healthReport: depsHealthReport, getMigration } = require("./skills/deps");
 
 module.exports = {
   // Core
@@ -95,4 +96,7 @@ module.exports = {
   scanForInjection,
   idempotencyGuard,
   idempotencyAfterHook,
+  diagnoseDeps,
+  depsHealthReport,
+  getMigration,
 };
