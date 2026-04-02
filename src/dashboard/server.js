@@ -393,11 +393,12 @@ class DashboardServer {
       systemPrompt: `You are a Node.js server architect. Given an instruction, return ONLY valid JSON describing file operations.
 
 RULES:
+- Server uses Fastify (NOT Express). Routes are async functions registered as plugins.
 - New endpoints go in server/routes/ as separate files (one per resource)
-- server/index.js is ONLY for wiring: require routes, app.use(), listen. Keep it minimal.
-- Follow Express Router pattern: module.exports = router
+- server/index.js is ONLY for wiring: fastify.register(require("./routes/X"), { prefix: "/X" })
+- Route file format: async function routes(fastify) { fastify.get("/", async () => ({...})); } module.exports = routes;
 - If a route file already exists for this resource, edit it. Otherwise create a new one.
-- If index.js needs a new require/mount, include that edit.
+- If index.js needs a new register, include that edit.
 - If a skill is available below, USE IT in the generated code instead of building from scratch.
 ${skillContext}
 

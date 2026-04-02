@@ -76,7 +76,7 @@ const SEED_DOCS = [
     metadata: { topic: "common-errors" },
   },
   {
-    text: "Server structure: server/ folder is the live project. server/index.js is the entry point (app setup, middleware, route mounting). server/routes/ has one file per resource. server/middleware/ for auth, validation, logging. server/services/ for business logic. server/models/ for database schemas. server/config/ for configuration. Keep index.js under 50 lines — just wiring.",
+    text: "Server uses Fastify (5.6x faster than Express, 114k req/s). server/index.js wires routes with fastify.register(require('./routes/X'), {prefix:'/X'}). Route files: async function routes(fastify) { fastify.get('/', async () => ({...})); } module.exports = routes. server/routes/ has one file per resource. server/config/settings.json for all settings.",
     metadata: { topic: "server-structure" },
   },
   {

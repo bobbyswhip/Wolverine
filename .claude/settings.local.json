@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install:*)",
+      "Bash(PORT=7777 node server/index.js)",
+      "Bash(curl -s http://localhost:7777/)",
+      "Bash(curl -s http://localhost:7777/health)",
+      "Bash(curl -s http://localhost:7777/api/users)",
+      "Bash(curl -s http://localhost:7777/time)",
+      "Bash(node -e \"require\\('./src/index'\\); console.log\\('OK'\\)\")"
+    ]
+  }
+}

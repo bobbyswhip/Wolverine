@@ -1,19 +1,12 @@
-const express = require("express");
-const router = express.Router();
+async function routes(fastify) {
+  fastify.get("/", async () => ({ message: "Hello from Wolverine API" }));
 
-// Hello world
-router.get("/", (req, res) => {
-  res.json({ message: "Hello from Wolverine API" });
-});
-
-// Example: users endpoint
-router.get("/users", (req, res) => {
-  res.json({
+  fastify.get("/users", async () => ({
     users: [
       { id: 1, name: "Alice", role: "admin" },
       { id: 2, name: "Bob", role: "user" },
     ],
-  });
-});
+  }));
+}
 
-module.exports = router;
+module.exports = routes;
