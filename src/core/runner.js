@@ -21,6 +21,7 @@ const { RouteProber } = require("../monitor/route-prober");
 const { startHeartbeat, stopHeartbeat } = require("../platform/heartbeat");
 const { Notifier } = require("../notifications/notifier");
 const { ErrorMonitor } = require("../monitor/error-monitor");
+const { startAutoUpdate, stopAutoUpdate } = require("../platform/auto-update");
 
 /**
  * The Wolverine process runner — v3.
@@ -213,6 +214,25 @@ class WolverineRunner {
       redactor: this.redactor,
     });
 
+    // Auto-update: check for new wolverine-ai versions
+    const { getConfig: _gc } = require("./config");
+    const autoUpdateEnabled = _gc("autoUpdate.enabled") !== false;
+    if (autoUpdateEnabled) {
+      startAutoUpdate({
+        cwd: this.cwd,
+        logger: this.logger,
+        intervalMs: parseInt(process.env.WOLVERINE_UPDATE_INTERVAL_MS, 10) || 3600000,
+        onUpdate: (result) => {
+          console.log(chalk.blue(`  🔄 Wolverine updated ${result.from} → ${result.to}, restarting...`));
+          this.logger.info("update.restart", `Restarting after update ${result.from} → ${result.to}`);
+          this.restart();
+        },
+      });
+      console.log(chalk.gray("  🔄 Auto-update: enabled (checks hourly)"));
+    } else {
+      console.log(chalk.gray("  🔄 Auto-update: disabled"));
+    }
+
     this._spawn();
   }
 
@@ -272,6 +292,7 @@ class WolverineRunner {
     this.processMonitor.stop();
     this.routeProber.stop();
     stopHeartbeat();
+    stopAutoUpdate();
     this.mcp.shutdown();
     this.tokenTracker.save();
     this.dashboard.stop();

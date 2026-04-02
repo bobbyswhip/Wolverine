@@ -236,6 +236,10 @@ const SEED_DOCS = [
     metadata: { topic: "skill-deps" },
   },
   {
+    text: "Auto-update: wolverine checks npm registry hourly for new versions. When found, runs npm install wolverine-ai@latest, backs up settings.json/.env.local before update and restores after. Config: autoUpdate.enabled (default true) in settings.json. Disable with WOLVERINE_AUTO_UPDATE=false env var. On successful update, signals runner to restart. Protected files never overwritten: settings.json, .env.local, .env, db.js. Update check runs 30s after startup then every hour (configurable via autoUpdate.intervalMs).",
+    metadata: { topic: "auto-update" },
+  },
+  {
     text: "Cost optimization: 7 techniques reduce heal cost from $0.31 to $0.02 for simple errors. (1) Verifier skips route probe for simple errors (TypeError/ReferenceError/SyntaxError) — trusts syntax+boot, ErrorMonitor is safety net. Prevents false-rejection cascades. (2) Sub-agents use Haiku (classifier model) for explore/plan/verify/research — only fixer uses Sonnet/Opus. 6 Haiku calls=$0.006 vs 6 Sonnet calls=$0.12. (3) Agent context compacted every 3 turns using compacting model — prevents 15K→95K token blowup. (4) Brain checked for cached fix patterns before AI — repeat errors cost $0. (5) Token budgets capped by error complexity: simple=20K agent budget, moderate=50K, complex=100K. Simple errors get 4 agent turns max. (6) Prior attempt summaries (not full context) passed between iterations — concise 'do NOT repeat' directives. (7) Fast path includes last known good backup code so AI can revert broken additions instead of patching around them.",
     metadata: { topic: "cost-optimization" },
   },

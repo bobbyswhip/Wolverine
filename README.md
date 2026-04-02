@@ -448,6 +448,29 @@ server/config/settings.json    ← Everything else (models, port, clustering, te
 
 ---
 
+## Auto-Update
+
+Wolverine checks npm for new versions hourly and upgrades itself automatically. Config files are protected — backed up before update, restored after.
+
+```json
+// server/config/settings.json
+{
+  "autoUpdate": {
+    "enabled": true,       // set false to disable
+    "intervalMs": 3600000  // check interval (default: 1 hour)
+  }
+}
+```
+
+**How it works:**
+- Checks `npm view wolverine-ai version` against installed version
+- If newer: backs up `settings.json`, `.env.local`, `.env` → runs `npm install wolverine-ai@latest` → restores configs → restarts
+- Protected files never overwritten during update
+- First check 30s after startup, then every hour
+- **Disable:** `"autoUpdate": { "enabled": false }` or `WOLVERINE_AUTO_UPDATE=false`
+
+---
+
 ## Platform Telemetry
 
 Every wolverine instance automatically broadcasts health data to the analytics platform. **Zero config** — telemetry is on by default.

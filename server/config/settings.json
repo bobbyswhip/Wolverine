@@ -79,6 +79,11 @@
     "cooldownMs": 60000
   },
 
+  "autoUpdate": {
+    "enabled": true,
+    "intervalMs": 3600000
+  },
+
   "dashboard": {},
 
   "cors": {
