@@ -64,11 +64,11 @@ const SEED_DOCS = [
     metadata: { topic: "verification" },
   },
   {
-    text: "Wolverine multi-file agent: 15-turn agent loop with tools. Can read any file, write any file type (js, json, sql, yaml, env, dockerfile), list directories, and search across the codebase. Used when the fast path single-file fix fails. Tracks token budget (50k max) to control costs.",
+    text: "Wolverine multi-file agent: 15-turn agent loop with 18 tools across 7 categories. FILE: read_file (offset/limit), write_file (creates dirs), edit_file (find-and-replace), glob_files (pattern search), grep_code (regex with context), list_dir (directory listing with sizes), move_file (rename/relocate). SHELL: bash_exec (30s default, 60s cap), git_log, git_diff. DATABASE: inspect_db (tables/schema/SELECT on SQLite), run_db_fix (UPDATE/DELETE/ALTER with auto-backup). DIAGNOSTICS: check_port (find what uses a port), check_env (env vars, values redacted). DEPS: audit_deps (full npm health check), check_migration (known upgrade paths). RESEARCH: web_fetch. CONTROL: done. Used when fast path fails. Token budget 50k max.",
     metadata: { topic: "agent" },
   },
   {
-    text: "Wolverine supports the Responses API for codex models and Chat Completions API for standard models. Auto-detects based on model name. Codex models use openai.responses.create() with input/instructions/tools. Standard models use openai.chat.completions.create() with messages/tools.",
+    text: "Wolverine supports dual providers: OpenAI (Chat Completions + Responses API) and Anthropic (Messages API). Provider auto-detected from model name: claude-* → Anthropic, gpt-*/o1-*/codex → OpenAI. All responses normalized to same {content, toolCalls, usage} shape — downstream code doesn't know which provider was used. Tool definitions auto-converted between formats. Every call tracked with latencyMs, success/failure, input/output tokens. Three provider modes in settings.json: openai_settings, anthropic_settings, hybrid_settings (Anthropic for heavy tasks, OpenAI for cheap tasks + embeddings).",
     metadata: { topic: "api-support" },
   },
   {
@@ -108,7 +108,7 @@ const SEED_DOCS = [
     metadata: { topic: "sub-agent-workflow" },
   },
   {
-    text: "Sub-agent tool restrictions (claw-code pattern): explore gets read_file/glob/grep/git. plan gets read_file/glob/grep/brain. fix gets read_file/write_file/edit_file/glob/grep/bash_exec (bash_exec for npm install, chmod, config creation — not all errors are code bugs). verify gets read_file/glob/grep/bash. research gets read_file/grep/web_fetch/brain. security gets read_file/glob/grep. database gets read_file/write_file/edit_file/glob/grep/bash. No agent gets tools it doesn't need.",
+    text: "Sub-agent tool restrictions: explore gets read_file/glob/grep/git_log/git_diff/list_dir/check_env/check_port/inspect_db/audit_deps. plan gets read_file/glob/grep/list_dir/inspect_db/check_env/audit_deps/check_migration/search_brain. fix gets read_file/write_file/edit_file/glob/grep/bash_exec/move_file/run_db_fix/audit_deps. verify gets read_file/glob/grep/bash_exec/inspect_db/check_port. research gets read_file/grep/web_fetch/search_brain. security gets read_file/glob/grep/inspect_db. database gets read_file/write_file/edit_file/glob/grep/bash_exec/inspect_db/run_db_fix. Each type gets only the tools it needs.",
     metadata: { topic: "sub-agent-tools" },
   },
   {
@@ -160,7 +160,7 @@ const SEED_DOCS = [
     metadata: { topic: "smart-edit" },
   },
   {
-    text: "Token tracking: every AI call tracked with input/output tokens + USD cost. Categories: heal, develop, chat, security, classify, research, brain. Tracked by model, by category, by tool. Persisted to .wolverine/usage.json (aggregates) and .wolverine/usage-history.jsonl (full timeline). Auto-saves on every call. Dashboard shows charts + cost breakdowns. Pricing from src/logger/pricing.js, customizable via .wolverine/pricing.json.",
+    text: "Token tracking: every AI call tracked with input/output tokens, USD cost, latencyMs, and success/failure. Per-model KPIs: avgLatencyMs, minLatencyMs, maxLatencyMs, tokensPerSecond, successRate, costPerCall, successes, failures. Aggregated by model, by category, by tool, by provider (openai/anthropic). Persisted to .wolverine/usage.json + .wolverine/usage-history.jsonl. Pricing includes both OpenAI (gpt-5.x, o4, codex) and Anthropic (opus-4, sonnet-4, haiku-4) families. Customizable via .wolverine/pricing.json. Telemetry sends all per-model performance data to platform backend for fleet-wide cost:speed:reliability analysis.",
     metadata: { topic: "token-tracking" },
   },
   {
@@ -184,7 +184,7 @@ const SEED_DOCS = [
     metadata: { topic: "demos" },
   },
   {
-    text: "10 configurable models: REASONING_MODEL (multi-file agent), CODING_MODEL (code repair, Responses API for codex), CHAT_MODEL (simple text), TOOL_MODEL (function calling), CLASSIFIER_MODEL (routing), AUDIT_MODEL (injection detection), COMPACTING_MODEL (brain text compression), RESEARCH_MODEL (deep research), TEXT_EMBEDDING_MODEL (vectors). All in server/config/settings.json. Reasoning models auto-get 4x token limits for chain-of-thought.",
+    text: "10 model slots configurable per provider. settings.json has 3 presets: openai_settings, anthropic_settings, hybrid_settings. Set 'provider' to switch all at once. Slots: REASONING_MODEL (agent), CODING_MODEL (repair), CHAT_MODEL (text), TOOL_MODEL (function calling), CLASSIFIER_MODEL (routing), AUDIT_MODEL (injection), COMPACTING_MODEL (brain), RESEARCH_MODEL (deep research), TEXT_EMBEDDING_MODEL (vectors, always OpenAI). Hybrid mode uses Anthropic for heavy tasks (reasoning/coding/tool/research) and OpenAI for cheap tasks (audit/compacting/embedding). Every call tracked per-model with latencyMs, successRate, tokensPerSecond, costPerCall for performance comparison.",
     metadata: { topic: "model-slots" },
   },
   {
@@ -216,8 +216,8 @@ const SEED_DOCS = [
     metadata: { topic: "error-monitor" },
   },
   {
-    text: "Agent tool harness v2: 16 built-in tools. FILE: read_file, write_file, edit_file, glob_files, grep_code, list_dir, move_file. SHELL: bash_exec, git_log, git_diff. DATABASE: inspect_db (list tables, show schema, run SELECT), run_db_fix (UPDATE/DELETE/INSERT/ALTER with auto-backup). DIAGNOSTICS: check_port (find what's using a port), check_env (list/check env vars, values redacted). RESEARCH: web_fetch. COMPLETION: done. Sub-agents get restricted sets: explorer gets diagnostics (list_dir, check_env, check_port, inspect_db), fixer gets action tools (bash_exec, move_file, run_db_fix), verifier gets inspection tools.",
-    metadata: { topic: "agent-tools-v2" },
+    text: "Agent tool details: read_file supports offset/limit for large files. edit_file does surgical find-and-replace (preferred for small fixes). glob_files discovers files by pattern (**/*.js). grep_code does regex search with context lines. list_dir shows directory contents with file sizes. move_file relocates/renames files. bash_exec runs shell commands (30s default timeout, 60s hard cap, dangerous commands blocked: rm -rf /, git push --force, npm publish). inspect_db reads SQLite: action=tables (list), action=schema (CREATE statements), action=query (SELECT/PRAGMA only). run_db_fix writes SQLite: UPDATE/DELETE/INSERT/ALTER, auto-backs up db file first. check_port finds what process is using a port (netstat/lsof). check_env lists environment variables with values redacted. audit_deps runs full npm health check (vulnerabilities, outdated, peer deps, unused, lock file). check_migration returns known upgrade paths with before/after code patterns. web_fetch retrieves URL content.",
+    metadata: { topic: "agent-tools-detail" },
   },
   {
     text: "Server problem categories the agent can fix: CODE BUGS (SyntaxError, TypeError, ReferenceError → edit_file), DEPENDENCIES (Cannot find module → npm install, corrupted node_modules → rm + reinstall), DATABASE (invalid entries → run_db_fix UPDATE, missing table → CREATE TABLE, schema mismatch → ALTER TABLE, constraint violation → fix data or schema), CONFIG (invalid JSON → edit_file, missing env vars → write .env, wrong port → edit config), FILESYSTEM (misplaced files → move_file, missing directories → bash_exec mkdir, wrong permissions → chmod), NETWORK (port conflict → check_port + kill, service down → restart, connection refused → check config), STATE (corrupted cache → delete + restart, stale locks → remove lock file, git conflicts → resolve markers), IDEMPOTENCY (double-fire → add idempotencyGuard middleware, missing idempotency key → add X-Idempotency-Key header support, duplicate DB entries → add UNIQUE constraint or use db.idempotent()). The agent investigates before fixing — reads files, checks directories, inspects databases, never guesses.",

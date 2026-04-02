@@ -290,15 +290,25 @@ Secured with `WOLVERINE_ADMIN_KEY` + IP allowlist (localhost + `WOLVERINE_ADMIN_
 
 ## 10-Model Configuration (OpenAI + Anthropic)
 
-Every AI task has its own model slot. **Mix and match providers** — set any slot to a `claude-*` model for Anthropic or `gpt-*` for OpenAI. Provider is auto-detected from the model name.
+Every AI task has its own model slot. Three provider presets in `server/config/settings.json`:
 
-```bash
-# .env.local — use Anthropic for reasoning, OpenAI for coding
-REASONING_MODEL=claude-sonnet-4-20250514
-CODING_MODEL=gpt-5.3-codex
-CHAT_MODEL=claude-haiku-4-20250414
-AUDIT_MODEL=claude-haiku-4-20250414
+```json
+{
+  "provider": "hybrid",              // "openai" | "anthropic" | "hybrid"
+  "openai_settings": { ... },        // all OpenAI models
+  "anthropic_settings": { ... },     // all Anthropic models
+  "hybrid_settings": {               // best of both
+    "reasoning": "claude-sonnet-4-6",
+    "coding": "claude-opus-4-6",
+    "tool": "claude-opus-4-6",
+    "chat": "claude-haiku-4-5",
+    "audit": "gpt-4o-mini",          // cheap OpenAI for bulk scans
+    "embedding": "text-embedding-3-small"  // always OpenAI
+  }
+}
 ```
+
+Change one line to switch all models: `"provider": "anthropic"`. Or override per-role with env vars.
 
 | Env Variable | Role | Needs Tools? | Example Models |
 |---|---|---|---|
@@ -315,7 +325,8 @@ AUDIT_MODEL=claude-haiku-4-20250414
 **Notes:**
 - Embeddings always use OpenAI (Anthropic doesn't have an embedding API)
 - Tools (all 18) work identically on both providers — normalized at the client level
-- Telemetry tracks usage by model AND by provider (`openai` / `anthropic`)
+- Telemetry tracks per-model KPIs: latency, success rate, tokens/sec, cost/call
+- Usage aggregated by model, category, tool, AND provider (`openai` / `anthropic`)
 - Any future model from either provider works automatically — just set the model name
 
 ---
