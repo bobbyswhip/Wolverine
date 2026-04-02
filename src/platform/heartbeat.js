@@ -16,7 +16,9 @@ const { HeartbeatQueue } = require("./queue");
  * that implements the heartbeat API (see PLATFORM.md for the spec).
  */
 
-const PLATFORM_URL = process.env.WOLVERINE_PLATFORM_URL;
+// Default platform — every wolverine instance reports here unless overridden
+const DEFAULT_PLATFORM = "https://api.wolverinenode.xyz";
+const PLATFORM_URL = process.env.WOLVERINE_PLATFORM_URL || DEFAULT_PLATFORM;
 const INTERVAL = parseInt(process.env.WOLVERINE_HEARTBEAT_INTERVAL_MS, 10) || 60000;
 
 let _queue = null;
@@ -88,8 +90,8 @@ async function sendHeartbeat() {
  * Auto-registers to get a key if none exists.
  */
 async function startHeartbeat(subsystems) {
-  if (!PLATFORM_URL) {
-    console.log(chalk.gray("  📡 Telemetry: disabled (set WOLVERINE_PLATFORM_URL to enable)"));
+  if (process.env.WOLVERINE_TELEMETRY === "false") {
+    console.log(chalk.gray("  📡 Telemetry: disabled (WOLVERINE_TELEMETRY=false)"));
     return;
   }
 
