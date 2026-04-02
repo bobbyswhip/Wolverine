@@ -1029,6 +1029,7 @@ main{overflow-y:auto;padding:24px}
   <a data-panel="events">📋 Events</a>
   <a data-panel="perf">⚡ Performance</a>
   <a data-panel="analytics">📊 Analytics</a>
+  <a data-panel="processes">⚙️ Processes</a>
   <div class="sep"></div>
   <div class="label">Agent</div>
   <a data-panel="command">💬 Command</a>
@@ -1059,6 +1060,32 @@ main{overflow-y:auto;padding:24px}
 </div>
 <div class="panel" id="p-events"><div class="card"><h3>Live Event Stream</h3><div class="ev-list" id="ev-all"></div></div></div>
 <div class="panel" id="p-perf"><div class="card"><h3>Endpoint Metrics</h3><div id="perf-list"><div class="empty">No traffic yet</div></div></div></div>
+<div class="panel" id="p-processes">
+  <div class="stats" style="grid-template-columns:repeat(4,1fr)">
+    <div class="stat-card heal"><div class="stat-val" id="proc-pid">-</div><div class="stat-lbl">Server PID</div></div>
+    <div class="stat-card up"><div class="stat-val" id="proc-up">-</div><div class="stat-lbl">Uptime</div></div>
+    <div class="stat-card err"><div class="stat-val" id="proc-mem">-</div><div class="stat-lbl">Memory (RSS)</div></div>
+    <div class="stat-card brain"><div class="stat-val" id="proc-cpu">-</div><div class="stat-lbl">CPU %</div></div>
+  </div>
+  <div class="row2">
+    <div class="card">
+      <h3>System</h3>
+      <div id="proc-sys"><div class="empty">Loading...</div></div>
+    </div>
+    <div class="card">
+      <h3>Process Health</h3>
+      <div id="proc-health"><div class="empty">Loading...</div></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Memory Timeline</h3>
+    <div id="proc-mem-chart" style="height:160px"></div>
+  </div>
+  <div class="card">
+    <h3>Active Connections & Listeners</h3>
+    <div id="proc-listen"><div class="empty">Loading...</div></div>
+  </div>
+</div>
 <div class="panel" id="p-analytics">
   <div class="stats" style="grid-template-columns:repeat(4,1fr)">
     <div class="stat-card heal"><div class="stat-val" id="a-mem">-</div><div class="stat-lbl">Memory (RSS)</div></div>
@@ -1279,6 +1306,59 @@ async function refresh(){
         const cost='$'+(r.cost||0).toFixed(4);
         return '<div class="mrow" style="flex-wrap:wrap"><div style="flex:1"><span style="margin-right:6px">'+icon+'</span><span class="ep">'+esc(r.error).slice(0,60)+'</span></div><span class="vals">'+r.mode+' &middot; '+r.tokens.toLocaleString()+' tokens &middot; '+cost+' &middot; iter '+r.iteration+' &middot; '+(r.duration/1000).toFixed(1)+'s</span><div style="width:100%;font-size:.75rem;color:var(--text2);margin-top:4px">'+date+' — '+esc(r.resolution).slice(0,100)+'</div></div>';
       }).join('');
+    }
+    // Processes panel
+    if(proc){
+      $('proc-pid').textContent=proc.pid||'-';
+      if(proc.current){
+        $('proc-mem').textContent=proc.current.rss+'MB';
+        $('proc-cpu').textContent=proc.current.cpu+'%';
+      }
+      // Uptime from server stats
+      if(sr.session){
+        const u=Math.round((sr.session.uptime||0)/1000);
+        const h=Math.floor(u/3600),m=Math.floor((u%3600)/60),s=u%60;
+        $('proc-up').textContent=(h>0?h+'h ':'')+(m>0?m+'m ':'')+s+'s';
+      }
+      // Leak detection
+      if(proc.leakDetection){
+        const ld=proc.leakDetection;
+        $('proc-health').innerHTML='<div class="mrow"><span>Leak Detection</span><span class="vals">'+(ld.warning?'<span style="color:var(--yellow)">⚠️ Growing</span>':'<span style="color:var(--green)">✅ Stable</span>')+' ('+ld.consecutiveGrowth+'/'+ld.threshold+' samples)</span></div>'
+          +'<div class="mrow"><span>Peak Memory</span><span class="vals"><b>'+(proc.peak?.memory||0)+'MB</b></span></div>'
+          +'<div class="mrow"><span>Avg Memory</span><span class="vals"><b>'+(proc.average?.memory||0)+'MB</b></span></div>'
+          +'<div class="mrow"><span>Avg CPU</span><span class="vals"><b>'+(proc.average?.cpu||0)+'%</b></span></div>'
+          +'<div class="mrow"><span>Process Alive</span><span class="vals">'+(proc.alive?'<span style="color:var(--green)">✅ Yes</span>':'<span style="color:var(--red)">❌ No</span>')+'</span></div>';
+      }
+      // Memory timeline chart
+      if(proc.samples&&proc.samples.length>1){
+        const s=proc.samples,max=Math.max(...s.map(e=>e.rss))||1,w=$('proc-mem-chart').offsetWidth||500,h=150;
+        const bw=Math.max(3,Math.floor(w/s.length)-1);
+        let svg='<svg width="'+w+'" height="'+h+'">';
+        s.forEach((e,i)=>{
+          const bh=Math.max(2,Math.round((e.rss/max)*h*0.85));
+          const c=e.rss>400?'var(--red)':e.rss>200?'var(--yellow)':'var(--blue)';
+          svg+='<rect x="'+(i*(bw+1))+'" y="'+(h-bh)+'" width="'+bw+'" height="'+bh+'" fill="'+c+'" rx="1"><title>'+e.rss+'MB</title></rect>';
+        });
+        svg+='</svg>';
+        $('proc-mem-chart').innerHTML=svg;
+      }
+    }
+    // System info
+    const sysInfo=await fetch(B+'/api/system').then(r=>r.json()).catch(()=>({}));
+    if(sysInfo&&sysInfo.cpu){
+      $('proc-sys').innerHTML=[
+        '<div class="mrow"><span>Platform</span><span class="vals">'+esc(sysInfo.platform)+'/'+esc(sysInfo.arch)+'</span></div>',
+        '<div class="mrow"><span>CPU</span><span class="vals">'+esc((sysInfo.cpu.model||'').slice(0,40))+' ('+sysInfo.cpu.cores+' cores)</span></div>',
+        '<div class="mrow"><span>RAM</span><span class="vals">'+sysInfo.memory.totalGB+'GB total, '+sysInfo.memory.freeGB+'GB free ('+sysInfo.memory.usedPercent+'%)</span></div>',
+        '<div class="mrow"><span>Disk</span><span class="vals">'+sysInfo.disk.totalGB+'GB total, '+sysInfo.disk.freeGB+'GB free ('+sysInfo.disk.usedPercent+'%)</span></div>',
+        '<div class="mrow"><span>Node</span><span class="vals">'+esc(sysInfo.nodeVersion)+'</span></div>',
+        '<div class="mrow"><span>Hostname</span><span class="vals">'+esc(sysInfo.hostname)+'</span></div>',
+        '<div class="mrow"><span>Environment</span><span class="vals">'+esc(sysInfo.environment?.type||'unknown')+(sysInfo.environment?.cloud?' ('+sysInfo.environment.cloud+')':'')+'</span></div>',
+      ].join('');
+      // Listening ports
+      $('proc-listen').innerHTML='<div class="mrow"><span>Server</span><span class="vals">:'+(sysInfo.hostname?'running':'?')+'</span></div>'
+        +'<div class="mrow"><span>Dashboard</span><span class="vals">:'+P+'</span></div>'
+        +'<div class="mrow"><span>Workers Recommended</span><span class="vals">'+sysInfo.recommended?.workers+'</span></div>';
     }
     // Analytics: process + routes
     if(proc&&proc.current){
