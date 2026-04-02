@@ -1,6 +1,7 @@
 const chalk = require("chalk");
 const { aiCall } = require("../core/ai-client");
 const { getModel } = require("../core/models");
+const { redact } = require("../security/secret-redactor");
 
 /**
  * Research Agent — deep research + learning from experience.
@@ -18,7 +19,6 @@ class ResearchAgent {
   constructor(options = {}) {
     this.brain = options.brain;
     this.logger = options.logger;
-    this.redactor = options.redactor;
   }
 
   /**
@@ -50,8 +50,8 @@ class ResearchAgent {
   async recordAttempt({ errorMessage, filePath, fix, success, explanation }) {
     if (!this.brain || !this.brain._initialized) return;
 
-    const safeError = this.redactor ? this.redactor.redact(errorMessage) : errorMessage;
-    const safeExplanation = this.redactor ? this.redactor.redact(explanation || fix || "") : (explanation || fix || "");
+    const safeError = redact(errorMessage);
+    const safeExplanation = redact(explanation || fix || "");
 
     const namespace = success ? "fixes" : "errors";
     const prefix = success ? "FIXED" : "FAILED";
@@ -66,7 +66,7 @@ class ResearchAgent {
    * Stores findings in brain for future reference.
    */
   async research(errorMessage, context) {
-    const safeError = this.redactor ? this.redactor.redact(errorMessage) : errorMessage;
+    const safeError = redact(errorMessage);
 
     console.log(chalk.magenta(`  🔬 Deep research (${getModel("research")})...`));
 

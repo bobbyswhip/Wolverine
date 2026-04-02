@@ -91,9 +91,6 @@ class EventLogger extends EventEmitter {
     this._recentEvents = [];
     this._maxRecent = 1000;
 
-    // Secret redactor — if set, all events get redacted before persist/emit
-    this.redactor = null;
-
     // Session tracking
     this.sessionId = Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 6);
     this.sessionStart = Date.now();
@@ -101,11 +98,9 @@ class EventLogger extends EventEmitter {
   }
 
   /**
-   * Attach a SecretRedactor. All events will be redacted before storage/emit.
+   * @deprecated Use singleton redact() — kept for backwards compat
    */
-  setRedactor(redactor) {
-    this.redactor = redactor;
-  }
+  setRedactor() {}
 
   /**
    * Log an event. This is the primary API.
@@ -117,8 +112,10 @@ class EventLogger extends EventEmitter {
    */
   log(type, severity, message, data = {}) {
     // Redact secrets before they hit storage or the wire
-    const safeMessage = this.redactor ? this.redactor.redact(message) : message;
-    const safeData = this.redactor ? this.redactor.redactObject(data) : data;
+    // Universal redaction via singleton — no instance needed
+    const { redact, redactObj } = require("../security/secret-redactor");
+    const safeMessage = redact(message);
+    const safeData = redactObj(data);
 
     const event = {
       id: `${this.sessionId}-${(++this._eventCount).toString(36)}`,

@@ -191,6 +191,10 @@ const SEED_DOCS = [
     text: "Port best practices: development uses port 3000 (standard, no admin, firewall-friendly). Production uses 443 (HTTPS) or 80 (HTTP) behind a reverse proxy (nginx/caddy). Never use random high ports in production — they bypass firewalls and confuse load balancers. Always use HTTPS in production — terminate TLS at the proxy, not in Node. Dashboard auto-runs on port+1. Wolverine warns on startup if the port is non-standard.",
     metadata: { topic: "port-security" },
   },
+  {
+    text: "Secret redaction is a singleton: initRedactor(projectRoot) called once on startup, then redact(text), redactObj(obj), hasSecrets(text) available everywhere via require('../security/secret-redactor'). No need to pass redactor instances. Every outbound path auto-redacts: event logger, repair history, telemetry heartbeats, brain memories, AI calls, dashboard output. Env variable values replaced with process.env.KEY_NAME.",
+    metadata: { topic: "redaction-singleton" },
+  },
 ];
 
 class Brain {

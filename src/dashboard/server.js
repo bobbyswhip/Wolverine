@@ -154,7 +154,8 @@ class DashboardServer {
         return;
       }
 
-      const safeCommand = this.redactor ? this.redactor.redact(command) : command;
+      const { redact } = require("../security/secret-redactor");
+      const safeCommand = redact(command);
 
       if (this._isSecretExtractionRequest(command)) {
         const refusal = this._buildSecretRefusal();
@@ -763,7 +764,7 @@ ${context ? "\nBrain:\n" + context : ""}`,
               req.on("error", (e) => resolve(`Error: ${e.message}`));
               req.on("timeout", () => { req.destroy(); resolve("Timeout"); });
             });
-            toolResult = this.redactor ? this.redactor.redact(toolResult) : toolResult;
+            const { redact: _r } = require("../security/secret-redactor"); toolResult = _r(toolResult);
             console.log(chalk.green(`  🌐 → ${toolResult.slice(0, 80)}`));
           } catch (e) { toolResult = `Error: ${e.message}`; }
         } else if (tc.function.name === "read_file") {

@@ -214,4 +214,50 @@ class SecretRedactor {
   }
 }
 
-module.exports = { SecretRedactor };
+// ── Singleton ──
+// One instance, initialized once, used everywhere.
+// Import { redact, redactObj } from anywhere — no need to pass the redactor around.
+
+let _instance = null;
+
+/**
+ * Initialize the singleton. Call once on startup from runner.
+ */
+function initRedactor(projectRoot) {
+  _instance = new SecretRedactor(projectRoot);
+  return _instance;
+}
+
+/**
+ * Get the singleton instance.
+ */
+function getRedactor() {
+  return _instance;
+}
+
+/**
+ * Redact a string. Safe to call even if not initialized (returns input unchanged).
+ * This is the universal function — use it everywhere instead of this.redactor?.redact().
+ */
+function redact(text) {
+  if (!_instance || !text || typeof text !== "string") return text;
+  return _instance.redact(text);
+}
+
+/**
+ * Redact all string values in an object (deep). Safe to call if not initialized.
+ */
+function redactObj(obj) {
+  if (!_instance) return obj;
+  return _instance.redactObject(obj);
+}
+
+/**
+ * Check if a string contains secrets.
+ */
+function hasSecrets(text) {
+  if (!_instance || !text) return false;
+  return _instance.containsSecrets(text);
+}
+
+module.exports = { SecretRedactor, initRedactor, getRedactor, redact, redactObj, hasSecrets };

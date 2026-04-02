@@ -13,7 +13,7 @@ let _v = null;
 function collectHeartbeat(subsystems) {
   if (!_v) { try { _v = require("../../package.json").version; } catch { _v = "0.0.0"; } }
 
-  const { processMonitor, routeProber, tokenTracker, repairHistory, backupManager, brain, redactor } = subsystems;
+  const { processMonitor, routeProber, tokenTracker, repairHistory, backupManager, brain } = subsystems;
   const proc = processMonitor?.getMetrics();
   const usage = tokenTracker?.getAnalytics();
   const repairs = repairHistory?.getStats();
@@ -60,10 +60,10 @@ function collectHeartbeat(subsystems) {
     backups: backupManager?.getStats() || { total: 0, stable: 0 },
   };
 
-  if (redactor && repairs?.lastRepair) {
+  if (repairs?.lastRepair) {
     payload.repairs.lastRepair = {
-      error: redactor.redact((repairs.lastRepair?.error || "").slice(0, 150)),
-      resolution: redactor.redact((repairs.lastRepair?.resolution || "").slice(0, 150)),
+      error: (repairs.lastRepair?.error || "").slice(0, 150),
+      resolution: (repairs.lastRepair?.resolution || "").slice(0, 150),
       tokens: repairs.lastRepair?.tokens || 0,
       cost: repairs.lastRepair?.cost || 0,
       mode: repairs.lastRepair?.mode || "",
@@ -72,7 +72,9 @@ function collectHeartbeat(subsystems) {
     };
   }
 
-  return payload;
+  // Pre-flight security: redact entire payload before it leaves the process
+  const { redactObj } = require("../security/secret-redactor");
+  return redactObj(payload);
 }
 
 module.exports = { collectHeartbeat, INSTANCE_ID };

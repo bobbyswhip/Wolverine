@@ -23,10 +23,12 @@ const { EVENT_TYPES } = require("../logger/event-logger");
  *
  * The engine tries fast path first. If that fails verification, it escalates to the agent.
  */
-async function heal({ stderr, cwd, sandbox, redactor, notifier, rateLimiter, backupManager, logger, brain, mcp, skills, repairHistory }) {
+async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager, logger, brain, mcp, skills, repairHistory }) {
   const healStartTime = Date.now();
-  // Redact secrets from stderr BEFORE any processing, logging, or AI calls
-  const safeStderr = redactor ? redactor.redact(stderr) : stderr;
+  const { redact, hasSecrets } = require("../security/secret-redactor");
+
+  // Redact secrets BEFORE any processing, logging, or AI calls
+  const safeStderr = redact(stderr);
 
   if (logger) logger.info(EVENT_TYPES.HEAL_START, "Wolverine detected a crash", { stderr: safeStderr.slice(0, 500) });
   console.log(chalk.yellow("\n🐺 Wolverine detected a crash. Analyzing...\n"));
@@ -35,13 +37,11 @@ async function heal({ stderr, cwd, sandbox, redactor, notifier, rateLimiter, bac
   const parsed = parseError(stderr);
   const errorSignature = RateLimiter.signature(parsed.errorMessage, parsed.filePath);
 
-  // Redact the parsed fields — these go to AI, brain, and logs
-  if (redactor) {
-    parsed.errorMessage = redactor.redact(parsed.errorMessage);
-    parsed.stackTrace = redactor.redact(parsed.stackTrace);
-  }
+  // Redact parsed fields — these go to AI, brain, and logs
+  parsed.errorMessage = redact(parsed.errorMessage);
+  parsed.stackTrace = redact(parsed.stackTrace);
 
-  if (redactor && redactor.containsSecrets(stderr)) {
+  if (hasSecrets(stderr)) {
     console.log(chalk.yellow("  🔐 Secrets detected in error output — redacted before AI/brain/logs"));
   }
 
@@ -136,7 +136,7 @@ async function heal({ stderr, cwd, sandbox, redactor, notifier, rateLimiter, bac
   }
 
   // 6. Research — check past attempts to avoid loops
-  const researcher = new ResearchAgent({ brain, logger, redactor });
+  const researcher = new ResearchAgent({ brain, logger });
   let researchContext = "";
   try {
     researchContext = await researcher.buildFixContext(parsed.errorMessage);

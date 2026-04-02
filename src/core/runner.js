@@ -10,7 +10,7 @@ const { EventLogger, EVENT_TYPES } = require("../logger/event-logger");
 const { DashboardServer } = require("../dashboard/server");
 const { PerfMonitor } = require("../monitor/perf-monitor");
 const { Brain } = require("../brain/brain");
-const { SecretRedactor } = require("../security/secret-redactor");
+const { initRedactor, getRedactor } = require("../security/secret-redactor");
 const { McpRegistry } = require("../mcp/mcp-registry");
 const { TokenTracker } = require("../logger/token-tracker");
 const { RepairHistory } = require("../logger/repair-history");
@@ -43,7 +43,7 @@ class WolverineRunner {
 
     // Core subsystems
     this.sandbox = new Sandbox(this.cwd);
-    this.redactor = new SecretRedactor(this.cwd);
+    this.redactor = initRedactor(this.cwd);
     this.rateLimiter = new RateLimiter({
       maxCallsPerWindow: parseInt(process.env.WOLVERINE_RATE_MAX_CALLS, 10) || 10,
       windowMs: parseInt(process.env.WOLVERINE_RATE_WINDOW_MS, 10) || 600000,

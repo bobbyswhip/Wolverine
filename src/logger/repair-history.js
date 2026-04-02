@@ -37,14 +37,15 @@ class RepairHistory {
     duration,      // ms from crash to fix
     filesModified, // files changed
   }) {
+    const { redact } = require("../security/secret-redactor");
     const entry = {
       id: Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 4),
       timestamp: Date.now(),
       iso: new Date().toISOString(),
-      error: (error || "").slice(0, 200),
+      error: redact((error || "").slice(0, 200)),
       file,
       line,
-      resolution: (resolution || "").slice(0, 300),
+      resolution: redact((resolution || "").slice(0, 300)),
       success,
       mode,
       model,
