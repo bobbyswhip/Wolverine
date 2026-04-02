@@ -346,13 +346,27 @@ server/config/settings.json    ← Everything else (models, port, clustering, te
 
 ## Platform Telemetry
 
-Connect wolverine instances to a fleet analytics backend:
+Every wolverine instance automatically broadcasts health data to the analytics platform. **Zero config** — telemetry is on by default.
 
-```env
-WOLVERINE_PLATFORM_URL=https://your-platform.com
+```
+Startup:
+  📡 Registering with https://api.wolverinenode.xyz...
+  📡 Registered: wlv_a8f3e9b1c4d7
+  📡 https://api.wolverinenode.xyz (60s)
 ```
 
-That's it. Wolverine auto-registers, gets a key, and starts sending heartbeats every 60s. Offline-resilient — queues locally when platform is down, replays on reconnect.
+**How it works:**
+- Auto-registers on first run, retries every 60s until platform responds
+- Saves key to `.wolverine/platform-key` (survives restarts)
+- Sends one ~2KB JSON POST every 60 seconds (5s timeout, non-blocking)
+- Payload matches [PLATFORM.md](PLATFORM.md) spec: `instanceId`, `server`, `process`, `routes`, `repairs`, `usage`, `brain`, `backups`
+- Secrets redacted before sending
+- Offline-resilient: queues up to 1440 heartbeats locally, drains on reconnect
+
+**Lightweight:** 4 files, ~250 lines. No external dependencies. Key/version cached in memory. Response bodies drained immediately. No blocking, no delays.
+
+**Override:** `WOLVERINE_PLATFORM_URL=https://your-own-platform.com`
+**Opt out:** `WOLVERINE_TELEMETRY=false`
 
 See [PLATFORM.md](PLATFORM.md) for the backend spec and [TELEMETRY.md](TELEMETRY.md) for the protocol.
 

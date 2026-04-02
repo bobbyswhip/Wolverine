@@ -132,8 +132,12 @@ const SEED_DOCS = [
     metadata: { topic: "configuration" },
   },
   {
-    text: "Platform telemetry: wolverine sends heartbeats every 60s to a configurable platform backend. Auto-registers on first run, saves key to .wolverine/platform-key. Heartbeat payload: server status, memory/CPU, route health, repair history, token usage, brain stats, backups. Offline-resilient: queues locally when platform is down, drains on reconnect. Set WOLVERINE_PLATFORM_URL to enable.",
+    text: "Platform telemetry: lightweight background process, zero-config. Default platform: api.wolverinenode.xyz. Auto-registers on first run (retries every 60s until platform responds), saves key to .wolverine/platform-key. Heartbeat payload matches PLATFORM.md spec: instanceId, server (name/port/uptime/status/pid), process (memoryMB/cpuPercent), routes, repairs, usage (tokens/cost/calls/byCategory), brain, backups. Offline-resilient: queues up to 1440 heartbeats locally, drains on reconnect. No chalk dependency, cached version/key in memory, minimal IO. Opt out: WOLVERINE_TELEMETRY=false. Override URL: WOLVERINE_PLATFORM_URL.",
     metadata: { topic: "platform-telemetry" },
+  },
+  {
+    text: "Telemetry architecture: 4 files, ~250 lines total. heartbeat.js sends one HTTP POST every 60s (5s timeout, non-blocking). register.js auto-registers and caches key in memory + disk. queue.js appends to JSONL file only on failure, trims lazily. telemetry.js collects from subsystems using optional chaining (no crashes if subsystem missing). All secrets redacted before sending. Response bodies drained immediately (res.resume). No blocking, no delays, no busy waits.",
+    metadata: { topic: "telemetry-architecture" },
   },
 ];
 
