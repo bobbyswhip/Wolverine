@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-const cluster = require("cluster");
 const path = require("path");
 const dotenv = require("dotenv");
 const chalk = require("chalk");
@@ -10,7 +9,6 @@ dotenv.config({ path: path.resolve(process.cwd(), ".env.local") });
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
 
 const { loadConfig } = require("../src/core/config");
-const { ClusterManager } = require("../src/core/cluster-manager");
 const { detect, logSystemInfo } = require("../src/core/system-info");
 const { logModelConfig } = require("../src/core/models");
 
@@ -58,37 +56,18 @@ if (args.includes("--info")) {
 
 const scriptPath = args.find(a => !a.startsWith("--")) || "server/index.js";
 
-// Determine cluster mode
-let clusterMode = "auto";
-if (args.includes("--single")) clusterMode = "single";
-const workersArg = args.indexOf("--workers");
-let fixedWorkers = 0;
-if (workersArg !== -1 && args[workersArg + 1]) {
-  clusterMode = "fixed";
-  fixedWorkers = parseInt(args[workersArg + 1], 10);
-}
+// System detection (for analytics + dashboard, NOT for forking)
+// Wolverine runs as a single process manager. If users want clustering,
+// they handle it inside their server (e.g. @fastify/cluster, pm2 cluster mode).
+// Forking workers at the wolverine level causes port conflicts because each
+// worker spawns its own child process on the same port.
+const systemInfo = detect();
 
-// Cluster init
-const clusterMgr = new ClusterManager({ scriptPath, mode: clusterMode, workers: fixedWorkers });
-const clusterResult = clusterMgr.init();
-
-// If clustered and this is the master, we're done — workers handle the rest
-if (clusterResult.clustered && cluster.isPrimary) {
-  return;
-}
-
-// Single worker or worker process — run wolverine
 const { WolverineRunner } = require("../src/core/runner");
 
-const workerId = process.env.WOLVERINE_WORKER_ID || "";
-const workerLabel = workerId ? ` [worker ${workerId}]` : "";
-
-console.log(chalk.yellow.bold(`\n  🐺 Wolverine Node.js — Autonomous Server Agent${workerLabel}\n`));
-
-if (!clusterResult.clustered) {
-  logSystemInfo(clusterResult.systemInfo);
-  console.log("");
-}
+console.log(chalk.yellow.bold("\n  🐺 Wolverine Node.js — Autonomous Server Agent\n"));
+logSystemInfo(systemInfo);
+console.log("");
 
 console.log(chalk.bold("  Models:"));
 logModelConfig(chalk);

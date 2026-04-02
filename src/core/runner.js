@@ -191,12 +191,34 @@ class WolverineRunner {
   restart() {
     console.log(chalk.blue("\n  🔄 Restarting server..."));
     this.healthMonitor.stop();
+    this._clearStabilityTimer();
+
     if (this.child) {
-      this.child.kill("SIGTERM");
+      const oldChild = this.child;
       this.child = null;
+
+      // Wait for old process to actually exit before spawning new one
+      const onExit = () => {
+        // Give port time to fully release (TIME_WAIT)
+        setTimeout(() => {
+          this._ensurePortFree();
+          setTimeout(() => this._spawn(), 200);
+        }, 300);
+      };
+
+      oldChild.removeAllListeners("exit");
+      oldChild.once("exit", onExit);
+      oldChild.kill("SIGTERM");
+
+      // Force kill if it doesn't exit in 3s
+      setTimeout(() => {
+        try { oldChild.kill("SIGKILL"); } catch {}
+        onExit();
+      }, 3000);
+    } else {
+      this._ensurePortFree();
+      setTimeout(() => this._spawn(), 500);
     }
-    // Small delay to let port free up
-    setTimeout(() => this._spawn(), 500);
   }
 
   stop() {
