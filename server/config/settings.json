@@ -81,7 +81,7 @@
 
   "autoUpdate": {
     "enabled": true,
-    "intervalMs": 3600000
+    "intervalMs": 300000
   },
 
   "dashboard": {},

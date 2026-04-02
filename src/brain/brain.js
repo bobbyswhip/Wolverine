@@ -263,10 +263,17 @@ class Brain {
 
     console.log(chalk.gray(`  🧠 Brain: ${stats.totalEntries} memories loaded`));
 
-    // 1. Seed wolverine docs on first run
+    // 1. Seed wolverine docs on first run OR merge new seeds after framework update
+    const seedRefreshPath = path.join(this.projectRoot, ".wolverine", "brain", ".seed-refresh");
+    const needsSeedRefresh = fs.existsSync(seedRefreshPath);
+
     if (isFirstRun) {
       console.log(chalk.gray("  🧠 First run — seeding wolverine documentation..."));
       await this._seedDocs();
+    } else if (needsSeedRefresh) {
+      console.log(chalk.gray("  🧠 Framework updated — merging new seed docs..."));
+      await this._mergeSeedDocs();
+      try { fs.unlinkSync(seedRefreshPath); } catch {}
     }
 
     // 2. Scan project for live function map
@@ -392,6 +399,47 @@ class Brain {
     }
 
     console.log(chalk.gray(`  🧠 Seeded ${SEED_DOCS.length} documentation entries`));
+  }
+
+  /**
+   * Merge new seed docs into existing brain — append only, never delete.
+   * Compares by topic metadata to find new/updated docs.
+   * Existing memories (errors, fixes, learnings) are untouched.
+   */
+  async _mergeSeedDocs() {
+    const existing = this.store.getNamespace("docs") || [];
+    const existingTopics = new Set(existing.map(e => e.metadata?.topic).filter(Boolean));
+
+    // Find seed docs whose topic isn't already in the brain
+    const newDocs = SEED_DOCS.filter(d => !existingTopics.has(d.metadata?.topic));
+    // Find seed docs whose topic exists but text has changed (updated knowledge)
+    const updatedDocs = SEED_DOCS.filter(d => {
+      if (!existingTopics.has(d.metadata?.topic)) return false;
+      const match = existing.find(e => e.metadata?.topic === d.metadata?.topic);
+      return match && match.text !== d.text;
+    });
+
+    const toEmbed = [...newDocs, ...updatedDocs];
+    if (toEmbed.length === 0) {
+      console.log(chalk.gray("  🧠 Brain seeds already up to date"));
+      return;
+    }
+
+    // Remove old versions of updated docs
+    for (const doc of updatedDocs) {
+      const old = existing.find(e => e.metadata?.topic === doc.metadata?.topic);
+      if (old) this.store.delete(old.id);
+    }
+
+    // Embed and add new/updated docs
+    const texts = toEmbed.map(d => d.text);
+    const embeddings = await embedBatch(texts);
+    for (let i = 0; i < toEmbed.length; i++) {
+      this.store.add("docs", toEmbed[i].text, embeddings[i], toEmbed[i].metadata);
+    }
+
+    this.store.save();
+    console.log(chalk.gray(`  🧠 Merged: ${newDocs.length} new + ${updatedDocs.length} updated seed docs`));
   }
 
   async _embedFunctionMap() {

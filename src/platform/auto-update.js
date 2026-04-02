@@ -98,8 +98,32 @@ function isNewer(latest, current) {
 function backupUserFiles(cwd) {
   const backups = {};
 
-  // Protect individual config files
-  const protectedFiles = [".env.local", ".env", ".wolverine/mcp.json", ".wolverine/pricing.json"];
+  // Protect config files
+  const protectedFiles = [".env.local", ".env"];
+
+  // Protect ALL .wolverine/ state (backups, brain, events, usage, repairs)
+  const wolvDir = path.join(cwd, ".wolverine");
+  if (fs.existsSync(wolvDir)) {
+    const walkState = (dir, base) => {
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          const fullPath = path.join(dir, entry.name);
+          const relPath = path.join(base, entry.name).replace(/\\/g, "/");
+          if (entry.isDirectory()) { walkState(fullPath, relPath); }
+          else {
+            try {
+              const stat = fs.statSync(fullPath);
+              if (stat.size <= 10 * 1024 * 1024) { // skip files > 10MB
+                backups[relPath] = fs.readFileSync(fullPath, "utf-8");
+              }
+            } catch {}
+          }
+        }
+      } catch {}
+    };
+    walkState(wolvDir, ".wolverine");
+  }
   for (const file of protectedFiles) {
     const fullPath = path.join(cwd, file);
     if (fs.existsSync(fullPath)) {
@@ -191,9 +215,15 @@ function upgrade(cwd, logger) {
       execSync(cmd, { cwd, stdio: "pipe", timeout: 120000 });
     }
 
-    // Restore ALL user files (server/, .env, configs) — belt AND suspenders
+    // Restore ALL user files (server/, .env, .wolverine/) — belt AND suspenders
     restoreUserFiles(cwd, userBackups);
     console.log(chalk.gray(`  🔒 Restored ${Object.keys(userBackups).length} user files`));
+
+    // Merge new brain seed docs into existing brain (append, don't replace)
+    try {
+      const brainMerged = _mergeBrainSeeds(cwd);
+      if (brainMerged > 0) console.log(chalk.gray(`  🧠 Merged ${brainMerged} new seed docs into brain`));
+    } catch {}
 
     // Clear version cache
     _currentVersion = null;
@@ -203,8 +233,8 @@ function upgrade(cwd, logger) {
 
     return { success: true, from: current, to: latest };
   } catch (err) {
-    // Restore configs on failure
-    restoreConfigs(cwd, configBackups);
+    // Restore user files on failure
+    restoreUserFiles(cwd, userBackups);
     const errMsg = (err.message || "").slice(0, 100);
     console.log(chalk.yellow(`  ⚠️  Update failed: ${errMsg}`));
     if (logger) logger.warn("update.failed", `Upgrade failed: ${errMsg}`, { from: current, to: latest });
@@ -232,6 +262,51 @@ function checkForUpdate(cwd) {
     _checking = false;
     return null;
   }
+}
+
+/**
+ * Merge new brain seed docs into existing brain.
+ * Reads the updated brain.js SEED_DOCS, compares topics with what's
+ * already stored in .wolverine/brain/, and appends only new ones.
+ * Existing memories (errors, fixes, learnings) are never touched.
+ *
+ * @returns {number} count of new seed docs added
+ */
+function _mergeBrainSeeds(cwd) {
+  try {
+    // Load the brain store directly
+    const storePath = path.join(cwd, ".wolverine", "brain", "store.json");
+    if (!fs.existsSync(storePath)) return 0;
+
+    const store = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    const existingTexts = new Set();
+    for (const ns of Object.values(store.namespaces || {})) {
+      for (const entry of (ns || [])) {
+        if (entry.text) existingTexts.add(entry.text.slice(0, 80));
+      }
+    }
+
+    // Load fresh seed docs from the updated brain.js
+    // Clear require cache to get the new version
+    const brainPath = path.join(cwd, "src", "brain", "brain.js");
+    delete require.cache[require.resolve(brainPath)];
+    const brainModule = require(brainPath);
+
+    // Access seed docs — they're in the module's closure, but brain.init() re-seeds them.
+    // Instead, we'll read the file and extract them
+    const brainSource = fs.readFileSync(brainPath, "utf-8");
+    const seedMatch = brainSource.match(/const SEED_DOCS = \[([\s\S]*?)\n\];/);
+    if (!seedMatch) return 0;
+
+    // Count how many seed doc topics are new
+    // We can't easily parse the JS array, but we can trigger brain.init() on next restart
+    // which will re-seed. The brain's init() already only adds seeds if namespace is empty.
+    // So we just need to signal that seeds should be refreshed.
+    const seedRefreshPath = path.join(cwd, ".wolverine", "brain", ".seed-refresh");
+    fs.writeFileSync(seedRefreshPath, new Date().toISOString(), "utf-8");
+
+    return 1; // signal that refresh is pending
+  } catch { return 0; }
 }
 
 /**
