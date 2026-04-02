@@ -1,3 +1,5 @@
+const fs = require("fs");
+const path = require("path");
 const chalk = require("chalk");
 const { VectorStore } = require("./vector-store");
 const { embed, embedBatch, compactAndEmbed } = require("./embedder");
