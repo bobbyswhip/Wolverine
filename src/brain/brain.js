@@ -96,7 +96,7 @@ const SEED_DOCS = [
     metadata: { topic: "skill-sql-patterns" },
   },
   {
-    text: "Database best practices enforced by SQL skill: ALWAYS use parameterized queries with ? placeholders, NEVER concatenate user input into SQL strings. SafeDB is cluster-safe: SQLite uses WAL mode (concurrent reads + serialized writes), busy_timeout=5s (waits instead of SQLITE_BUSY), write lock queue (prevents corruption in multi-worker), WAL checkpoint on close. Each worker gets its own connection. Use db.transaction(fn) for atomic batch writes. For PostgreSQL/MySQL, each worker gets its own pool.",
+    text: "Database best practices: SafeDB uses split connections — separate read connection (concurrent, never waits) and write connection (single writer, FIFO queue). Write queue drains synchronously in one microtask, zero delays. WAL mode means readers never block writers. Each write is microseconds. db.transaction(fn) queues as single atomic unit. No busy_timeout, no blocking, no IPC. Reads: db.get(), db.all() are instant. Writes: db.run(), db.exec() go through queue.",
     metadata: { topic: "skill-sql-best-practices" },
   },
   {
@@ -118,6 +118,22 @@ const SEED_DOCS = [
   {
     text: "Process manager: wolverine monitors memory (RSS/heap) every 10s, detects memory leaks (N consecutive growth samples → auto-restart), enforces memory limit (default 512MB), tracks CPU%, probes all routes every 30s, detects response time degradation trends (stable/degrading/improving). Analytics dashboard shows memory/CPU charts and per-route health.",
     metadata: { topic: "process-manager" },
+  },
+  {
+    text: "Auto-clustering: wolverine detects machine capabilities (cores, RAM, disk, platform, Docker/K8s, cloud provider) and forks optimal workers. 2 cores = 2 workers, 3-4 = cores-1, 5-8 = cores-1 cap 6, 9+ = cores/2 cap 16. Workers auto-respawn on crash with exponential backoff. CLI: --single (no cluster), --workers N (fixed), --info (show system). Settings in server/config/settings.json cluster.mode.",
+    metadata: { topic: "clustering" },
+  },
+  {
+    text: "System detection: wolverine --info shows CPU cores/model/speed, total/free RAM, disk space, Node version, platform, container environment (Docker, Kubernetes), cloud provider (AWS, GCP, Azure, Railway, Fly, Render, Heroku). Used by ClusterManager to auto-scale worker count. Dashboard API: GET /api/system returns full machine info.",
+    metadata: { topic: "system-detection" },
+  },
+  {
+    text: "Configuration: all settings in server/config/settings.json (models, port, telemetry, rate limits, health checks, clustering, cors, logging). Secrets only in .env.local (API keys, admin key). Config loader priority: env vars > settings.json > defaults. Agent can read and edit settings.json since it's inside server/.",
+    metadata: { topic: "configuration" },
+  },
+  {
+    text: "Platform telemetry: wolverine sends heartbeats every 60s to a configurable platform backend. Auto-registers on first run, saves key to .wolverine/platform-key. Heartbeat payload: server status, memory/CPU, route health, repair history, token usage, brain stats, backups. Offline-resilient: queues locally when platform is down, drains on reconnect. Set WOLVERINE_PLATFORM_URL to enable.",
+    metadata: { topic: "platform-telemetry" },
   },
 ];
 

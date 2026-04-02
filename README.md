@@ -50,7 +50,8 @@ Each demo:
 wolverine/
 ├── server/                  ← YOUR server code (agent can edit)
 │   ├── index.js             ← Entry point
-│   └── routes/              ← Route modules
+│   ├── routes/              ← Route modules
+│   └── config/settings.json ← All settings (models, cluster, telemetry, limits)
 ├── src/
 │   ├── core/                ← Wolverine engine
 │   │   ├── wolverine.js     ← Heal pipeline + goal loop
@@ -60,7 +61,10 @@ wolverine/
 │   │   ├── verifier.js      ← Fix verification (syntax + boot probe)
 │   │   ├── error-parser.js  ← Stack trace parsing
 │   │   ├── patcher.js       ← File patching with sandbox
-│   │   └── health-monitor.js← PM2-style health checks
+│   │   ├── health-monitor.js← PM2-style health checks
+│   │   ├── config.js        ← Config loader (settings.json + env)
+│   │   ├── system-info.js   ← Machine detection (cores, RAM, cloud, containers)
+│   │   └── cluster-manager.js← Auto-scaling worker management
 │   ├── agent/               ← AI agent system
 │   │   ├── agent-engine.js  ← Multi-turn agent with 10 tools
 │   │   ├── goal-loop.js     ← Goal-driven repair loop
@@ -96,10 +100,15 @@ wolverine/
 │   │   ├── mcp-client.js    ← MCP protocol client (stdio + HTTP)
 │   │   ├── mcp-registry.js  ← Server discovery + tool registration
 │   │   └── mcp-security.js  ← Allowlists + injection scan on MCP results
-│   └── skills/              ← Reusable capabilities
-│       ├── skill-registry.js← Auto-discovery + prompt injection
-│       └── sql.js           ← SQL injection prevention + safe DB interface
-├── bin/wolverine.js         ← CLI entry point
+│   ├── skills/              ← Reusable capabilities
+│   │   ├── skill-registry.js← Auto-discovery + prompt injection
+│   │   └── sql.js           ← Cluster-safe SQL + injection prevention
+│   └── platform/            ← Fleet telemetry
+│       ├── telemetry.js     ← Collects heartbeat data from all subsystems
+│       ├── heartbeat.js     ← Sends heartbeats to platform backend
+│       ├── register.js      ← Auto-registration on first run
+│       └── queue.js         ← Offline queue with replay
+├── bin/wolverine.js         ← CLI entry point (cluster-aware)
 ├── tests/                   ← Test suite
 └── .wolverine/              ← Runtime state (gitignored)
     ├── brain/               ← Vector store persistence
@@ -289,6 +298,63 @@ Wolverine acts as a PM2-like process manager with AI-powered diagnostics:
 | **Auto-adaptation** | When you add new routes, the prober discovers and monitors them |
 
 The `📊 Analytics` dashboard panel shows memory/CPU charts, route health status, and response time breakdowns — all updating in real-time.
+
+---
+
+## Auto-Clustering
+
+Wolverine detects your machine and forks the optimal number of workers:
+
+```bash
+wolverine server/index.js           # auto-detect: 20 cores → 10 workers
+wolverine server/index.js --single  # force single worker (dev mode)
+wolverine server/index.js --workers 4  # force 4 workers
+wolverine --info                    # show system capabilities
+```
+
+**System detection:**
+- CPU cores, model, speed
+- Total/free RAM, disk space
+- Platform (Linux, macOS, Windows)
+- Container environment (Docker, Kubernetes)
+- Cloud provider (AWS, GCP, Azure, Railway, Fly, Render, Heroku)
+
+**Scaling rules:**
+
+| Cores | Workers |
+|-------|---------|
+| 1 | 1 (no clustering) |
+| 2 | 2 |
+| 3-4 | cores - 1 |
+| 5-8 | cores - 1, cap 6 |
+| 9+ | cores / 2, cap 16 |
+
+Workers auto-respawn on crash with exponential backoff (1s → 30s). Max 5 restarts per worker.
+
+---
+
+## Configuration
+
+```
+.env.local                     ← Secrets only (API keys, admin key)
+server/config/settings.json    ← Everything else (models, port, clustering, telemetry, limits)
+```
+
+`settings.json` is inside `server/` so the agent can read and edit it. Config loader priority: **env vars > settings.json > defaults**.
+
+---
+
+## Platform Telemetry
+
+Connect wolverine instances to a fleet analytics backend:
+
+```env
+WOLVERINE_PLATFORM_URL=https://your-platform.com
+```
+
+That's it. Wolverine auto-registers, gets a key, and starts sending heartbeats every 60s. Offline-resilient — queues locally when platform is down, replays on reconnect.
+
+See [PLATFORM.md](PLATFORM.md) for the backend spec and [TELEMETRY.md](TELEMETRY.md) for the protocol.
 
 ---
 
