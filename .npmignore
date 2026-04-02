@@ -30,6 +30,4 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Docs not needed in package (keep README.md via package.json)
-*.md
-!README.md
+

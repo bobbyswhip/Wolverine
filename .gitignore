@@ -13,9 +13,4 @@ Thumbs.db
 .npmrc
 *.tgz
 
-# Local dev docs (not tracked in git)
-FRAMEWORK_FIX.md
-RUNNER_FIX.md
-FIX.md
-*_FIX.md
-*_RESULTS.md
+

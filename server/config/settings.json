@@ -24,7 +24,7 @@
   },
 
   "cluster": {
-    "mode": "auto",
+    "enabled": false,
     "workers": 0
   },
 
@@ -48,7 +48,7 @@
   },
 
   "errorMonitor": {
-    "defaultThreshold": 3,
+    "defaultThreshold": 1,
     "windowMs": 30000,
     "cooldownMs": 60000
   },

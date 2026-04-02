@@ -95,7 +95,7 @@ class WolverineRunner {
 
     // Error monitor — detects caught 500 errors without process crash
     this.errorMonitor = new ErrorMonitor({
-      threshold: parseInt(process.env.WOLVERINE_ERROR_THRESHOLD, 10) || 3,
+      threshold: parseInt(process.env.WOLVERINE_ERROR_THRESHOLD, 10) || 1,
       windowMs: parseInt(process.env.WOLVERINE_ERROR_WINDOW_MS, 10) || 30000,
       cooldownMs: parseInt(process.env.WOLVERINE_ERROR_COOLDOWN_MS, 10) || 60000,
       logger: this.logger,
@@ -236,11 +236,11 @@ class WolverineRunner {
 
       oldChild.removeAllListeners("exit");
       oldChild.once("exit", onExit);
-      oldChild.kill("SIGTERM");
+      this._killProcessTree(oldChild.pid, "SIGTERM");
 
       // Force kill if it doesn't exit in 3s
       setTimeout(() => {
-        try { oldChild.kill("SIGKILL"); } catch {}
+        this._killProcessTree(oldChild.pid, "SIGKILL");
         onExit();
       }, 3000);
     } else {
@@ -278,13 +278,14 @@ class WolverineRunner {
 
     this.logger.info(EVENT_TYPES.PROCESS_STOP, "Wolverine stopped (graceful shutdown)");
 
-    // Kill child — remove exit listener first so it doesn't trigger heal
+    // Kill child + all its descendants — remove exit listener first so it doesn't trigger heal
     if (this.child) {
+      const pid = this.child.pid;
       this.child.removeAllListeners("exit");
-      this.child.kill("SIGTERM");
+      this._killProcessTree(pid, "SIGTERM");
       // Force kill after 3s if it doesn't respond
       setTimeout(() => {
-        try { if (this.child) this.child.kill("SIGKILL"); } catch {}
+        this._killProcessTree(pid, "SIGKILL");
       }, 3000);
       this.child = null;
     }
@@ -304,9 +305,15 @@ class WolverineRunner {
     // Spawn with --require error-hook.js for IPC error reporting
     // The error hook auto-patches Fastify/Express to report caught 500s
     const errorHookPath = path.join(__dirname, "error-hook.js");
+    const sysInfo = require("./system-info").detect();
     this.child = spawn("node", ["--require", errorHookPath, this.scriptPath], {
       cwd: this.cwd,
-      env: { ...process.env },
+      env: {
+        ...process.env,
+        // Tell the user's server how many workers to fork (if it uses clustering)
+        WOLVERINE_RECOMMENDED_WORKERS: String(sysInfo.recommended?.workers || 1),
+        WOLVERINE_MANAGED: "1", // Signal that wolverine is managing this process
+      },
       stdio: ["inherit", "inherit", "pipe", "ipc"],
     });
 
@@ -347,8 +354,9 @@ class WolverineRunner {
 
       // Kill the hung process — remove exit listener to prevent double-heal
       if (this.child) {
+        const pid = this.child.pid;
         this.child.removeAllListeners("exit");
-        this.child.kill("SIGKILL");
+        this._killProcessTree(pid, "SIGKILL");
         this.child = null;
       }
 
@@ -585,6 +593,34 @@ class WolverineRunner {
       clearTimeout(this._stabilityTimer);
       this._stabilityTimer = null;
     }
+  }
+
+  /**
+   * Kill a process and all its children (process tree kill).
+   * Handles servers that fork workers internally — prevents orphaned processes.
+   */
+  _killProcessTree(pid, signal = "SIGTERM") {
+    if (!pid) return;
+    try {
+      if (process.platform === "win32") {
+        // taskkill /T kills the process tree
+        execSync(`taskkill /PID ${pid} /T /F`, { timeout: 3000, stdio: "ignore" });
+      } else {
+        // Kill the process group (negative PID)
+        try { process.kill(-pid, signal); } catch {}
+        // Also kill individual PID in case it's not a group leader
+        try { process.kill(pid, signal); } catch {}
+        // Find and kill children via pgrep
+        try {
+          const children = execSync(`pgrep -P ${pid} 2>/dev/null`, { encoding: "utf-8", timeout: 3000 }).trim();
+          if (children) {
+            for (const cpid of children.split("\n").map(p => parseInt(p, 10)).filter(Boolean)) {
+              try { process.kill(cpid, signal); } catch {}
+            }
+          }
+        } catch { /* no children or pgrep not available */ }
+      }
+    } catch { /* process already dead */ }
   }
 
   _ensurePortFree() {
