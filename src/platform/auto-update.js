@@ -91,25 +91,46 @@ function isNewer(latest, current) {
 }
 
 /**
- * Protect config files before update and restore after.
+ * Protect ALL user files before update and restore after.
+ * The entire server/ directory is sacred — auto-update must never touch it.
+ * Also protects .env files and any user config.
  */
-function backupConfigs(cwd) {
-  const configs = [
-    "server/config/settings.json",
-    ".env.local",
-    ".env",
-  ];
+function backupUserFiles(cwd) {
   const backups = {};
-  for (const file of configs) {
+
+  // Protect individual config files
+  const protectedFiles = [".env.local", ".env", ".wolverine/mcp.json", ".wolverine/pricing.json"];
+  for (const file of protectedFiles) {
     const fullPath = path.join(cwd, file);
     if (fs.existsSync(fullPath)) {
       backups[file] = fs.readFileSync(fullPath, "utf-8");
     }
   }
+
+  // Protect entire server/ directory (recursive)
+  const serverDir = path.join(cwd, "server");
+  if (fs.existsSync(serverDir)) {
+    const walk = (dir, base) => {
+      try {
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.name === "node_modules") continue;
+          const fullPath = path.join(dir, entry.name);
+          const relPath = path.join(base, entry.name).replace(/\\/g, "/");
+          if (entry.isDirectory()) { walk(fullPath, relPath); }
+          else {
+            try { backups[relPath] = fs.readFileSync(fullPath, "utf-8"); } catch {}
+          }
+        }
+      } catch {}
+    };
+    walk(serverDir, "server");
+  }
+
   return backups;
 }
 
-function restoreConfigs(cwd, backups) {
+function restoreUserFiles(cwd, backups) {
   for (const [file, content] of Object.entries(backups)) {
     const fullPath = path.join(cwd, file);
     try {
@@ -144,33 +165,35 @@ function upgrade(cwd, logger) {
   console.log(chalk.blue(`\n  🔄 Wolverine update available: ${current} → ${latest}`));
   if (logger) logger.info("update.start", `Upgrading ${current} → ${latest}`, { from: current, to: latest });
 
-  // Back up configs
-  const configBackups = backupConfigs(cwd);
-  console.log(chalk.gray(`  🔒 Backed up ${Object.keys(configBackups).length} config files`));
+  // Back up ALL user files (server/, .env, configs)
+  const userBackups = backupUserFiles(cwd);
+  console.log(chalk.gray(`  🔒 Backed up ${Object.keys(userBackups).length} user files (server/ protected)`));
 
   try {
-    // Detect install method: git clone or npm package
     const useGit = isGitRepo(cwd);
-    let cmd;
 
     if (useGit) {
-      // Git-cloned: pull latest from origin, then npm install for deps
-      cmd = "git pull origin master && npm install";
-      console.log(chalk.blue(`  📦 Git repo detected — pulling latest`));
+      // Git-cloned: ONLY update framework files, NEVER touch server/
+      // Fetch latest, then selectively checkout only framework dirs
+      console.log(chalk.blue(`  📦 Git repo — selective framework update (server/ untouched)`));
+      execSync("git fetch origin master", { cwd, stdio: "pipe", timeout: 30000 });
+      // Only update: src/, bin/, package.json, examples/, tests/, CLAUDE.md, README.md, CHANGELOG.md
+      const frameworkPaths = "src/ bin/ package.json package-lock.json examples/ tests/ CLAUDE.md README.md CHANGELOG.md .npmignore";
+      execSync(`git checkout origin/master -- ${frameworkPaths}`, { cwd, stdio: "pipe", timeout: 30000 });
+      execSync("npm install", { cwd, stdio: "pipe", timeout: 120000 });
     } else {
       // npm-installed: update the package
       const isGlobal = __dirname.includes("node_modules") && !cwd.includes("node_modules");
-      cmd = isGlobal
+      const cmd = isGlobal
         ? `npm install -g ${PACKAGE_NAME}@${latest}`
         : `npm install ${PACKAGE_NAME}@${latest}`;
+      console.log(chalk.blue(`  📦 Running: ${cmd}`));
+      execSync(cmd, { cwd, stdio: "pipe", timeout: 120000 });
     }
 
-    console.log(chalk.blue(`  📦 Running: ${cmd}`));
-    execSync(cmd, { cwd, stdio: "pipe", timeout: 120000 });
-
-    // Restore configs (npm might have overwritten them)
-    restoreConfigs(cwd, configBackups);
-    console.log(chalk.gray(`  🔒 Restored config files`));
+    // Restore ALL user files (server/, .env, configs) — belt AND suspenders
+    restoreUserFiles(cwd, userBackups);
+    console.log(chalk.gray(`  🔒 Restored ${Object.keys(userBackups).length} user files`));
 
     // Clear version cache
     _currentVersion = null;
