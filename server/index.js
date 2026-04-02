@@ -19,10 +19,38 @@ fastify.setNotFoundHandler((req, reply) => {
   reply.code(404).send({ error: "Not found", path: req.url });
 });
 
-// Error handler
+// Error handler — reports to Wolverine parent via IPC for auto-healing
 fastify.setErrorHandler((err, req, reply) => {
   console.error(`[ERROR] ${err.message}`);
-  reply.code(500).send({ error: "Internal server error" });
+  reply.code(500).send({ error: err.message });
+
+  // Report to Wolverine via IPC (if running under wolverine)
+  if (typeof process.send === "function") {
+    try {
+      // Extract file/line from stack trace
+      let file = null, line = null;
+      if (err.stack) {
+        const frames = err.stack.split("\n");
+        for (const frame of frames) {
+          const m = frame.match(/\(([^)]+):(\d+):(\d+)\)/) || frame.match(/at\s+([^\s(]+):(\d+):(\d+)/);
+          if (m && !m[1].includes("node_modules") && !m[1].includes("node:")) {
+            file = m[1]; line = parseInt(m[2], 10); break;
+          }
+        }
+      }
+      process.send({
+        type: "route_error",
+        path: req.url,
+        method: req.method,
+        statusCode: 500,
+        message: err.message,
+        stack: err.stack,
+        file,
+        line,
+        timestamp: Date.now(),
+      });
+    } catch (_) { /* IPC send failed — non-fatal */ }
+  }
 });
 
 fastify.listen({ port: PORT, host: "0.0.0.0" }, (err) => {

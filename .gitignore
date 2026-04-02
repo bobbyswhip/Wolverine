@@ -12,3 +12,9 @@ Thumbs.db
 # npm
 .npmrc
 *.tgz
+
+# Local dev docs (not tracked in git)
+FRAMEWORK_FIX.md
+RUNNER_FIX.md
+FIX.md
+*_FIX.md
