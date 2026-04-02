@@ -23,6 +23,7 @@ const { Notifier } = require("../notifications/notifier");
 const { loadConfig } = require("./config");
 const { ErrorMonitor } = require("../monitor/error-monitor");
 const { startAutoUpdate, stopAutoUpdate } = require("../platform/auto-update");
+const { LoopGuard, ensureSingleProcess } = require("../skills/loop-guard");
 
 /**
  * The Wolverine process runner — v3.
@@ -104,6 +105,12 @@ class WolverineRunner {
       onError: (routePath, errorDetails) => this._healFromError(routePath, errorDetails),
     });
 
+    // Loop guard — detects infinite heal loops, generates bug reports
+    this.loopGuard = new LoopGuard(this.cwd, {
+      maxAttempts: parseInt(process.env.WOLVERINE_LOOP_MAX_ATTEMPTS, 10) || 3,
+      windowMs: parseInt(process.env.WOLVERINE_LOOP_WINDOW_MS, 10) || 600000,
+    });
+
     // Brain — semantic memory + project context
     this.brain = new Brain(this.cwd);
 
@@ -147,6 +154,9 @@ class WolverineRunner {
   }
 
   async start() {
+    // Ensure only one wolverine instance runs — kill any old process
+    ensureSingleProcess(this.cwd);
+
     this.running = true;
     this.retryCount = 0;
 
@@ -475,6 +485,28 @@ class WolverineRunner {
     this._healInProgress = true;
     this._healStatus = { active: true, error: this._stderrBuffer.slice(0, 200), phase: "diagnosing", startedAt: Date.now() };
 
+    // Loop guard: check if we're stuck repeating failed heals
+    const errorSig = RateLimiter.signature(this._stderrBuffer.slice(0, 200), "");
+    const loopCheck = this.loopGuard.check(errorSig);
+    if (!loopCheck.allowed) {
+      console.log(chalk.red(`\n  🔄 ${loopCheck.reason}`));
+      if (loopCheck.shouldReport) {
+        const report = await this.loopGuard.generateBugReport({
+          errorMessage: this._stderrBuffer.slice(0, 500),
+          filePath: null,
+          attempts: loopCheck.attempts,
+          brain: this.brain,
+          logger: this.logger,
+        });
+        await this.loopGuard.sendToBackend(report);
+      }
+      this._healInProgress = false;
+      this._healStatus = null;
+      // Just restart without healing — the bug report is filed
+      this._spawn();
+      return;
+    }
+
     try {
       const result = await heal({
         stderr: this._stderrBuffer,
@@ -491,9 +523,12 @@ class WolverineRunner {
         repairHistory: this.repairHistory,
       });
 
+      // Record attempt for loop guard
+      this.loopGuard.record(errorSig, result.healed, result.agentStats?.totalTokens || 0);
+
       if (result.healed) {
         this._lastBackupId = result.backupId;
-        this.retryCount = 0; // Fresh start after successful heal
+        this.retryCount = 0;
         const mode = result.mode === "agent" ? "multi-file agent" : result.mode || "fast path";
         console.log(chalk.green(`\n🐺 Wolverine healed the error via ${mode}! Restarting...\n`));
 

@@ -429,6 +429,22 @@ Wolverine (single process manager)
 
 ---
 
+## Token Protection
+
+Three layers prevent token waste:
+
+| Layer | What it catches | Cost |
+|-------|----------------|------|
+| **Empty stderr guard** | Signal kills, clean shutdowns with no error | $0.00 |
+| **Loop guard** | Same error failing 3+ times in 10min → files bug report, stops healing | $0.00 after detection |
+| **Global rate limit** | Max 5 heals per 5 minutes regardless of error | Caps total spend |
+
+**Process dedup:** PID file ensures only one wolverine instance runs. Kills old process on startup.
+
+**Bug reports:** When loop guard triggers, generates a security-scanned report (no secrets/injection patterns) and sends to the platform backend for human review.
+
+---
+
 ## Cost Optimization
 
 Wolverine minimizes AI spend through 7 techniques:

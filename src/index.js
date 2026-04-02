@@ -38,6 +38,7 @@ const { diagnose: diagnoseDeps, healthReport: depsHealthReport, getMigration } =
 const { checkForUpdate, upgrade: upgradeWolverine, getCurrentVersion } = require("./platform/auto-update");
 const { safeUpdate, createSafeBackup, listSafeBackups, restoreFromSafeBackup } = require("./skills/update");
 const { backup, rollback, rollbackLatest, undoRollback, listBackups } = require("./skills/backup");
+const { LoopGuard, ensureSingleProcess } = require("./skills/loop-guard");
 
 module.exports = {
   // Core
@@ -114,4 +115,6 @@ module.exports = {
   rollbackLatest,
   undoRollback,
   listBackups,
+  LoopGuard,
+  ensureSingleProcess,
 };

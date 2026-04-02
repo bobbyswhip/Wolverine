@@ -250,6 +250,14 @@ const SEED_DOCS = [
     metadata: { topic: "auto-update" },
   },
   {
+    text: "Loop guard: detects infinite heal loops and stops burning tokens. Tracks heal attempts by error signature — if 3+ heals fail on same error in 10 minutes, STOPS healing and generates a bug report. Bug report sent to platform backend for human review (security scanned for injection/secrets first). 30-minute cooldown after bug report filed. Process dedup via PID file (.wolverine/wolverine.pid) ensures only one wolverine instance runs — kills old process on startup. Config: WOLVERINE_LOOP_MAX_ATTEMPTS (default 3), WOLVERINE_LOOP_WINDOW_MS (default 600000).",
+    metadata: { topic: "loop-guard" },
+  },
+  {
+    text: "Token waste prevention: 3 layers. (1) Empty stderr guard — signal kills with no error output just restart, no AI ($0.00). (2) Loop guard — 3 failed heals on same error → stop and file bug report, no more AI calls. (3) Global rate limit — max 5 heals per 5 minutes regardless of error signature. Idle server burns exactly $0.00 in tokens.",
+    metadata: { topic: "token-protection" },
+  },
+  {
     text: "Cost optimization: 7 techniques reduce heal cost from $0.31 to $0.02 for simple errors. (1) Verifier skips route probe for simple errors (TypeError/ReferenceError/SyntaxError) — trusts syntax+boot, ErrorMonitor is safety net. Prevents false-rejection cascades. (2) Sub-agents use Haiku (classifier model) for explore/plan/verify/research — only fixer uses Sonnet/Opus. 6 Haiku calls=$0.006 vs 6 Sonnet calls=$0.12. (3) Agent context compacted every 3 turns using compacting model — prevents 15K→95K token blowup. (4) Brain checked for cached fix patterns before AI — repeat errors cost $0. (5) Token budgets capped by error complexity: simple=20K agent budget, moderate=50K, complex=100K. Simple errors get 4 agent turns max. (6) Prior attempt summaries (not full context) passed between iterations — concise 'do NOT repeat' directives. (7) Fast path includes last known good backup code so AI can revert broken additions instead of patching around them.",
     metadata: { topic: "cost-optimization" },
   },
