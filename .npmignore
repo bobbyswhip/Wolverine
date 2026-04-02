@@ -1,0 +1,35 @@
+# Git
+.git/
+.github/
+.gitignore
+
+# Claude
+.claude/
+
+# Runtime state
+.wolverine/
+
+# Secrets
+.env
+.env.local
+.env.*.local
+.npmrc
+
+# Tests
+tests/
+
+# Logs
+*.log
+
+# Build
+node_modules/
+dist/
+*.tgz
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docs not needed in package
+FIX.md
+PLATFORM.md

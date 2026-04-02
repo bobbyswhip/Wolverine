@@ -8,3 +8,7 @@ dist/
 *.wolverine-backup
 .DS_Store
 Thumbs.db
+
+# npm
+.npmrc
+*.tgz
