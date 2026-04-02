@@ -23,7 +23,24 @@ const { EVENT_TYPES } = require("../logger/event-logger");
  *
  * The engine tries fast path first. If that fails verification, it escalates to the agent.
  */
-async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager, logger, brain, mcp, skills, repairHistory }) {
+async function heal(opts) {
+  const HEAL_TIMEOUT_MS = parseInt(process.env.WOLVERINE_HEAL_TIMEOUT_MS, 10) || 300000; // 5 min
+  try {
+    return await Promise.race([
+      _healImpl(opts),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("timeout")), HEAL_TIMEOUT_MS)),
+    ]);
+  } catch (err) {
+    if (err.message === "timeout") {
+      console.log(chalk.red(`\n🐺 Heal timed out after ${HEAL_TIMEOUT_MS / 1000}s`));
+      if (opts.logger) opts.logger.error(EVENT_TYPES.HEAL_FAILED, `Heal timed out after ${HEAL_TIMEOUT_MS / 1000}s`);
+      return { healed: false, explanation: `Heal timed out after ${HEAL_TIMEOUT_MS / 1000}s` };
+    }
+    throw err;
+  }
+}
+
+async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager, logger, brain, mcp, skills, repairHistory, routeContext }) {
   const healStartTime = Date.now();
   const { redact, hasSecrets } = require("../security/secret-redactor");
 
@@ -69,6 +86,16 @@ async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager
   console.log(chalk.cyan(`  Line:  ${parsed.line || "unknown"}`));
   console.log(chalk.cyan(`  Error: ${parsed.errorMessage}`));
   console.log(chalk.cyan(`  Type:  ${parsed.errorType || "unknown"}`));
+
+  // 2c. If error mentions env vars, collect env context for AI
+  let envContext = "";
+  if (/process\.env|\.env|missing.*(?:key|token|secret|api|url|host|port|password|database)|undefined.*(?:config|setting)/i.test(parsed.errorMessage + " " + (parsed.stackTrace || ""))) {
+    const envKeys = Object.keys(process.env)
+      .filter(k => !k.startsWith("npm_") && !k.startsWith("WOLVERINE_") && !k.startsWith("__"))
+      .sort();
+    envContext = `\nAvailable environment variables (names only, values redacted): ${envKeys.join(", ")}\nIf the error is about a missing env var, suggest setting it rather than working around it in code.\n`;
+    console.log(chalk.gray(`  🔑 Env context: ${envKeys.length} vars available`));
+  }
 
   // 3. Rate limit check
   const rateCheck = rateLimiter.check(errorSignature);
@@ -200,7 +227,7 @@ async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager
       backupManager.setErrorSignature(bid, errorSignature);
       if (logger) logger.info(EVENT_TYPES.BACKUP_CREATED, `Backup ${bid} (iteration ${iteration})`, { backupId: bid });
 
-      const fullContext = [brainContext, researchContext, researchCtx].filter(Boolean).join("\n");
+      const fullContext = [brainContext, researchContext, researchCtx, envContext].filter(Boolean).join("\n");
 
       let result;
       if (iteration === 1 && hasFile) {
@@ -211,6 +238,7 @@ async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager
           const repair = await requestRepair({
             filePath: parsed.filePath, sourceCode, backupSourceCode,
             errorMessage: parsed.errorMessage, stackTrace: parsed.stackTrace,
+            extraContext: envContext,
           });
           rateLimiter.record(errorSignature);
 
@@ -244,7 +272,7 @@ async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager
             for (const r of patchResults) console.log(chalk.green(`  ✅ Patched: ${r.file}`));
           }
 
-          const verification = await verifyFix(parsed.filePath, cwd, errorSignature);
+          const verification = await verifyFix(parsed.filePath, cwd, errorSignature, routeContext);
           if (verification.verified) {
             backupManager.markVerified(bid);
             rateLimiter.clearSignature(errorSignature);
@@ -276,7 +304,7 @@ async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager
         if (agentResult.success) {
           // Verify: if we have a file, do syntax + boot check. Otherwise just boot probe.
           if (hasFile) {
-            const verification = await verifyFix(parsed.filePath, cwd, errorSignature);
+            const verification = await verifyFix(parsed.filePath, cwd, errorSignature, routeContext);
             if (verification.verified) {
               backupManager.markVerified(bid);
               rateLimiter.clearSignature(errorSignature);
@@ -304,7 +332,7 @@ async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager
 
         if (subResult.success) {
           if (hasFile) {
-            const verification = await verifyFix(parsed.filePath, cwd, errorSignature);
+            const verification = await verifyFix(parsed.filePath, cwd, errorSignature, routeContext);
             if (verification.verified) {
               backupManager.markVerified(bid);
               rateLimiter.clearSignature(errorSignature);
@@ -436,6 +464,27 @@ async function tryOperationalFix(parsed, cwd, logger) {
         console.log(chalk.blue(`  🔑 Fixed permissions on: ${permFile[1]}`));
         return { fixed: true, action: `Fixed permissions (chmod 755) on: ${permFile[1]}` };
       } catch {}
+    }
+  }
+
+  // Pattern 4: EADDRINUSE — port taken by stale process
+  if (/EADDRINUSE/.test(msg)) {
+    const portMatch = msg.match(/:(\d{2,5})/) || msg.match(/port\s+(\d{2,5})/i);
+    if (portMatch) {
+      const port = parseInt(portMatch[1], 10);
+      try {
+        if (process.platform === "win32") {
+          const out = execSync(`netstat -ano | findstr ":${port}" | findstr "LISTENING"`, { encoding: "utf-8", timeout: 3000 }).trim();
+          const pids = [...new Set(out.split("\n").map(l => parseInt(l.trim().split(/\s+/).pop(), 10)).filter(p => p && p !== process.pid))];
+          for (const pid of pids) { try { execSync(`taskkill /PID ${pid} /F`, { timeout: 3000 }); } catch {} }
+          if (pids.length > 0) return { fixed: true, action: `Killed stale process(es) on port ${port}: PIDs ${pids.join(", ")}` };
+        } else {
+          const out = execSync(`lsof -ti:${port} 2>/dev/null`, { encoding: "utf-8", timeout: 3000 }).trim();
+          const pids = out.split("\n").map(p => parseInt(p, 10)).filter(p => p && p !== process.pid);
+          for (const pid of pids) { try { process.kill(pid, "SIGKILL"); } catch {} }
+          if (pids.length > 0) return { fixed: true, action: `Killed stale process(es) on port ${port}: PIDs ${pids.join(", ")}` };
+        }
+      } catch { /* no stale process found */ }
     }
   }
 

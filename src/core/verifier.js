@@ -1,5 +1,6 @@
 const { spawn } = require("child_process");
 const chalk = require("chalk");
+const { parseError, classifyError } = require("./error-parser");
 
 /**
  * Fix Verifier — validates that a patch actually fixes the error
@@ -75,9 +76,18 @@ function bootProbe(scriptPath, cwd, originalErrorSignature) {
         return;
       }
 
-      // Check if it's the same error
-      const sameError = originalErrorSignature &&
-        stderr.includes(originalErrorSignature.split("::").pop().trim());
+      // Check if it's the same error — use classification, not string matching
+      let sameError = false;
+      if (originalErrorSignature) {
+        const newParsed = parseError(stderr);
+        const origParts = (originalErrorSignature || "").split("::");
+        const origMsg = origParts.slice(1).join("::").trim();
+        const origType = classifyError(origMsg, "");
+        const origClass = (origMsg.match(/^(\w*Error)/) || [])[1] || "";
+        const newClass = (newParsed.errorMessage?.match(/^(\w*Error)/) || [])[1] || "";
+        // Same error = same classification type AND same error class (TypeError vs ReferenceError)
+        sameError = newParsed.errorType === origType && origClass === newClass;
+      }
 
       resolve({
         status: "crashed",
@@ -112,11 +122,20 @@ function bootProbe(scriptPath, cwd, originalErrorSignature) {
  * - { verified: false, status: "new-error" }     — different error, fix broke something else → rollback
  * - { verified: false, status: "syntax-error" }  — introduced syntax error → rollback
  */
-async function verifyFix(scriptPath, cwd, originalErrorSignature) {
+/**
+ * Full verification pipeline.
+ *
+ * @param {string} scriptPath — entry point to verify
+ * @param {string} cwd — working directory
+ * @param {string} originalErrorSignature — error signature for same-error detection
+ * @param {object} routeContext — optional { path, method } for route-level testing
+ */
+async function verifyFix(scriptPath, cwd, originalErrorSignature, routeContext) {
+  const steps = routeContext?.path ? 3 : 2;
   console.log(chalk.yellow("\n🔬 Verifying fix...\n"));
 
   // Step 1: Syntax check
-  console.log(chalk.gray("  [1/2] Syntax check..."));
+  console.log(chalk.gray(`  [1/${steps}] Syntax check...`));
   const syntax = await syntaxCheck(scriptPath);
   if (!syntax.valid) {
     console.log(chalk.red(`  ❌ Syntax error introduced by fix:\n      ${syntax.error}`));
@@ -125,22 +144,105 @@ async function verifyFix(scriptPath, cwd, originalErrorSignature) {
   console.log(chalk.green("  ✅ Syntax OK"));
 
   // Step 2: Boot probe
-  console.log(chalk.gray("  [2/2] Boot probe (watching for crashes)..."));
+  console.log(chalk.gray(`  [2/${steps}] Boot probe (watching for crashes)...`));
   const probe = await bootProbe(scriptPath, cwd, originalErrorSignature);
 
-  if (probe.status === "alive") {
-    console.log(chalk.green("  ✅ Process booted successfully and stayed alive."));
-    return { verified: true, status: "fixed" };
+  if (probe.status !== "alive") {
+    if (probe.sameError) {
+      console.log(chalk.red("  ❌ Same error occurred — fix did not resolve the issue."));
+      return { verified: false, status: "same-error", stderr: probe.stderr };
+    }
+    console.log(chalk.red("  ❌ A different error occurred — fix may have introduced a new bug."));
+    return { verified: false, status: "new-error", stderr: probe.stderr };
+  }
+  console.log(chalk.green("  ✅ Process booted successfully"));
+
+  // Step 3: Route probe (if we know which route was failing)
+  if (routeContext?.path) {
+    console.log(chalk.gray(`  [3/${steps}] Route probe: ${routeContext.method || "GET"} ${routeContext.path}...`));
+    const routeResult = await routeProbe(scriptPath, cwd, routeContext);
+    if (routeResult.status === "failed") {
+      console.log(chalk.red(`  ❌ Route ${routeContext.path} still fails (HTTP ${routeResult.statusCode}): ${routeResult.body?.slice(0, 80)}`));
+      return { verified: false, status: "route-still-broken", stderr: routeResult.body };
+    }
+    if (routeResult.status === "passed") {
+      console.log(chalk.green(`  ✅ Route ${routeContext.path} responds OK (HTTP ${routeResult.statusCode})`));
+    } else {
+      console.log(chalk.gray(`  ⚠️  Route probe skipped: ${routeResult.reason || "unknown"}`));
+    }
   }
 
-  // It crashed
-  if (probe.sameError) {
-    console.log(chalk.red("  ❌ Same error occurred — fix did not resolve the issue."));
-    return { verified: false, status: "same-error", stderr: probe.stderr };
-  }
+  return { verified: true, status: "fixed" };
+}
 
-  console.log(chalk.red("  ❌ A different error occurred — fix may have introduced a new bug."));
-  return { verified: false, status: "new-error", stderr: probe.stderr };
+/**
+ * Route probe — boot the server on PORT=0, detect the actual port from stdout,
+ * then HTTP-test the failing route.
+ */
+function routeProbe(scriptPath, cwd, routeContext) {
+  const http = require("http");
+  return new Promise((resolve) => {
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+
+    const probeEnv = { ...process.env, PORT: "0", WOLVERINE_PROBE: "1" };
+    const child = spawn("node", [scriptPath], {
+      cwd, env: probeEnv,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    child.stdout.on("data", (d) => { stdout += d.toString(); });
+    child.stderr.on("data", (d) => { stderr += d.toString(); });
+
+    child.on("exit", () => {
+      if (settled) return;
+      settled = true;
+      resolve({ status: "failed", statusCode: 0, body: stderr || "Process exited before route test" });
+    });
+
+    // Poll stdout for port announcement
+    const checkPort = setInterval(() => {
+      if (settled) { clearInterval(checkPort); return; }
+      const m = stdout.match(/(?:listening|running|started|on)\s+(?:on\s+)?(?:(?:https?:\/\/)?[\w.]+:)?(\d{4,5})/i)
+              || stdout.match(/:(\d{4,5})/);
+      if (m) {
+        clearInterval(checkPort);
+        const port = parseInt(m[1], 10);
+        // Test the route
+        const req = http.request({
+          hostname: "127.0.0.1", port,
+          path: routeContext.path,
+          method: routeContext.method || "GET",
+          timeout: 5000,
+        }, (res) => {
+          let body = "";
+          res.on("data", (c) => { body += c; });
+          res.on("end", () => {
+            settled = true;
+            child.kill("SIGTERM");
+            if (res.statusCode < 500) {
+              resolve({ status: "passed", statusCode: res.statusCode });
+            } else {
+              resolve({ status: "failed", statusCode: res.statusCode, body: body.slice(0, 500) });
+            }
+          });
+        });
+        req.on("error", (e) => { settled = true; child.kill("SIGTERM"); resolve({ status: "failed", statusCode: 0, body: e.message }); });
+        req.on("timeout", () => { req.destroy(); settled = true; child.kill("SIGTERM"); resolve({ status: "failed", statusCode: 0, body: "timeout" }); });
+        req.end();
+      }
+    }, 300);
+
+    // Overall timeout
+    setTimeout(() => {
+      clearInterval(checkPort);
+      if (settled) return;
+      settled = true;
+      child.kill("SIGTERM");
+      resolve({ status: "skipped", reason: "Could not detect server port from stdout" });
+    }, BOOT_PROBE_TIMEOUT_MS + 5000);
+  });
 }
 
 module.exports = { verifyFix, syntaxCheck, bootProbe, BOOT_PROBE_TIMEOUT_MS };

@@ -50,6 +50,8 @@ class WolverineRunner {
       windowMs: parseInt(process.env.WOLVERINE_RATE_WINDOW_MS, 10) || 600000,
       minGapMs: parseInt(process.env.WOLVERINE_RATE_MIN_GAP_MS, 10) || 5000,
       maxTokensPerHour: parseInt(process.env.WOLVERINE_RATE_MAX_TOKENS_HOUR, 10) || 100000,
+      maxGlobalHealsPerWindow: parseInt(process.env.WOLVERINE_RATE_MAX_GLOBAL_HEALS, 10) || 5,
+      globalWindowMs: parseInt(process.env.WOLVERINE_RATE_GLOBAL_WINDOW_MS, 10) || 300000,
     });
     this.backupManager = new BackupManager(this.cwd);
     this.logger = new EventLogger(this.cwd);
@@ -337,13 +339,32 @@ class WolverineRunner {
     // Start health monitoring
     this.healthMonitor.stop();
     this.healthMonitor.reset();
-    this.healthMonitor.start((reason) => {
-      if (this._healInProgress) return;
-      console.log(chalk.red(`\n🚨 Health check triggered restart (reason: ${reason})`));
+    this.healthMonitor.start(async (reason) => {
+      if (this._healInProgress || !this.running) return;
+      console.log(chalk.red(`\n🚨 Health check triggered heal (reason: ${reason})`));
       this.logger.error(EVENT_TYPES.HEALTH_UNRESPONSIVE, `Server unresponsive: ${reason}`, { reason });
+      this.healthMonitor.stop();
+
+      // Kill the hung process — remove exit listener to prevent double-heal
       if (this.child) {
+        this.child.removeAllListeners("exit");
         this.child.kill("SIGKILL");
+        this.child = null;
       }
+
+      // Synthesize error context for the heal pipeline
+      this._stderrBuffer = `Server became unresponsive. Health check failed: ${reason}\n` +
+        `The server was running but stopped responding to HTTP requests.\n` +
+        `Possible causes: infinite loop, deadlock, memory exhaustion, blocked event loop.`;
+
+      this.retryCount++;
+      if (this.retryCount > this.maxRetries) {
+        console.log(chalk.red(`\n🛑 Max retries reached.`));
+        this._logRollbackHint();
+        this.running = false;
+        return;
+      }
+      await this._healAndRestart();
     });
 
     this.child.on("exit", async (code, signal) => {
@@ -514,6 +535,7 @@ class WolverineRunner {
         mcp: this.mcp,
         skills: this.skills,
         repairHistory: this.repairHistory,
+        routeContext: { path: routePath, method: errorDetails?.method },
       });
 
       if (result.healed) {

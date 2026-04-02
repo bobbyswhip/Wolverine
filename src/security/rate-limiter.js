@@ -18,11 +18,17 @@ class RateLimiter {
     // Max cost per hour in estimated tokens (rough budget protection)
     this.maxTokensPerHour = options.maxTokensPerHour || 100000;
 
+    // Global heal cap — stops infinite heal loops regardless of error signature
+    this.maxGlobalHealsPerWindow = options.maxGlobalHealsPerWindow || 5;
+    this.globalWindowMs = options.globalWindowMs || 300000; // 5 minutes
+
     // Internal state
     this._callLog = [];          // timestamps of recent calls
     this._tokenLog = [];         // { timestamp, tokens } for budget tracking
     this._errorSignatures = {};  // signature -> { count, lastSeen, backoffMs }
     this._lastCallTime = 0;
+    this._globalHealCount = 0;
+    this._globalHealWindowStart = Date.now();
   }
 
   /**
@@ -32,6 +38,21 @@ class RateLimiter {
   check(errorSignature) {
     const now = Date.now();
     this._pruneOldEntries(now);
+
+    // 0. Global heal cap — regardless of error signature
+    const globalElapsed = now - this._globalHealWindowStart;
+    if (globalElapsed > this.globalWindowMs) {
+      this._globalHealCount = 0;
+      this._globalHealWindowStart = now;
+    }
+    if (this._globalHealCount >= this.maxGlobalHealsPerWindow) {
+      const waitMs = this.globalWindowMs - globalElapsed;
+      return {
+        allowed: false,
+        reason: `Global heal limit: ${this.maxGlobalHealsPerWindow} heals in ${Math.round(this.globalWindowMs / 1000)}s. Wait ${Math.ceil(waitMs / 1000)}s.`,
+        waitMs: Math.max(waitMs, 1000),
+      };
+    }
 
     // 1. Minimum gap between calls
     const sinceLast = now - this._lastCallTime;
@@ -83,6 +104,7 @@ class RateLimiter {
     this._callLog.push(now);
     this._tokenLog.push({ timestamp: now, tokens: estimatedTokens });
     this._lastCallTime = now;
+    this._globalHealCount++;
 
     // Track error signature for loop detection
     if (errorSignature) {
@@ -125,6 +147,8 @@ class RateLimiter {
     return {
       callsInWindow: this._callLog.length,
       maxCallsPerWindow: this.maxCallsPerWindow,
+      globalHealsInWindow: this._globalHealCount,
+      maxGlobalHealsPerWindow: this.maxGlobalHealsPerWindow,
       trackedErrorSignatures: Object.keys(this._errorSignatures).length,
       estimatedTokensLastHour: this._tokenLog
         .filter(e => e.timestamp > now - 3600000)

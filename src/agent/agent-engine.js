@@ -720,7 +720,7 @@ Project root: ${this.cwd}${primaryFile ? `\nPrimary crash file: ${primaryFile}` 
       }
     }
 
-    const timeout = Math.min(args.timeout || 10000, 30000);
+    const timeout = Math.min(args.timeout || 30000, 60000);
     try {
       const output = execSync(args.command, {
         cwd: this.cwd,

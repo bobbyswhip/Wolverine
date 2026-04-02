@@ -1,6 +1,19 @@
 const chalk = require("chalk");
 
 /**
+ * Normalize a route path by replacing dynamic segments with :id placeholders.
+ * /api/users/123 → /api/users/:id
+ * /api/orders/abc-def-ghi → /api/orders/:id
+ */
+function normalizeRoute(routePath) {
+  if (!routePath) return routePath;
+  const pathOnly = routePath.split("?")[0];
+  return pathOnly
+    .replace(/\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{24}|[0-9]+)/gi, "/:id")
+    .replace(/\/+$/, "") || "/";
+}
+
+/**
  * Error Monitor — detects caught 500 errors that don't crash the process.
  *
  * Most production bugs are caught by Fastify/Express error handlers.
@@ -34,11 +47,9 @@ class ErrorMonitor {
    * @param {object} errorDetails — { message, stack, file, line }
    */
   record(routePath, statusCode, errorDetails) {
+    routePath = normalizeRoute(routePath);
     if (statusCode < 500) {
-      // Success — reset the error counter for this route
-      if (this.routes.has(routePath)) {
-        this.routes.delete(routePath);
-      }
+      if (this.routes.has(routePath)) this.routes.delete(routePath);
       return;
     }
 
@@ -89,6 +100,7 @@ class ErrorMonitor {
    * Clear a route's error state (e.g., after a successful heal).
    */
   clearRoute(routePath) {
+    routePath = normalizeRoute(routePath);
     this.routes.delete(routePath);
     this._cooldowns.delete(routePath);
   }
@@ -118,4 +130,4 @@ class ErrorMonitor {
   }
 }
 
-module.exports = { ErrorMonitor };
+module.exports = { ErrorMonitor, normalizeRoute };
