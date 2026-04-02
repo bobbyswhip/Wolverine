@@ -262,11 +262,27 @@ Use these tools systematically:
 5. You can edit ANY file type: .js, .json, .sql, .yaml, .env, .dockerfile, .sh, etc.
 6. Prefer edit_file for small targeted fixes, write_file for major changes
 7. Use grep_code to find all usages before renaming something
-8. Use bash_exec to run tests or check dependencies
+8. Use bash_exec to run tests, install packages, or check dependencies
+
+CRITICAL — Not every crash is a code bug. Choose the right fix:
+
+| Error Pattern | Root Cause | Correct Fix |
+|---|---|---|
+| Cannot find module 'X' | Missing npm package | bash_exec: npm install X |
+| Cannot find module './X' | Wrong import path | edit_file: fix the require/import path |
+| ENOENT: no such file | Missing config/data file | write_file: create the missing file |
+| EACCES/EPERM | Permission denied | bash_exec: chmod or fix ownership |
+| EADDRINUSE | Port conflict | bash_exec: kill process on port, or edit config |
+| SyntaxError | Bad code | edit_file: fix the syntax |
+| TypeError/ReferenceError | Logic bug | edit_file: fix the code |
+| MODULE_NOT_FOUND + node_modules | Corrupted install | bash_exec: rm -rf node_modules && npm install |
+
+ALWAYS check package.json before editing imports. If a module isn't a local file, use bash_exec to install it.
 
 Rules:
 - Read files before modifying them
 - Make minimal, targeted changes
+- Use bash_exec for operational fixes (npm install, chmod, config creation)
 - When done, call the "done" tool with a summary
 
 Project root: ${this.cwd}

@@ -25,7 +25,7 @@ const { getModel } = require("../core/models");
 const AGENT_TOOL_SETS = {
   explore: ["read_file", "glob_files", "grep_code", "git_log", "git_diff", "done"],
   plan: ["read_file", "glob_files", "grep_code", "search_brain", "done"],
-  fix: ["read_file", "write_file", "edit_file", "glob_files", "grep_code", "done"],
+  fix: ["read_file", "write_file", "edit_file", "glob_files", "grep_code", "bash_exec", "done"],
   verify: ["read_file", "glob_files", "grep_code", "bash_exec", "done"],
   research: ["read_file", "grep_code", "web_fetch", "search_brain", "done"],
   security: ["read_file", "glob_files", "grep_code", "done"],
@@ -46,8 +46,8 @@ const AGENT_CONFIGS = {
 // System prompts per agent type
 const AGENT_PROMPTS = {
   explore: "You are an Explorer agent. Your job is to investigate the codebase and find files relevant to the problem. Read files, search for patterns, check git history. Report what you found — do NOT make changes.",
-  plan: "You are a Planner agent. Your job is to analyze the problem and propose a fix strategy. Read the relevant files, understand the root cause, and describe step-by-step what needs to change. Do NOT make changes.",
-  fix: "You are a Fixer agent. You receive a specific fix plan. Execute it precisely — edit only the files mentioned, make only the changes described. Use edit_file for surgical changes.",
+  plan: "You are a Planner agent. Your job is to analyze the problem and propose a fix strategy. Read the relevant files, understand the root cause, and describe step-by-step what needs to change. Consider: is this a code bug (edit files) or an operational issue (npm install, create missing config, fix permissions)? Check package.json for dependencies. Do NOT make changes.",
+  fix: "You are a Fixer agent. You receive a specific fix plan. Execute it precisely. Use edit_file for code fixes, bash_exec for operational fixes (npm install, chmod, mkdir, config creation). Not every error is a code bug — missing modules need npm install, missing files need creation, permission errors need chmod. Check package.json before editing imports.",
   verify: "You are a Verifier agent. Check if a fix actually works. Read the modified files, look for issues, run tests if available. Report whether the fix is correct.",
   research: "You are a Research agent. Search the brain for past fixes to similar errors, and search the web for solutions. Report your findings.",
   security: "You are a Security agent. Audit the code for vulnerabilities: SQL injection, XSS, path traversal, hardcoded secrets, missing input validation. Report all findings.",

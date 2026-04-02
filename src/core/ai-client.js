@@ -359,7 +359,11 @@ ${stackTrace}
 
 ## Instructions
 1. Identify the root cause of the error.
-2. Produce a minimal fix — change only what is necessary.
+2. Not all errors are code bugs. Choose the correct fix type:
+   - "Cannot find module 'X'" (not starting with ./ or ../) = missing npm package → use "commands" to npm install
+   - "Cannot find module './X'" = wrong import path → use "changes" to fix the require/import
+   - "ENOENT" = missing file → use "commands" to create it, or "changes" to fix the path
+   - SyntaxError/TypeError/ReferenceError = code bug → use "changes" to fix the code
 3. Respond with ONLY valid JSON in this exact format:
 
 {
@@ -370,8 +374,13 @@ ${stackTrace}
       "old": "the exact lines to replace (copy verbatim from the source)",
       "new": "the replacement lines"
     }
-  ]
-}`;
+  ],
+  "commands": ["npm install cors", "mkdir -p server/config"]
+}
+
+"commands" is an array of shell commands to run (optional, use for npm install, file creation, etc).
+"changes" is for code edits (optional, use for actual code fixes).
+Include both if needed, or just one.`;
 
   const result = await aiCall({ model, systemPrompt, userPrompt, maxTokens: 2048, category: "heal" });
   const content = result.content;

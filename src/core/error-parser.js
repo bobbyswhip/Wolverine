@@ -75,13 +75,52 @@ function parseError(stderr) {
     filePath = path.resolve(filePath);
   }
 
+  // Classify the error type — helps the heal pipeline choose the right strategy
+  const errorType = classifyError(errorMessage, stderr);
+
   return {
     filePath,
     line,
     column,
     errorMessage,
     stackTrace,
+    errorType,
   };
 }
 
-module.exports = { parseError };
+/**
+ * Classify an error into categories to guide fix strategy.
+ * Returns: "missing_module" | "missing_file" | "permission" | "port_conflict" | "syntax" | "runtime" | "unknown"
+ */
+function classifyError(errorMessage, fullStderr) {
+  const msg = (errorMessage || "").toLowerCase();
+  const full = (fullStderr || "").toLowerCase();
+
+  // Missing npm package: Cannot find module 'cors' (not a relative path)
+  if (/cannot find module '(?![./\\])/.test(msg) || /module_not_found/.test(full)) {
+    return "missing_module";
+  }
+  // Missing local file: Cannot find module './routes/api'
+  if (/cannot find module '[./\\]/.test(msg) || /enoent/.test(msg)) {
+    return "missing_file";
+  }
+  // Permission denied
+  if (/eacces|eperm/.test(msg)) {
+    return "permission";
+  }
+  // Port already in use
+  if (/eaddrinuse/.test(msg)) {
+    return "port_conflict";
+  }
+  // Syntax error
+  if (/syntaxerror|unexpected token|unexpected end/.test(msg)) {
+    return "syntax";
+  }
+  // Runtime errors (TypeError, ReferenceError, RangeError)
+  if (/typeerror|referenceerror|rangeerror/.test(msg)) {
+    return "runtime";
+  }
+  return "unknown";
+}
+
+module.exports = { parseError, classifyError };

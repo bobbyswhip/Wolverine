@@ -73,6 +73,7 @@ async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager
   console.log(chalk.cyan(`  File:  ${parsed.filePath}`));
   console.log(chalk.cyan(`  Line:  ${parsed.line || "unknown"}`));
   console.log(chalk.cyan(`  Error: ${parsed.errorMessage}`));
+  console.log(chalk.cyan(`  Type:  ${parsed.errorType || "unknown"}`));
 
   // 3. Rate limit check
   const rateCheck = rateLimiter.check(errorSignature);
@@ -109,6 +110,24 @@ async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager
         notification,
       };
     }
+  }
+
+  // 4c. Pre-heal operational fix — detect common non-code errors
+  // Some crashes aren't code bugs (missing npm packages, missing config files).
+  // Fix these directly without wasting AI tokens.
+  const opsFix = await tryOperationalFix(parsed, cwd, logger);
+  if (opsFix.fixed) {
+    console.log(chalk.green(`  ⚡ Operational fix applied: ${opsFix.action}`));
+    if (logger) logger.info(EVENT_TYPES.HEAL_SUCCESS, `Operational fix: ${opsFix.action}`, { action: opsFix.action });
+    if (repairHistory) {
+      repairHistory.record({
+        error: parsed.errorMessage, file: parsed.filePath, line: parsed.line,
+        resolution: opsFix.action, success: true, mode: "operational",
+        model: "none", tokens: 0, cost: 0, iteration: 0,
+        duration: Date.now() - healStartTime, filesModified: [],
+      });
+    }
+    return { healed: true, explanation: opsFix.action, mode: "operational" };
   }
 
   // 5. Read the source file + get brain context
@@ -164,7 +183,7 @@ async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager
 
       let result;
       if (iteration === 1) {
-        // Fast path — CODING_MODEL, single file
+        // Fast path — CODING_MODEL, single file + optional commands
         console.log(chalk.yellow(`  🧠 Fast path (${getModel("coding")})...`));
         try {
           const repair = await requestRepair({
@@ -173,13 +192,35 @@ async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager
           });
           rateLimiter.record(errorSignature);
 
-          const sandboxCheck = sandbox.validateChanges(repair.changes);
-          if (!sandboxCheck.valid) throw new Error("Changes outside sandbox");
+          // Execute shell commands first (npm install, mkdir, etc.)
+          if (repair.commands && Array.isArray(repair.commands)) {
+            const { execSync } = require("child_process");
+            for (const cmd of repair.commands) {
+              // Block dangerous commands
+              if (/rm\s+-rf\s+[/\\]|format\s+c:|mkfs/i.test(cmd)) {
+                console.log(chalk.red(`  🛡️ Blocked dangerous command: ${cmd}`));
+                continue;
+              }
+              console.log(chalk.blue(`  ⚡ Running: ${cmd}`));
+              try {
+                execSync(cmd, { cwd, stdio: "pipe", timeout: 60000 });
+                console.log(chalk.green(`  ✅ Command succeeded: ${cmd}`));
+              } catch (cmdErr) {
+                console.log(chalk.yellow(`  ⚠️ Command failed: ${cmd} — ${cmdErr.message?.slice(0, 80)}`));
+              }
+            }
+          }
 
-          const patchResults = applyPatch(repair.changes, cwd, sandbox);
-          if (!patchResults.every(r => r.success)) throw new Error("Patch failed");
+          // Apply code changes (if any)
+          if (repair.changes && repair.changes.length > 0) {
+            const sandboxCheck = sandbox.validateChanges(repair.changes);
+            if (!sandboxCheck.valid) throw new Error("Changes outside sandbox");
 
-          for (const r of patchResults) console.log(chalk.green(`  ✅ Patched: ${r.file}`));
+            const patchResults = applyPatch(repair.changes, cwd, sandbox);
+            if (!patchResults.every(r => r.success)) throw new Error("Patch failed");
+
+            for (const r of patchResults) console.log(chalk.green(`  ✅ Patched: ${r.file}`));
+          }
 
           const verification = await verifyFix(parsed.filePath, cwd, errorSignature);
           if (verification.verified) {
@@ -285,6 +326,84 @@ async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager
 
   if (logger) logger.error(EVENT_TYPES.HEAL_FAILED, `Goal failed after ${goalResult.iteration} iterations`, { attempts: goalResult.attempts });
   return { healed: false, explanation: goalResult.explanation };
+}
+
+/**
+ * Try to fix common operational errors without AI.
+ * Returns { fixed: boolean, action: string }
+ */
+async function tryOperationalFix(parsed, cwd, logger) {
+  const { execSync } = require("child_process");
+  const msg = parsed.errorMessage || "";
+
+  // Pattern 1: Cannot find module 'X' — missing npm package
+  const missingModule = msg.match(/Cannot find module '([^']+)'/);
+  if (missingModule) {
+    const moduleName = missingModule[1];
+
+    // Only npm install if it's a package name (not a relative/absolute path)
+    if (!moduleName.startsWith(".") && !moduleName.startsWith("/") && !moduleName.startsWith("\\")) {
+      // Check if it's already in package.json but not installed
+      const fs = require("fs");
+      const path = require("path");
+      const pkgPath = path.join(cwd, "package.json");
+      let isInPkg = false;
+      try {
+        const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+        const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
+        isInPkg = !!allDeps[moduleName];
+      } catch {}
+
+      try {
+        const cmd = isInPkg ? "npm install" : `npm install ${moduleName}`;
+        console.log(chalk.blue(`  📦 Missing module '${moduleName}' — running: ${cmd}`));
+        if (logger) logger.info("heal.ops", `Running: ${cmd}`, { module: moduleName });
+        execSync(cmd, { cwd, stdio: "pipe", timeout: 60000 });
+        return { fixed: true, action: `Installed missing module '${moduleName}' via: ${cmd}` };
+      } catch (e) {
+        console.log(chalk.yellow(`  ⚠️ npm install failed: ${e.message?.slice(0, 100)}`));
+        // Fall through to AI repair
+      }
+    }
+  }
+
+  // Pattern 2: ENOENT on config/data files the server expects
+  const enoent = msg.match(/ENOENT.*?'([^']+)'/);
+  if (enoent) {
+    const missingFile = enoent[1];
+    const fs = require("fs");
+    const path = require("path");
+
+    // Only auto-create if it's inside the project and looks like a config/data file
+    const rel = path.relative(cwd, missingFile).replace(/\\/g, "/");
+    if (!rel.startsWith("..") && /\.(json|yaml|yml|toml|ini|conf|cfg|env|log|txt|csv|db|sqlite)$/i.test(missingFile)) {
+      try {
+        fs.mkdirSync(path.dirname(missingFile), { recursive: true });
+        // Create empty file or sensible default
+        const ext = path.extname(missingFile).toLowerCase();
+        const defaults = { ".json": "{}", ".yaml": "", ".yml": "", ".log": "", ".txt": "", ".csv": "", ".env": "" };
+        fs.writeFileSync(missingFile, defaults[ext] || "", "utf-8");
+        console.log(chalk.blue(`  📄 Created missing file: ${rel}`));
+        return { fixed: true, action: `Created missing file: ${rel}` };
+      } catch {}
+    }
+  }
+
+  // Pattern 3: EACCES/EPERM permission errors
+  const permErr = /EACCES|EPERM/.test(msg);
+  if (permErr) {
+    const permFile = msg.match(/(?:EACCES|EPERM).*?'([^']+)'/);
+    if (permFile) {
+      try {
+        const fs = require("fs");
+        fs.chmodSync(permFile[1], 0o755);
+        console.log(chalk.blue(`  🔑 Fixed permissions on: ${permFile[1]}`));
+        return { fixed: true, action: `Fixed permissions (chmod 755) on: ${permFile[1]}` };
+      } catch {}
+    }
+  }
+
+  return { fixed: false };
 }
 
 module.exports = { heal };

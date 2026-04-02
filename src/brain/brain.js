@@ -32,7 +32,7 @@ const SEED_DOCS = [
     metadata: { topic: "overview" },
   },
   {
-    text: "Wolverine heal pipeline: crash detected → error parsed (file, line, message) → prompt injection scan (AUDIT_MODEL) → rate limit check → fast path repair (CODING_MODEL via Responses/Chat API) → if fast path fails verification → escalate to multi-file agent (REASONING_MODEL with tools: read_file, write_file, list_files, search_files) → verify fix (syntax check + boot probe) → rollback on failure.",
+    text: "Wolverine heal pipeline: crash detected → error parsed (file, line, message, errorType) → prompt injection scan (AUDIT_MODEL) → rate limit check → operational fix attempt (missing_module → npm install, missing_file → create file, permission → chmod — zero AI tokens) → if operational fix doesn't apply → fast path repair (CODING_MODEL, supports both code changes AND shell commands like npm install) → if fast path fails → agent path (REASONING_MODEL with tools including bash_exec for npm install) → if agent fails → sub-agents (explore → plan → fix, fixer has bash_exec) → verify fix (syntax check + boot probe) → rollback on failure. Error types classified: missing_module, missing_file, permission, port_conflict, syntax, runtime, unknown.",
     metadata: { topic: "heal-pipeline" },
   },
   {
