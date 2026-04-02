@@ -1,79 +1,52 @@
 const fs = require("fs");
 const path = require("path");
 
-/**
- * Heartbeat Queue — offline resilience for platform telemetry.
- *
- * When the platform is unreachable, heartbeats are queued locally.
- * On reconnect, queued heartbeats are drained (oldest first).
- * Max 1440 entries (24 hours at 1/minute). Oldest dropped after that.
- */
-
 const QUEUE_PATH = path.join(process.cwd(), ".wolverine", "heartbeat-queue.jsonl");
 const MAX_ENTRIES = 1440;
 
 class HeartbeatQueue {
+  constructor() { this._count = 0; }
+
   enqueue(payload) {
     try {
-      fs.mkdirSync(path.dirname(QUEUE_PATH), { recursive: true });
       fs.appendFileSync(QUEUE_PATH, JSON.stringify(payload) + "\n");
-
-      // Trim if over max
-      const content = fs.readFileSync(QUEUE_PATH, "utf-8");
-      const lines = content.trim().split("\n");
-      if (lines.length > MAX_ENTRIES) {
+      this._count++;
+      // Trim only when significantly over limit (not every write)
+      if (this._count > MAX_ENTRIES + 100) {
+        const lines = fs.readFileSync(QUEUE_PATH, "utf-8").trim().split("\n");
         fs.writeFileSync(QUEUE_PATH, lines.slice(-MAX_ENTRIES).join("\n") + "\n");
+        this._count = MAX_ENTRIES;
       }
     } catch {}
   }
 
-  async drain(platformUrl, platformKey) {
+  async drain(url, key) {
     if (!fs.existsSync(QUEUE_PATH)) return 0;
-
     let lines;
-    try {
-      lines = fs.readFileSync(QUEUE_PATH, "utf-8").trim().split("\n").filter(Boolean);
-    } catch { return 0; }
-
-    if (lines.length === 0) return 0;
+    try { lines = fs.readFileSync(QUEUE_PATH, "utf-8").trim().split("\n").filter(Boolean); }
+    catch { return 0; }
+    if (!lines.length) return 0;
 
     let sent = 0;
     for (const line of lines) {
       try {
-        const res = await fetch(`${platformUrl}/api/v1/heartbeat`, {
+        const r = await fetch(`${url}/api/v1/heartbeat`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${platformKey}`,
-          },
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${key}` },
           body: line,
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(3000),
         });
-        if (res.ok) sent++;
-        else break;
-      } catch {
-        break;
-      }
+        if (r.ok) sent++; else break;
+      } catch { break; }
     }
 
-    // Remove sent entries
     if (sent > 0) {
-      const remaining = lines.slice(sent);
-      if (remaining.length === 0) {
-        try { fs.unlinkSync(QUEUE_PATH); } catch {}
-      } else {
-        fs.writeFileSync(QUEUE_PATH, remaining.join("\n") + "\n");
-      }
+      const rest = lines.slice(sent);
+      if (!rest.length) { try { fs.unlinkSync(QUEUE_PATH); } catch {} }
+      else fs.writeFileSync(QUEUE_PATH, rest.join("\n") + "\n");
+      this._count = rest.length;
     }
-
     return sent;
-  }
-
-  getQueueSize() {
-    if (!fs.existsSync(QUEUE_PATH)) return 0;
-    try {
-      return fs.readFileSync(QUEUE_PATH, "utf-8").trim().split("\n").filter(Boolean).length;
-    } catch { return 0; }
   }
 }
 

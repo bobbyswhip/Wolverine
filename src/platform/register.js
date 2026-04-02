@@ -3,121 +3,62 @@ const path = require("path");
 const https = require("https");
 const http = require("http");
 const { URL } = require("url");
-const chalk = require("chalk");
 const { INSTANCE_ID } = require("./telemetry");
 
-/**
- * Auto-Registration — registers with the configured platform URL.
- *
- * First run: POST /api/v1/register → get key → save to .wolverine/platform-key
- * Subsequent runs: read saved key → start heartbeats immediately
- *
- * User only needs to set WOLVERINE_PLATFORM_URL. The key is auto-managed.
- */
-
 const KEY_PATH = path.join(process.cwd(), ".wolverine", "platform-key");
-let _registerAttempts = 0;
+let _attempts = 0;
+let _cachedKey = null;
 
-/**
- * Get platform key — load saved or auto-register to get one.
- * Called on startup and retried every heartbeat tick until success.
- */
 async function getOrCreateKey(platformUrl) {
-  // Check env override first
-  if (process.env.WOLVERINE_PLATFORM_KEY) {
-    return process.env.WOLVERINE_PLATFORM_KEY;
-  }
+  if (process.env.WOLVERINE_PLATFORM_KEY) return process.env.WOLVERINE_PLATFORM_KEY;
+  if (_cachedKey) return _cachedKey;
 
-  // Check saved key
-  const saved = loadSavedKey();
-  if (saved) return saved;
-
-  // No key — register with platform
-  if (!platformUrl) return null;
-
-  _registerAttempts++;
-
-  const name = process.env.WOLVERINE_INSTANCE_NAME
-    || path.basename(process.cwd())
-    || "wolverine-server";
-
-  // Log on first attempt and every 10th retry (don't spam)
-  if (_registerAttempts === 1) {
-    console.log(chalk.cyan(`  📡 Registering with ${platformUrl}...`));
-  } else if (_registerAttempts % 10 === 0) {
-    console.log(chalk.gray(`  📡 Registration retry #${_registerAttempts}...`));
-  }
-
-  try {
-    const result = await postJSON(`${platformUrl}/api/v1/register`, {
-      instanceId: INSTANCE_ID,
-      name,
-      version: require("../../package.json").version,
-    });
-
-    if (result.key) {
-      saveKey(result.key);
-      console.log(chalk.green(`  📡 Registered: ${INSTANCE_ID} (${name})${_registerAttempts > 1 ? ` after ${_registerAttempts} attempts` : ""}`));
-      _registerAttempts = 0;
-      return result.key;
-    }
-
-    return null;
-  } catch (err) {
-    if (_registerAttempts === 1) {
-      console.log(chalk.yellow(`  📡 Registration failed: ${err.message} — will keep retrying`));
-    }
-    return null;
-  }
-}
-
-function loadSavedKey() {
   try {
     if (fs.existsSync(KEY_PATH)) {
-      const key = fs.readFileSync(KEY_PATH, "utf-8").trim();
-      if (key.length > 10) return key;
+      const k = fs.readFileSync(KEY_PATH, "utf-8").trim();
+      if (k.length > 10) { _cachedKey = k; return k; }
     }
   } catch {}
-  return null;
-}
 
-function saveKey(key) {
+  if (!platformUrl) return null;
+  _attempts++;
+
+  if (_attempts === 1) console.log(`  \x1b[36m📡 Registering with ${platformUrl}...\x1b[0m`);
+  else if (_attempts % 10 === 0) console.log(`  \x1b[90m📡 Registration retry #${_attempts}\x1b[0m`);
+
   try {
-    fs.mkdirSync(path.dirname(KEY_PATH), { recursive: true });
-    fs.writeFileSync(KEY_PATH, key, "utf-8");
-  } catch {}
+    const name = process.env.WOLVERINE_INSTANCE_NAME || path.basename(process.cwd());
+    const result = await post(`${platformUrl}/api/v1/register`, { instanceId: INSTANCE_ID, name });
+    if (result.key) {
+      try { fs.mkdirSync(path.dirname(KEY_PATH), { recursive: true }); fs.writeFileSync(KEY_PATH, result.key); } catch {}
+      _cachedKey = result.key;
+      console.log(`  \x1b[32m📡 Registered: ${INSTANCE_ID}${_attempts > 1 ? ` (${_attempts} attempts)` : ""}\x1b[0m`);
+      _attempts = 0;
+      return result.key;
+    }
+    return null;
+  } catch (e) {
+    if (_attempts === 1) console.log(`  \x1b[33m📡 Registration failed: ${e.message} — retrying\x1b[0m`);
+    return null;
+  }
 }
 
-function postJSON(url, body) {
+function post(url, body) {
   return new Promise((resolve, reject) => {
-    const parsed = new URL(url);
-    const client = parsed.protocol === "https:" ? https : http;
-    const data = JSON.stringify(body);
-
-    const req = client.request({
-      hostname: parsed.hostname,
-      port: parsed.port,
-      path: parsed.pathname,
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Content-Length": Buffer.byteLength(data),
-      },
-      timeout: 10000,
-    }, (res) => {
-      let responseBody = "";
-      res.on("data", (d) => { responseBody += d; });
-      res.on("end", () => {
-        try { resolve(JSON.parse(responseBody)); }
-        catch { reject(new Error(`Invalid response: ${responseBody.slice(0, 100)}`)); }
-      });
+    const u = new URL(url);
+    const d = JSON.stringify(body);
+    const req = (u.protocol === "https:" ? https : http).request({
+      hostname: u.hostname, port: u.port, path: u.pathname, method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(d) },
+      timeout: 5000,
+    }, res => {
+      let b = ""; res.on("data", c => b += c);
+      res.on("end", () => { try { resolve(JSON.parse(b)); } catch { reject(new Error("bad response")); } });
     });
-
     req.on("error", reject);
     req.on("timeout", () => { req.destroy(); reject(new Error("timeout")); });
-    req.write(data);
-    req.end();
+    req.write(d); req.end();
   });
 }
 
-module.exports = { getOrCreateKey, loadSavedKey };
+module.exports = { getOrCreateKey };
