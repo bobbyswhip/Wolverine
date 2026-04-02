@@ -260,7 +260,7 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
       let priorSummary = "";
       if (priorAttempts && priorAttempts.length > 0) {
         priorSummary = "\nPRIOR ATTEMPTS (do NOT repeat):\n" + priorAttempts.map(a =>
-          `- Attempt ${a.iteration} (${a.mode}): ${a.explanation?.slice(0, 100)}`
+          `- Attempt ${a.iteration} (${a.mode}): ${a.explanation?.slice(0, 50)}`
         ).join("\n") + "\n";
       }
 

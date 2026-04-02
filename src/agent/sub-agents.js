@@ -33,18 +33,37 @@ const AGENT_TOOL_SETS = {
 };
 
 // Default model + budget per agent type
-// Cost optimization: triage agents use cheap models (classifier slot = Haiku),
-// only the fixer needs the expensive coding model (Sonnet/Opus).
-// This cuts sub-agent cost by ~90% (6 Haiku calls vs 6 Sonnet calls).
-const AGENT_CONFIGS = {
-  explore:  { model: "classifier", maxTurns: 5,  maxTokens: 15000 },  // Haiku — just reading
-  plan:     { model: "classifier", maxTurns: 3,  maxTokens: 10000 },  // Haiku — simple planning
-  fix:      { model: "coding",    maxTurns: 5,  maxTokens: 50000 },  // Sonnet/Opus — needs reasoning
-  verify:   { model: "classifier", maxTurns: 3,  maxTokens: 8000 },   // Haiku — just checking
-  research: { model: "classifier", maxTurns: 3,  maxTokens: 10000 },  // Haiku — summarization
-  security: { model: "audit",     maxTurns: 3,  maxTokens: 8000 },   // Haiku — pattern matching
-  database: { model: "coding",    maxTurns: 5,  maxTokens: 50000 },  // Sonnet/Opus — needs reasoning
+// Dynamic token budgets: scale with error complexity.
+// Simple errors (TypeError) get tight budgets. Complex errors (database, multi-file) get more.
+// Triage agents use cheap models (Haiku), fixer uses expensive (Sonnet/Opus).
+const AGENT_CONFIGS_BASE = {
+  explore:  { model: "classifier", maxTurns: 5 },
+  plan:     { model: "classifier", maxTurns: 3 },
+  fix:      { model: "coding",    maxTurns: 5 },
+  verify:   { model: "classifier", maxTurns: 3 },
+  research: { model: "classifier", maxTurns: 3 },
+  security: { model: "audit",     maxTurns: 3 },
+  database: { model: "coding",    maxTurns: 5 },
 };
+
+const AGENT_BUDGETS = {
+  simple:  { explore: 8000,  plan: 5000,  fix: 25000, verify: 5000,  research: 5000,  security: 5000,  database: 25000 },
+  moderate:{ explore: 15000, plan: 10000, fix: 50000, verify: 8000,  research: 10000, security: 8000,  database: 50000 },
+  complex: { explore: 25000, plan: 15000, fix: 80000, verify: 10000, research: 15000, security: 10000, database: 80000 },
+};
+
+function getAgentConfig(type, errorComplexity) {
+  const base = AGENT_CONFIGS_BASE[type] || { model: "classifier", maxTurns: 3 };
+  const tier = errorComplexity || "moderate";
+  const budget = AGENT_BUDGETS[tier] || AGENT_BUDGETS.moderate;
+  return { ...base, maxTokens: budget[type] || 15000 };
+}
+
+// Backward compat
+const AGENT_CONFIGS = {};
+for (const type of Object.keys(AGENT_CONFIGS_BASE)) {
+  AGENT_CONFIGS[type] = { ...AGENT_CONFIGS_BASE[type], maxTokens: AGENT_BUDGETS.moderate[type] || 15000 };
+}
 
 // System prompts per agent type
 const AGENT_PROMPTS = {

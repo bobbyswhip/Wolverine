@@ -643,15 +643,18 @@ class WolverineRunner {
 
   _startStabilityTimer() {
     this._clearStabilityTimer();
+    // Capture backup ID in closure — prevents race where a new heal overwrites _lastBackupId
+    // before this timer fires, causing the wrong backup to be promoted.
+    const backupId = this._lastBackupId;
     this._stabilityTimer = setTimeout(() => {
-      if (this._lastBackupId && this.running) {
-        this.backupManager.markStable(this._lastBackupId);
+      if (backupId && this.running) {
+        this.backupManager.markStable(backupId);
         this.retryCount = 0;
         const healthStats = this.healthMonitor.getStats();
         if (healthStats.totalChecks > 0) {
           console.log(chalk.green(`  📊 Uptime: ${healthStats.uptimePercent}% (${healthStats.totalPasses}/${healthStats.totalChecks} checks passed)`));
         }
-        this.logger.info(EVENT_TYPES.BACKUP_STABLE, `Backup ${this._lastBackupId} promoted to stable`, { backupId: this._lastBackupId });
+        this.logger.info(EVENT_TYPES.BACKUP_STABLE, `Backup ${backupId} promoted to stable`, { backupId });
       }
     }, STABILITY_THRESHOLD_MS);
   }
