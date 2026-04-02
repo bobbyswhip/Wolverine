@@ -18,6 +18,7 @@ const { setTokenTracker } = require("./ai-client");
 const { SkillRegistry } = require("../skills/skill-registry");
 const { ProcessMonitor } = require("../monitor/process-monitor");
 const { RouteProber } = require("../monitor/route-prober");
+const { startHeartbeat, stopHeartbeat } = require("../platform/heartbeat");
 const { Notifier } = require("../notifications/notifier");
 
 /**
@@ -173,6 +174,17 @@ class WolverineRunner {
     // Start performance monitor
     this.perfMonitor.start();
 
+    // Start platform telemetry (heartbeats to analytics backend)
+    startHeartbeat({
+      processMonitor: this.processMonitor,
+      routeProber: this.routeProber,
+      tokenTracker: this.tokenTracker,
+      repairHistory: this.repairHistory,
+      backupManager: this.backupManager,
+      brain: this.brain,
+      redactor: this.redactor,
+    });
+
     this._spawn();
   }
 
@@ -194,6 +206,7 @@ class WolverineRunner {
     this.perfMonitor.stop();
     this.processMonitor.stop();
     this.routeProber.stop();
+    stopHeartbeat();
     this.mcp.shutdown();
     this.tokenTracker.save();
     this.dashboard.stop();
