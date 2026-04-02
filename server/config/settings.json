@@ -1,0 +1,21 @@
+{
+  "app": {
+    "name": "Wolverine Server",
+    "version": "1.0.0",
+    "env": "development"
+  },
+  "cors": {
+    "enabled": true,
+    "origins": ["http://localhost:3000"]
+  },
+  "rateLimit": {
+    "enabled": false,
+    "windowMs": 60000,
+    "maxRequests": 100
+  },
+  "logging": {
+    "level": "info",
+    "requests": true,
+    "responseTime": true
+  }
+}
