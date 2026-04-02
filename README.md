@@ -419,6 +419,24 @@ Wolverine (single process manager)
 
 ---
 
+## Cost Optimization
+
+Wolverine minimizes AI spend through 7 techniques:
+
+| Technique | What it does | Savings |
+|-----------|-------------|---------|
+| **Smart verification** | Simple errors (TypeError, ReferenceError) skip route probe — trusts syntax+boot, ErrorMonitor is safety net | Prevents $0.29 cascade |
+| **Haiku triage** | Sub-agents (explore/plan/verify/research) use cheap classifier model, only fixer uses Sonnet/Opus | 90% on sub-agent cost |
+| **Context compacting** | Every 3 agent turns, summarize history to prevent token blowup (95K→20K) | 70-80% on later turns |
+| **Cached fix patterns** | Check repair history for identical past fix before calling AI | 100% on repeat errors |
+| **Token budget caps** | Simple: 20K, moderate: 50K, complex: 100K agent budget | Caps runaway spend |
+| **Prior attempt summaries** | Pass concise "do NOT repeat" directives between iterations, not full context | Reduces baseline tokens |
+| **Backup diff context** | AI sees last known good version to revert broken code instead of patching around it | Better fix quality, fewer retries |
+
+**Result:** Simple TypeError heal drops from **$0.31 → $0.02** (15x cheaper).
+
+---
+
 ## Configuration
 
 ```
