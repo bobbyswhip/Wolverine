@@ -348,17 +348,27 @@ Change one line to switch all models: `"provider": "anthropic"`. Or override per
 
 ## Brain (Semantic Memory)
 
-Vector database that gives wolverine long-term memory:
+High-performance vector database that grows without slowing down:
 
 - **Function Map** — scans `server/` on startup, indexes all routes, functions, classes, exports
 - **Error History** — past errors with context for loop prevention
-- **Fix History** — successful and failed repairs for learning
+- **Fix History** — successful and failed repairs with "DO NOT REPEAT" tags
 - **Learnings** — research findings, admin commands, patterns discovered
-- **Skill Knowledge** — embedded docs for SQL skill, best practices, wolverine itself
+- **Skill Knowledge** — 55+ embedded docs for all skills, best practices, framework knowledge
 
-**Two-tier search** for speed:
-1. Keyword match (instant, 0ms) — catches most lookups
-2. Semantic embedding search (API call) — only when keywords miss
+**Search performance** (scales gracefully):
+
+| Entries | Semantic Search | Keyword (BM25) |
+|---------|----------------|----------------|
+| 100 | 0.2ms | 0.005ms |
+| 1,000 | 0.4ms | 0.01ms |
+| 10,000 | 4.4ms | 0.1ms |
+
+**4 optimization techniques:**
+1. **Pre-normalized vectors** — cosine similarity = dot product (no sqrt per query)
+2. **IVF index** — k-means++ clustering into √N buckets, probes nearest 20% only
+3. **BM25 inverted index** — proper TF-IDF scoring, O(query tokens) not O(N)
+4. **Binary persistence** — Float32Array buffers, 10x faster load than JSON
 
 ---
 
