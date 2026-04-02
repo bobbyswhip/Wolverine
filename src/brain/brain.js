@@ -108,7 +108,7 @@ const SEED_DOCS = [
     metadata: { topic: "sub-agent-workflow" },
   },
   {
-    text: "Sub-agent tool restrictions (claw-code pattern): explore gets read_file/glob/grep/git. plan gets read_file/glob/grep/brain. fix gets read_file/write_file/edit_file/glob/grep. verify gets read_file/glob/grep/bash. research gets read_file/grep/web_fetch/brain. security gets read_file/glob/grep. database gets read_file/write_file/edit_file/glob/grep/bash. No agent gets tools it doesn't need.",
+    text: "Sub-agent tool restrictions (claw-code pattern): explore gets read_file/glob/grep/git. plan gets read_file/glob/grep/brain. fix gets read_file/write_file/edit_file/glob/grep/bash_exec (bash_exec for npm install, chmod, config creation — not all errors are code bugs). verify gets read_file/glob/grep/bash. research gets read_file/grep/web_fetch/brain. security gets read_file/glob/grep. database gets read_file/write_file/edit_file/glob/grep/bash. No agent gets tools it doesn't need.",
     metadata: { topic: "sub-agent-tools" },
   },
   {
@@ -198,6 +198,18 @@ const SEED_DOCS = [
   {
     text: "Admin auth: two-factor gate — WOLVERINE_ADMIN_KEY (header/cookie/query) + IP allowlist. Localhost always allowed (127.0.0.1, ::1, ::ffff:127.0.0.1). Remote IPs added via WOLVERINE_ADMIN_IPS env var (comma-separated) or POST /api/admin/add-ip at runtime from dashboard. addAllowedIp(ip) adds both IPv4 and IPv4-mapped IPv6. 10 failed attempts = 5min lockout. Timing-safe key comparison. Dashboard stores key as cookie after first auth.",
     metadata: { topic: "admin-auth" },
+  },
+  {
+    text: "Operational fix layer: before calling AI, wolverine checks for common non-code errors that can be fixed instantly with zero tokens. Pattern 1: 'Cannot find module X' (where X is a package name, not a relative path) → runs npm install X (or just npm install if package is already in package.json). Pattern 2: ENOENT on config/data files (.json, .yaml, .env, .log, etc.) → creates the missing file with sensible defaults (empty JSON {}, empty string). Pattern 3: EACCES/EPERM → chmod 755 on the file. This layer runs before the AI repair loop and handles ~30% of production crashes at zero cost.",
+    metadata: { topic: "operational-fix" },
+  },
+  {
+    text: "Error classification: error-parser.js classifies every crash into a type that guides fix strategy. Types: missing_module (Cannot find module 'X' where X is npm package), missing_file (Cannot find module './X' or ENOENT), permission (EACCES/EPERM), port_conflict (EADDRINUSE), syntax (SyntaxError), runtime (TypeError/ReferenceError/RangeError), unknown. The errorType field is available to all downstream handlers: operational fix, fast path, agent, sub-agents.",
+    metadata: { topic: "error-classification" },
+  },
+  {
+    text: "Agent fix strategy table: the agent system prompt includes a decision table mapping error patterns to correct fix actions. Cannot find module 'X' (package) → bash_exec: npm install X. Cannot find module './X' (local) → edit_file: fix require path. ENOENT → write_file: create missing file. EACCES → bash_exec: chmod. EADDRINUSE → bash_exec: kill process. SyntaxError → edit_file: fix code. TypeError → edit_file: fix logic. MODULE_NOT_FOUND + node_modules → bash_exec: rm -rf node_modules && npm install. The fast path AI response format now supports both 'changes' (code edits) and 'commands' (shell commands like npm install). Dangerous commands blocked: rm -rf /, format, mkfs.",
+    metadata: { topic: "agent-fix-strategy" },
   },
 ];
 

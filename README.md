@@ -73,7 +73,7 @@ wolverine/
 │   │   ├── ai-client.js     ← OpenAI client (Chat + Responses API)
 │   │   ├── models.js        ← 10-model configuration system
 │   │   ├── verifier.js      ← Fix verification (syntax + boot probe)
-│   │   ├── error-parser.js  ← Stack trace parsing
+│   │   ├── error-parser.js  ← Stack trace parsing + error classification
 │   │   ├── patcher.js       ← File patching with sandbox
 │   │   ├── health-monitor.js← PM2-style health checks
 │   │   ├── config.js        ← Config loader (settings.json + env)
@@ -140,26 +140,38 @@ wolverine/
 
 ```
 Server crashes
-  → Error parsed (file, line, message)
+  → Error parsed (file, line, message, errorType)
+  → Error classified: missing_module | missing_file | permission | port_conflict | syntax | runtime
   → Secrets redacted from error output
   → Prompt injection scan (AUDIT_MODEL)
   → Human-required check (expired keys, service down → notify, don't waste tokens)
   → Rate limit check (error loop → exponential backoff)
 
+Operational Fix (zero AI tokens):
+  → "Cannot find module 'cors'" → npm install cors (instant, free)
+  → ENOENT on config file → create missing file with defaults
+  → EACCES/EPERM → chmod 755
+  → If operational fix works → done. No AI needed.
+
 Goal Loop (iterate until fixed or exhausted):
   Iteration 1: Fast path (CODING_MODEL, single file, ~1-2k tokens)
-    → Apply patch → Verify (syntax check + boot probe) → Pass? Done.
+    → AI returns code changes AND/OR shell commands (npm install, mkdir, etc.)
+    → Execute commands first, apply patches second
+    → Verify (syntax check + boot probe) → Pass? Done.
   Iteration 2: Single agent (REASONING_MODEL, multi-file, 10 tools)
-    → Explores codebase → Fix → Verify → Pass? Done.
+    → Agent has error pattern → fix strategy table
+    → Uses bash_exec for npm install, chmod, config creation
+    → Uses edit_file for code fixes
+    → Verify → Pass? Done.
   Iteration 3: Sub-agents (explore → plan → fix)
     → Explorer finds relevant files (read-only)
-    → Planner proposes fix strategy (read-only)
-    → Fixer executes the plan (write access)
+    → Planner considers operational vs code fixes
+    → Fixer has bash_exec + file tools (can npm install AND edit code)
     → Deep research (RESEARCH_MODEL) feeds into context
     → Each failure feeds into the next attempt
 
 After fix:
-  → Record to repair history (error, resolution, tokens, cost)
+  → Record to repair history (error, resolution, tokens, cost, mode)
   → Store in brain for future reference
   → Promote backup to stable after 30min uptime
 ```
@@ -199,7 +211,7 @@ For complex repairs, wolverine spawns specialized sub-agents that run in sequenc
 |-------|--------|-------|------|
 | `explore` | Read-only | REASONING | Investigate codebase, find relevant files |
 | `plan` | Read-only | REASONING | Analyze problem, propose fix strategy |
-| `fix` | Read+write | CODING | Execute targeted fix from plan |
+| `fix` | Read+write+shell | CODING | Execute targeted fix — code edits AND npm install/chmod |
 | `verify` | Read-only | REASONING | Check if fix actually works |
 | `research` | Read-only | RESEARCH | Search brain + web for solutions |
 | `security` | Read-only | AUDIT | Audit code for vulnerabilities |
@@ -224,8 +236,7 @@ Real-time web UI at `http://localhost:PORT+1`:
 | **Performance** | Endpoint response times, request rates, error rates |
 | **Command** | Admin chat interface — ask questions or build features |
 | **Analytics** | Memory/CPU charts, route health, per-route response times + trends |
-| **Command** | Admin chat interface — ask questions or build features |
-| **Backups** | Full server/ snapshot history with status badges |
+| **Backups** | Full backup management: rollback/hot-load buttons, undo, rollback log, admin IP allowlist |
 | **Brain** | Vector store stats (23 seed docs), namespace counts, function map |
 | **Repairs** | Error/resolution audit trail: error, fix, tokens, cost, duration |
 | **Tools** | Agent tool harness listing (10 built-in + MCP) |
@@ -241,7 +252,7 @@ Three routes (AI-classified per command):
 | **TOOLS** | TOOL_MODEL | call_endpoint, read_file, search_brain | Live data, file contents |
 | **AGENT** | CODING_MODEL | Full 10-tool harness | Build features, fix code |
 
-Secured with `WOLVERINE_ADMIN_KEY` + localhost-only IP check.
+Secured with `WOLVERINE_ADMIN_KEY` + IP allowlist (localhost + `WOLVERINE_ADMIN_IPS`).
 
 ---
 
@@ -273,7 +284,7 @@ Reasoning models (`o-series`, `gpt-5-nano`) automatically get 4x token limits to
 | **Injection Detector** | Regex layer + AI audit (AUDIT_MODEL) on every error before repair |
 | **Sandbox** | All file operations locked to project directory, symlink escape detection |
 | **Protected Paths** | Agent blocked from modifying wolverine internals (`src/`, `bin/`, etc.) |
-| **Admin Auth** | Dashboard command interface requires key + localhost IP, timing-safe comparison, lockout after 10 failures |
+| **Admin Auth** | Dashboard requires key + IP allowlist. Localhost always allowed. Remote IPs via `WOLVERINE_ADMIN_IPS` env var or `POST /api/admin/add-ip` at runtime. Timing-safe comparison, lockout after 10 failures |
 | **Rate Limiter** | Sliding window, min gap, hourly budget, exponential backoff on error loops |
 | **MCP Security** | Per-server tool allowlists, arg sanitization, result injection scanning |
 | **SQL Skill** | `sqlGuard()` middleware blocks 15 injection pattern families on all endpoints |
@@ -409,13 +420,28 @@ All demos use the `server/` directory pattern. Each demo:
 
 ## Backup System
 
-Full `server/` directory snapshots:
+Full `server/` directory snapshots with lifecycle management:
 
-- Created before every repair attempt and every smart edit
+- Created before every repair attempt and every smart edit (with reason string)
+- Created on graceful shutdown (`createShutdownBackup()`)
 - Includes all files: `.js`, `.json`, `.sql`, `.db`, `.yaml`, configs
 - **Status lifecycle**: UNSTABLE → VERIFIED (fix passed) → STABLE (30min+ uptime)
-- **Retention**: unstable pruned after 7 days, stable keeps 1/day after 7 days
+- **Retention**: unstable/verified pruned after 7 days, stable keeps 1/day after 7 days
 - Atomic writes prevent corruption on kill
+
+**Rollback & Recovery:**
+
+| Action | What it does |
+|--------|-------------|
+| **Rollback** | Restore any backup — creates a pre-rollback safety backup first, restarts server |
+| **Undo Rollback** | Restore the pre-rollback state if the rollback made things worse |
+| **Hot-load** | Load any backup as the current server state from the dashboard |
+| **Rollback Log** | Full audit trail: timestamp, action, target backup, success/failure |
+
+**Dashboard endpoints** (admin auth required):
+- `POST /api/backups/:id/rollback` — rollback to specific backup
+- `POST /api/backups/:id/hotload` — hot-load backup as current state
+- `POST /api/backups/undo` — undo the last rollback
 
 ---
 
