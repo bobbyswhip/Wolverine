@@ -20,6 +20,7 @@ const { ProcessMonitor } = require("../monitor/process-monitor");
 const { RouteProber } = require("../monitor/route-prober");
 const { startHeartbeat, stopHeartbeat } = require("../platform/heartbeat");
 const { Notifier } = require("../notifications/notifier");
+const { ErrorMonitor } = require("../monitor/error-monitor");
 
 /**
  * The Wolverine process runner — v3.
@@ -90,6 +91,15 @@ class WolverineRunner {
       brain: this.brain,
     });
 
+    // Error monitor — detects caught 500 errors without process crash
+    this.errorMonitor = new ErrorMonitor({
+      threshold: parseInt(process.env.WOLVERINE_ERROR_THRESHOLD, 10) || 3,
+      windowMs: parseInt(process.env.WOLVERINE_ERROR_WINDOW_MS, 10) || 30000,
+      cooldownMs: parseInt(process.env.WOLVERINE_ERROR_COOLDOWN_MS, 10) || 60000,
+      logger: this.logger,
+      onError: (routePath, errorDetails) => this._healFromError(routePath, errorDetails),
+    });
+
     // Brain — semantic memory + project context
     this.brain = new Brain(this.cwd);
 
@@ -120,6 +130,7 @@ class WolverineRunner {
       repairHistory: this.repairHistory,
       processMonitor: this.processMonitor,
       routeProber: this.routeProber,
+      errorMonitor: this.errorMonitor,
     });
 
     // Stability tracking
@@ -287,10 +298,13 @@ class WolverineRunner {
     this._stderrBuffer = "";
     this._lastStartTime = Date.now();
 
-    this.child = spawn("node", [this.scriptPath], {
+    // Spawn with --require error-hook.js for IPC error reporting
+    // The error hook auto-patches Fastify/Express to report caught 500s
+    const errorHookPath = path.join(__dirname, "error-hook.js");
+    this.child = spawn("node", ["--require", errorHookPath, this.scriptPath], {
       cwd: this.cwd,
       env: { ...process.env },
-      stdio: ["inherit", "inherit", "pipe"],
+      stdio: ["inherit", "inherit", "pipe", "ipc"],
     });
 
     this.child.stderr.on("data", (data) => {
@@ -367,6 +381,30 @@ class WolverineRunner {
       this.logger.error(EVENT_TYPES.PROCESS_CRASH, `Failed to start: ${err.message}`);
       this.running = false;
     });
+
+    // IPC channel: child reports caught 500 errors (Fastify/Express)
+    this.child.on("message", (msg) => {
+      if (msg && msg.type === "route_error") {
+        const { redact } = require("../security/secret-redactor");
+        const safeMsg = redact(msg.message || "");
+        const safeStack = redact(msg.stack || "");
+        console.log(chalk.yellow(`  🔍 Caught error on ${msg.method} ${msg.path}: ${safeMsg.slice(0, 100)}`));
+        this.logger.warn("error_monitor.caught", `${msg.method} ${msg.path} → 500: ${safeMsg.slice(0, 200)}`, {
+          route: msg.path, method: msg.method, file: msg.file, line: msg.line,
+        });
+        this.errorMonitor.record(msg.path, msg.statusCode || 500, {
+          message: safeMsg,
+          stack: safeStack,
+          file: msg.file,
+          line: msg.line,
+          path: msg.path,
+          method: msg.method,
+        });
+      }
+    });
+
+    // Reset error monitor on new spawn
+    this.errorMonitor.reset();
   }
 
   async _healAndRestart() {
@@ -429,6 +467,55 @@ class WolverineRunner {
       console.log(chalk.red(`\n🐺 Wolverine encountered an error: ${err.message}`));
       this._healInProgress = false;
       this.running = false;
+    }
+  }
+
+  /**
+   * Heal from a caught 500 error (ErrorMonitor threshold reached).
+   * Unlike crash healing, the server is still running — we heal and restart.
+   */
+  async _healFromError(routePath, errorDetails) {
+    if (this._healInProgress || this._shuttingDown) return;
+    this._healInProgress = true;
+
+    console.log(chalk.yellow(`\n🐺 Wolverine healing caught error on ${routePath}...`));
+    this.logger.info("heal.error_monitor", `Healing caught 500 on ${routePath}`, { route: routePath });
+
+    // Build a synthetic stderr from the error details
+    const stderr = [
+      errorDetails.message || "Unknown error",
+      errorDetails.stack || "",
+      errorDetails.file ? `    at ${errorDetails.file}:${errorDetails.line || 0}` : "",
+    ].filter(Boolean).join("\n");
+
+    try {
+      const result = await heal({
+        stderr,
+        cwd: this.cwd,
+        sandbox: this.sandbox,
+        redactor: this.redactor,
+        notifier: this.notifier,
+        rateLimiter: this.rateLimiter,
+        backupManager: this.backupManager,
+        logger: this.logger,
+        brain: this.brain,
+        mcp: this.mcp,
+        skills: this.skills,
+        repairHistory: this.repairHistory,
+      });
+
+      if (result.healed) {
+        console.log(chalk.green(`\n🐺 Wolverine healed ${routePath} via ${result.mode}! Restarting...\n`));
+        this.errorMonitor.clearRoute(routePath);
+        this._healInProgress = false;
+        this.restart();
+      } else {
+        console.log(chalk.red(`\n🐺 Could not heal ${routePath}: ${result.explanation}`));
+        this._healInProgress = false;
+      }
+    } catch (err) {
+      console.log(chalk.red(`\n🐺 Error during heal: ${err.message}`));
+      this._healInProgress = false;
     }
   }
 

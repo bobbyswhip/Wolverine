@@ -29,6 +29,7 @@ class DashboardServer {
     this.repairHistory = options.repairHistory;
     this.processMonitor = options.processMonitor;
     this.routeProber = options.routeProber;
+    this.errorMonitor = options.errorMonitor;
 
     this.auth = new AdminAuth();
     this._sseClients = new Set();
@@ -869,6 +870,7 @@ ${context ? "\nBrain:\n" + context : ""}`,
       session: this.logger ? this.logger.getSessionStats() : {},
       backups: this.backupManager ? this.backupManager.getStats() : {},
       health: this.healthMonitor ? this.healthMonitor.getStats() : {},
+      errorMonitor: this.errorMonitor ? this.errorMonitor.getStats() : {},
     }));
   }
 

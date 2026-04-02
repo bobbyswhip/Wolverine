@@ -211,6 +211,10 @@ const SEED_DOCS = [
     text: "Agent fix strategy table: the agent system prompt includes a decision table mapping error patterns to correct fix actions. Cannot find module 'X' (package) → bash_exec: npm install X. Cannot find module './X' (local) → edit_file: fix require path. ENOENT → write_file: create missing file. EACCES → bash_exec: chmod. EADDRINUSE → bash_exec: kill process. SyntaxError → edit_file: fix code. TypeError → edit_file: fix logic. MODULE_NOT_FOUND + node_modules → bash_exec: rm -rf node_modules && npm install. The fast path AI response format now supports both 'changes' (code edits) and 'commands' (shell commands like npm install). Dangerous commands blocked: rm -rf /, format, mkfs.",
     metadata: { topic: "agent-fix-strategy" },
   },
+  {
+    text: "Error Monitor: detects caught 500 errors that don't crash the process. Most production bugs are caught by Fastify/Express error handlers — the server stays alive but routes return 500. Wolverine's crash-based heal pipeline never triggers for these. ErrorMonitor tracks 5xx errors per route via IPC from child process. After N consecutive 500s within a time window (default: 3 failures in 30s), triggers the heal pipeline without killing the server. Error hook auto-injected via --require preload (no user code changes). Cooldown prevents heal spam (default: 60s per route). Stats available in dashboard and telemetry. Config: WOLVERINE_ERROR_THRESHOLD, WOLVERINE_ERROR_WINDOW_MS, WOLVERINE_ERROR_COOLDOWN_MS.",
+    metadata: { topic: "error-monitor" },
+  },
 ];
 
 class Brain {

@@ -23,6 +23,7 @@ const { spawnAgent, spawnParallel, exploreAndFix } = require("./agent/sub-agents
 const { McpRegistry } = require("./mcp/mcp-registry");
 const { McpSecurity } = require("./mcp/mcp-security");
 const { PerfMonitor } = require("./monitor/perf-monitor");
+const { ErrorMonitor } = require("./monitor/error-monitor");
 const { DashboardServer } = require("./dashboard/server");
 const { Notifier } = require("./notifications/notifier");
 const { Brain } = require("./brain/brain");
@@ -72,6 +73,7 @@ module.exports = {
   McpSecurity,
   // Monitor
   PerfMonitor,
+  ErrorMonitor,
   // Dashboard
   DashboardServer,
   // Notifications

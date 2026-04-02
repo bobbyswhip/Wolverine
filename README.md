@@ -74,6 +74,7 @@ wolverine/
 │   │   ├── models.js        ← 10-model configuration system
 │   │   ├── verifier.js      ← Fix verification (syntax + boot probe)
 │   │   ├── error-parser.js  ← Stack trace parsing + error classification
+│   │   ├── error-hook.js   ← Auto-injected into child (IPC error reporting)
 │   │   ├── patcher.js       ← File patching with sandbox
 │   │   ├── health-monitor.js← PM2-style health checks
 │   │   ├── config.js        ← Config loader (settings.json + env)
@@ -105,7 +106,8 @@ wolverine/
 │   ├── monitor/             ← Performance + process management
 │   │   ├── perf-monitor.js  ← Endpoint response times + spam detection
 │   │   ├── process-monitor.js← Memory/CPU/heartbeat + leak detection
-│   │   └── route-prober.js  ← Auto-discovers and tests all routes
+│   │   ├── route-prober.js  ← Auto-discovers and tests all routes
+│   │   └── error-monitor.js ← Caught 500 error detection (no-crash healing)
 │   ├── dashboard/           ← Web UI
 │   │   └── server.js        ← Real-time dashboard + command interface
 │   ├── notifications/       ← Alerts
@@ -175,6 +177,26 @@ After fix:
   → Store in brain for future reference
   → Promote backup to stable after 30min uptime
 ```
+
+### Caught Error Healing (No-Crash)
+
+Most production bugs don't crash the process — Fastify/Express catch them and return 500. Wolverine now detects these too:
+
+```
+Route returns 500 (process still alive)
+  → Error hook reports to parent via IPC (auto-injected, zero user code changes)
+  → ErrorMonitor tracks consecutive 500s per route
+  → 3 failures in 30s → triggers heal pipeline (same as crash healing)
+  → Fix applied → server restarted → route prober verifies fix
+```
+
+| Setting | Default | Env Variable |
+|---------|---------|-------------|
+| Failure threshold | 3 | `WOLVERINE_ERROR_THRESHOLD` |
+| Time window | 30s | `WOLVERINE_ERROR_WINDOW_MS` |
+| Cooldown per route | 60s | `WOLVERINE_ERROR_COOLDOWN_MS` |
+
+The error hook auto-patches Fastify and Express via `--require` preload. No middleware, no code changes to your server.
 
 ---
 
