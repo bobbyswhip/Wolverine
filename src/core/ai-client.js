@@ -57,12 +57,71 @@ function isReasoningModel(model) {
 
 function isAnthropicModel(model) { return detectProvider(model) === "anthropic"; }
 
+/**
+ * Per-model max output token limits (with 10% overestimation buffer).
+ * These are the actual API limits — requesting more than this fails.
+ */
+const MODEL_OUTPUT_LIMITS = {
+  // OpenAI — generous output limits
+  "gpt-4o":              17600,  // 16384 + 10%
+  "gpt-4o-mini":         17600,
+  "gpt-5":               17600,
+  "gpt-5.4":             17600,
+  "gpt-5.4-mini":        17600,
+  "gpt-5.4-nano":        17600,
+  "gpt-5-nano":          17600,
+  "o1":                  110000, // 100k + 10% (reasoning model, huge output)
+  "o1-mini":             72600,  // 66k + 10%
+  "o3":                  110000,
+  "o3-mini":             72600,
+  "o4-mini":             72600,
+  "gpt-5.1-codex":       17600,
+  "gpt-5.3-codex":       17600,
+  "codex-mini":          17600,
+  // Anthropic — each tier has different output limits
+  "claude-opus-4":       32000,  // 32k max output (no buffer needed, already generous)
+  "claude-sonnet-4":     17600,  // 16k + 10%
+  "claude-haiku-4":      8800,   // 8k + 10%
+  "claude-3-5-sonnet":   8800,
+  "claude-3-5-haiku":    8800,
+  "claude-3-opus":       4400,   // 4k + 10%
+  "claude-3-sonnet":     4400,
+  "claude-3-haiku":      4400,
+};
+
+/**
+ * Get the max output tokens for a model (with 10% buffer).
+ * Falls back to sensible defaults if model not in table.
+ */
+function _getOutputLimit(model) {
+  // Exact match
+  if (MODEL_OUTPUT_LIMITS[model]) return MODEL_OUTPUT_LIMITS[model];
+  // Prefix match (handles dated versions like claude-sonnet-4-6, claude-haiku-4-5-20250414)
+  for (const [prefix, limit] of Object.entries(MODEL_OUTPUT_LIMITS)) {
+    if (model.startsWith(prefix)) return limit;
+  }
+  // Defaults with 10% buffer
+  if (isAnthropicModel(model)) return 8800;   // 8k + 10% (safe Anthropic default)
+  return 17600;                                // 16k + 10% (safe OpenAI default)
+}
+
+/**
+ * Build token limit params for the API call.
+ * Respects per-model output limits and adds reasoning headroom.
+ */
 function tokenParam(model, limit) {
-  const effectiveLimit = isReasoningModel(model) ? Math.max(limit * 4, 4096) : limit;
+  const maxOutput = _getOutputLimit(model);
+
+  // Reasoning models get 4x to accommodate chain-of-thought, but capped at model max
+  let effectiveLimit = isReasoningModel(model) ? Math.max(limit * 4, 4096) : limit;
+  effectiveLimit = Math.min(effectiveLimit, maxOutput);
+
+  // Anthropic uses max_tokens directly (handled in _anthropicCall)
+  if (isAnthropicModel(model)) return { max_tokens: effectiveLimit };
   if (isResponsesModel(model)) return { max_output_tokens: effectiveLimit };
   const usesNewParam = /^(o[1-9]|gpt-5|gpt-4o)/.test(model) || model.includes("nano");
   if (usesNewParam) return { max_completion_tokens: effectiveLimit };
-  return { max_tokens: limit };
+  return { max_tokens: effectiveLimit };
 }
 
 // ── Unified AI Call ──
@@ -121,10 +180,11 @@ async function aiCallWithHistory({ model, messages, tools, maxTokens = 4096, cat
 
 async function _anthropicCall({ model, systemPrompt, userPrompt, maxTokens, tools, toolChoice }) {
   const client = _getAnthropicClient();
+  const outputLimit = Math.min(maxTokens, _getOutputLimit(model));
 
   const params = {
     model,
-    max_tokens: maxTokens,
+    max_tokens: outputLimit,
     messages: [{ role: "user", content: userPrompt }],
   };
 
@@ -203,9 +263,10 @@ async function _anthropicCallWithHistory({ model, messages, tools, maxTokens }) 
     }
   }
 
+  const outputLimit = Math.min(maxTokens, _getOutputLimit(model));
   const params = {
     model,
-    max_tokens: maxTokens,
+    max_tokens: outputLimit,
     messages: merged,
   };
 
