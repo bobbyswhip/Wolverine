@@ -238,6 +238,10 @@ const SEED_DOCS = [
     metadata: { topic: "skill-deps" },
   },
   {
+    text: "CRITICAL: Never run raw 'npm install wolverine-ai' or 'git pull' to update — these OVERWRITE server/, .wolverine/ (brain, backups, events), and .env.local. Always use the safe update skill: wolverine --update (CLI), safeUpdate(cwd) (programmatic), or let auto-update handle it. The update skill: (1) creates safe backup in ~/.wolverine-safe-backups/ (outside project, survives everything), (2) backs up server/ + .wolverine/ + .env to memory, (3) selectively updates ONLY src/ bin/ package.json via git checkout, (4) restores all user files, (5) signals brain to merge new seed docs. Restore with: wolverine --restore <backup-name>. List backups: wolverine --backups.",
+    metadata: { topic: "safe-update-warning" },
+  },
+  {
     text: "Auto-update: wolverine checks npm registry hourly for new versions. When found, runs npm install wolverine-ai@latest, backs up settings.json/.env.local before update and restores after. Config: autoUpdate.enabled (default true) in settings.json. Disable with WOLVERINE_AUTO_UPDATE=false env var. On successful update, signals runner to restart. Protected files never overwritten: settings.json, .env.local, .env, db.js. Update check runs 30s after startup then every hour (configurable via autoUpdate.intervalMs).",
     metadata: { topic: "auto-update" },
   },

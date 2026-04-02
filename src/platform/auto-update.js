@@ -186,60 +186,10 @@ function upgrade(cwd, logger) {
     return { success: false, from: current, to: latest, error: "Already up to date" };
   }
 
-  console.log(chalk.blue(`\n  🔄 Wolverine update available: ${current} → ${latest}`));
-  if (logger) logger.info("update.start", `Upgrading ${current} → ${latest}`, { from: current, to: latest });
-
-  // Back up ALL user files (server/, .env, configs)
-  const userBackups = backupUserFiles(cwd);
-  console.log(chalk.gray(`  🔒 Backed up ${Object.keys(userBackups).length} user files (server/ protected)`));
-
-  try {
-    const useGit = isGitRepo(cwd);
-
-    if (useGit) {
-      // Git-cloned: ONLY update framework files, NEVER touch server/
-      // Fetch latest, then selectively checkout only framework dirs
-      console.log(chalk.blue(`  📦 Git repo — selective framework update (server/ untouched)`));
-      execSync("git fetch origin master", { cwd, stdio: "pipe", timeout: 30000 });
-      // Only update: src/, bin/, package.json, examples/, tests/, CLAUDE.md, README.md, CHANGELOG.md
-      const frameworkPaths = "src/ bin/ package.json package-lock.json examples/ tests/ CLAUDE.md README.md CHANGELOG.md .npmignore";
-      execSync(`git checkout origin/master -- ${frameworkPaths}`, { cwd, stdio: "pipe", timeout: 30000 });
-      execSync("npm install", { cwd, stdio: "pipe", timeout: 120000 });
-    } else {
-      // npm-installed: update the package
-      const isGlobal = __dirname.includes("node_modules") && !cwd.includes("node_modules");
-      const cmd = isGlobal
-        ? `npm install -g ${PACKAGE_NAME}@${latest}`
-        : `npm install ${PACKAGE_NAME}@${latest}`;
-      console.log(chalk.blue(`  📦 Running: ${cmd}`));
-      execSync(cmd, { cwd, stdio: "pipe", timeout: 120000 });
-    }
-
-    // Restore ALL user files (server/, .env, .wolverine/) — belt AND suspenders
-    restoreUserFiles(cwd, userBackups);
-    console.log(chalk.gray(`  🔒 Restored ${Object.keys(userBackups).length} user files`));
-
-    // Merge new brain seed docs into existing brain (append, don't replace)
-    try {
-      const brainMerged = _mergeBrainSeeds(cwd);
-      if (brainMerged > 0) console.log(chalk.gray(`  🧠 Merged ${brainMerged} new seed docs into brain`));
-    } catch {}
-
-    // Clear version cache
-    _currentVersion = null;
-
-    console.log(chalk.green(`  ✅ Updated to ${latest}`));
-    if (logger) logger.info("update.success", `Upgraded to ${latest}`, { from: current, to: latest });
-
-    return { success: true, from: current, to: latest };
-  } catch (err) {
-    // Restore user files on failure
-    restoreUserFiles(cwd, userBackups);
-    const errMsg = (err.message || "").slice(0, 100);
-    console.log(chalk.yellow(`  ⚠️  Update failed: ${errMsg}`));
-    if (logger) logger.warn("update.failed", `Upgrade failed: ${errMsg}`, { from: current, to: latest });
-    return { success: false, from: current, to: latest, error: errMsg };
-  }
+  // Delegate to the update skill for the full safe upgrade routine
+  const { safeUpdate } = require("../skills/update");
+  _currentVersion = null; // clear cache so next check sees new version
+  return safeUpdate(cwd, { logger });
 }
 
 /**

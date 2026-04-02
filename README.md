@@ -462,11 +462,24 @@ Wolverine checks npm for new versions hourly and upgrades itself automatically. 
 }
 ```
 
+```bash
+# Manual safe update
+wolverine --update              # check + upgrade safely
+wolverine --update --dry-run    # check only, no changes
+wolverine --backups             # list safe backups
+wolverine --restore 2026-04-02  # restore from safe backup
+```
+
 **How it works:**
-- Checks `npm view wolverine-ai version` against installed version
-- If newer: backs up `settings.json`, `.env.local`, `.env` → runs `npm install wolverine-ai@latest` → restores configs → restarts
-- Protected files never overwritten during update
-- First check 30s after startup, then every hour
+1. Creates safe backup in `~/.wolverine-safe-backups/` (outside project, survives everything)
+2. Backs up `server/`, `.wolverine/`, `.env` to memory
+3. Selectively updates ONLY `src/`, `bin/`, `package.json` (git checkout or npm install)
+4. Restores all user files (server code, brain, backups, events, config)
+5. Signals brain to merge new seed docs on next boot (append, not replace)
+6. Auto-check: 30s after startup, then every 5 minutes (configurable)
+
+**Never run raw `npm install` or `git pull`** — they overwrite server code and brain memories. Always use `wolverine --update` or let auto-update handle it.
+
 - **Disable:** `"autoUpdate": { "enabled": false }` or `WOLVERINE_AUTO_UPDATE=false`
 
 ---

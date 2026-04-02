@@ -54,6 +54,39 @@ if (args.includes("--info")) {
   process.exit(0);
 }
 
+// --update: safe framework update
+if (args.includes("--update")) {
+  const { safeUpdate } = require("../src/skills/update");
+  const dryRun = args.includes("--dry-run");
+  const result = safeUpdate(process.cwd(), { dryRun });
+  process.exit(result.success ? 0 : 1);
+}
+
+// --restore: restore from safe backup
+if (args.includes("--restore")) {
+  const backupName = args[args.indexOf("--restore") + 1];
+  if (!backupName) { console.log("Usage: wolverine --restore <backup-name>"); process.exit(1); }
+  const { restoreFromSafeBackup } = require("../src/skills/update");
+  const result = restoreFromSafeBackup(process.cwd(), backupName);
+  console.log(chalk.green(`  ✅ Restored ${result.restored} files from ${backupName}`));
+  process.exit(0);
+}
+
+// --backups: list safe backups
+if (args.includes("--backups")) {
+  const { listSafeBackups } = require("../src/skills/update");
+  const backups = listSafeBackups();
+  if (backups.length === 0) { console.log("No safe backups found."); }
+  else {
+    console.log(chalk.bold("\n  Safe Backups (~/.wolverine-safe-backups/):\n"));
+    for (const b of backups) {
+      console.log(`  ${b.dir}  v${b.version || "?"}  ${b.fileCount || "?"} files  ${b.iso || ""}`);
+    }
+    console.log("");
+  }
+  process.exit(0);
+}
+
 const scriptPath = args.find(a => !a.startsWith("--")) || "server/index.js";
 
 // System detection (for analytics + dashboard, NOT for forking)

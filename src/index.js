@@ -36,6 +36,7 @@ const { loadConfig, getConfig } = require("./core/config");
 const { sqlGuard, SafeDB, scanForInjection, idempotencyGuard, idempotencyAfterHook } = require("./skills/sql");
 const { diagnose: diagnoseDeps, healthReport: depsHealthReport, getMigration } = require("./skills/deps");
 const { checkForUpdate, upgrade: upgradeWolverine, getCurrentVersion } = require("./platform/auto-update");
+const { safeUpdate, createSafeBackup, listSafeBackups, restoreFromSafeBackup } = require("./skills/update");
 
 module.exports = {
   // Core
@@ -103,4 +104,8 @@ module.exports = {
   checkForUpdate,
   upgradeWolverine,
   getCurrentVersion,
+  safeUpdate,
+  createSafeBackup,
+  listSafeBackups,
+  restoreFromSafeBackup,
 };
