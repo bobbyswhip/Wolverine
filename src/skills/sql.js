@@ -201,6 +201,18 @@ class SafeDB {
         this._writer.pragma("foreign_keys = ON");
         this._writer.pragma("synchronous = NORMAL");
 
+        // Idempotency table — prevents double-execution of writes in cluster mode
+        this._writer.exec(`
+          CREATE TABLE IF NOT EXISTS _idempotency (
+            key TEXT PRIMARY KEY,
+            result TEXT,
+            created_at INTEGER DEFAULT (strftime('%s','now')),
+            expires_at INTEGER
+          )
+        `);
+        // Clean expired keys on connect
+        this._writer.exec(`DELETE FROM _idempotency WHERE expires_at < strftime('%s','now')`);
+
       } catch (err) {
         if (err.code === "MODULE_NOT_FOUND") {
           throw new Error("Install better-sqlite3: npm install better-sqlite3");
@@ -214,6 +226,49 @@ class SafeDB {
     }
 
     process.on("exit", () => this.close());
+  }
+
+  /**
+   * Idempotent write — execute fn only if this key hasn't been seen before.
+   * In cluster mode, prevents the same request from double-firing across workers.
+   *
+   * @param {string} key — unique idempotency key (e.g. from X-Idempotency-Key header)
+   * @param {Function} fn — function that performs the write, receives writerProxy
+   * @param {number} ttlSeconds — how long to remember this key (default: 86400 = 24h)
+   * @returns {{ executed: boolean, result: any }} — executed=false if key was already seen
+   */
+  idempotent(key, fn, ttlSeconds = 86400) {
+    this._assertOpen();
+    return this._enqueueWrite(() => {
+      // Check if key already executed
+      const existing = this._writer.prepare("SELECT result FROM _idempotency WHERE key = ? AND expires_at > strftime('%s','now')").get(key);
+      if (existing) {
+        return { executed: false, result: JSON.parse(existing.result || "null"), cached: true };
+      }
+
+      // Execute the write
+      const txn = this._writer.transaction(() => {
+        const result = fn(this._writerProxy());
+        // Store the key so duplicates are rejected
+        this._writer.prepare(
+          "INSERT OR REPLACE INTO _idempotency (key, result, expires_at) VALUES (?, ?, strftime('%s','now') + ?)"
+        ).run(key, JSON.stringify(result ?? null), ttlSeconds);
+        return result;
+      });
+
+      const result = txn();
+      return { executed: true, result, cached: false };
+    });
+  }
+
+  /**
+   * Clean up expired idempotency keys. Call periodically (e.g., every hour).
+   */
+  pruneIdempotency() {
+    this._assertOpen();
+    return this._enqueueWrite(() => {
+      return this._writer.prepare("DELETE FROM _idempotency WHERE expires_at < strftime('%s','now')").run();
+    });
   }
 
   /**
@@ -327,27 +382,137 @@ class SafeDB {
   }
 }
 
+// ── Idempotency Middleware ──────────────────────────────────────
+
+/**
+ * Request idempotency middleware — prevents double-fire in cluster mode.
+ *
+ * How it works:
+ * 1. Client sends write request (POST/PUT/PATCH/DELETE) with X-Idempotency-Key header
+ * 2. Middleware checks if this key was already processed
+ * 3. If yes: return cached response (no re-execution)
+ * 4. If no: execute handler, cache response, return result
+ *
+ * Without the header, mutating requests get an auto-generated key based on
+ * method + path + body hash. This means identical retries are deduplicated
+ * even without client cooperation.
+ *
+ * In cluster mode (reusePort), a retry can land on a different worker.
+ * Since all workers share the same SQLite database (WAL mode), the
+ * idempotency table is visible to all workers instantly.
+ *
+ * Safe methods (GET, HEAD, OPTIONS) are always passed through — they're
+ * inherently idempotent.
+ *
+ * @param {object} options
+ * @param {SafeDB} options.db — SafeDB instance (must be connected)
+ * @param {number} options.ttlSeconds — how long to cache responses (default: 86400)
+ * @param {object} options.logger — wolverine EventLogger (optional)
+ */
+function idempotencyGuard(options = {}) {
+  const db = options.db;
+  const ttlSeconds = options.ttlSeconds || 86400;
+  const logger = options.logger || null;
+  const crypto = require("crypto");
+
+  return async (req, res, next) => {
+    // Safe methods are inherently idempotent — pass through
+    const method = (req.method || "GET").toUpperCase();
+    if (["GET", "HEAD", "OPTIONS"].includes(method)) return next();
+
+    // Get or generate idempotency key
+    let key = req.headers["x-idempotency-key"] || req.headers["idempotency-key"];
+    if (!key) {
+      // Auto-generate from method + path + body hash
+      const bodyStr = typeof req.body === "string" ? req.body : JSON.stringify(req.body || "");
+      key = crypto.createHash("sha256").update(`${method}:${req.url}:${bodyStr}`).digest("hex");
+    }
+
+    if (!db || !db._writer) return next(); // No DB — can't check, pass through
+
+    try {
+      // Check idempotency table directly (read from writer for consistency)
+      const existing = db._writer.prepare(
+        "SELECT result FROM _idempotency WHERE key = ? AND expires_at > strftime('%s','now')"
+      ).get(key);
+
+      if (existing) {
+        // Already processed — return cached response
+        const cached = JSON.parse(existing.result || "null");
+        if (logger) logger.debug("idempotency.hit", `Duplicate request blocked: ${method} ${req.url}`, { key: key.slice(0, 16) });
+
+        const status = cached?.statusCode || 200;
+        const body = cached?.body || cached;
+        if (typeof res.code === "function") {
+          // Fastify
+          res.code(status).header("X-Idempotency-Cached", "true").send(body);
+        } else {
+          // Express
+          res.status(status).set("X-Idempotency-Cached", "true").json(body);
+        }
+        return;
+      }
+
+      // Not seen — attach key to request for the route handler to use
+      req._idempotencyKey = key;
+      req._idempotencyTtl = ttlSeconds;
+    } catch {
+      // DB error — don't block the request, just pass through
+    }
+
+    next();
+  };
+}
+
+/**
+ * After-response hook — stores the response for future idempotency checks.
+ * For Fastify, add as onSend hook. For Express, monkey-patch res.json.
+ *
+ * @param {SafeDB} db — connected SafeDB instance
+ */
+function idempotencyAfterHook(db) {
+  return (req, reply, payload, done) => {
+    if (req._idempotencyKey && db && db._writer) {
+      try {
+        const statusCode = reply.statusCode || 200;
+        const result = JSON.stringify({ statusCode, body: typeof payload === "string" ? JSON.parse(payload) : payload });
+        db._writer.prepare(
+          "INSERT OR IGNORE INTO _idempotency (key, result, expires_at) VALUES (?, ?, strftime('%s','now') + ?)"
+        ).run(req._idempotencyKey, result, req._idempotencyTtl || 86400);
+      } catch { /* non-fatal */ }
+    }
+    done();
+  };
+}
+
 // ── Skill Metadata (for SkillRegistry discovery) ──
 
 const SKILL_NAME = "sql";
-const SKILL_DESCRIPTION = "SQL database interface with injection prevention. Provides sqlGuard() middleware to block SQL injection on all endpoints, and SafeDB class for parameterized-only database queries.";
-const SKILL_KEYWORDS = ["sql", "database", "db", "query", "injection", "sqlite", "postgres", "mysql", "select", "insert", "update", "delete", "table", "schema", "migration", "parameterized"];
-const SKILL_USAGE = `// Protect all routes from SQL injection
-const { sqlGuard } = require("../src/skills/sql");
-app.use(sqlGuard({ logger: wolverineLogger }));
-
-// Cluster-safe database (each worker gets its own connection)
-const { SafeDB } = require("../src/skills/sql");
+const SKILL_DESCRIPTION = "SQL database interface with injection prevention + idempotency. Provides sqlGuard() middleware to block SQL injection, idempotencyGuard() middleware to prevent double-fire in cluster mode, and SafeDB class for parameterized-only database queries with built-in idempotency key support.";
+const SKILL_KEYWORDS = ["sql", "database", "db", "query", "injection", "sqlite", "postgres", "mysql", "select", "insert", "update", "delete", "table", "schema", "migration", "parameterized", "idempotent", "idempotency", "duplicate", "double", "cluster", "transaction"];
+const SKILL_USAGE = `// Protect routes from SQL injection + double-fire
+const { sqlGuard, idempotencyGuard, idempotencyAfterHook, SafeDB } = require("../src/skills/sql");
 const db = new SafeDB({ type: "sqlite", path: "./server/data.db" });
-await db.connect(); // WAL mode, busy_timeout=5s, write serialization
+await db.connect();
 
-// Reads (concurrent across workers)
+// Middleware: injection prevention + idempotency (cluster-safe)
+fastify.addHook("preHandler", sqlGuard({ logger }));
+fastify.addHook("preHandler", idempotencyGuard({ db, logger }));
+fastify.addHook("onSend", idempotencyAfterHook(db));
+
+// Reads (concurrent across workers — never waits)
 const users = db.all("SELECT * FROM users WHERE role = ?", ["admin"]);
 
-// Writes (serialized — no corruption)
+// Writes (serialized FIFO queue — no corruption)
 db.run("INSERT INTO users (name, role) VALUES (?, ?)", ["Alice", "admin"]);
 
-// Batch writes (atomic transaction, single lock)
+// Idempotent write — prevents double-charge/double-insert in cluster mode
+const result = await db.idempotent("order-abc-123", (tx) => {
+  tx.run("INSERT INTO orders (id, total) VALUES (?, ?)", ["abc-123", 99.99]);
+  return { orderId: "abc-123" };
+}); // result.executed=true first time, false on retry
+
+// Atomic transaction (all-or-nothing)
 db.transaction((tx) => {
   tx.run("INSERT INTO orders (user_id, total) VALUES (?, ?)", [1, 99.99]);
   tx.run("UPDATE users SET order_count = order_count + 1 WHERE id = ?", [1]);
@@ -364,6 +529,8 @@ module.exports = {
 
   // Middleware
   sqlGuard,
+  idempotencyGuard,
+  idempotencyAfterHook,
   scanForInjection,
   deepScan,
 

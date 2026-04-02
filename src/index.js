@@ -33,7 +33,7 @@ const { scanProject } = require("./brain/function-map");
 const { detect: detectSystem } = require("./core/system-info");
 const { ClusterManager } = require("./core/cluster-manager");
 const { loadConfig, getConfig } = require("./core/config");
-const { sqlGuard, SafeDB, scanForInjection } = require("./skills/sql");
+const { sqlGuard, SafeDB, scanForInjection, idempotencyGuard, idempotencyAfterHook } = require("./skills/sql");
 
 module.exports = {
   // Core
@@ -93,4 +93,6 @@ module.exports = {
   sqlGuard,
   SafeDB,
   scanForInjection,
+  idempotencyGuard,
+  idempotencyAfterHook,
 };

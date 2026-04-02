@@ -96,7 +96,7 @@ const SEED_DOCS = [
     metadata: { topic: "skill-sql-patterns" },
   },
   {
-    text: "Database best practices: SafeDB uses split connections — separate read connection (concurrent, never waits) and write connection (single writer, FIFO queue). Write queue drains synchronously in one microtask, zero delays. WAL mode means readers never block writers. Each write is microseconds. db.transaction(fn) queues as single atomic unit. No busy_timeout, no blocking, no IPC. Reads: db.get(), db.all() are instant. Writes: db.run(), db.exec() go through queue.",
+    text: "Database best practices: SafeDB uses split connections — separate read connection (concurrent, never waits) and write connection (single writer, FIFO queue). Write queue drains synchronously in one microtask, zero delays. WAL mode means readers never block writers. Each write is microseconds. db.transaction(fn) queues as single atomic unit. No busy_timeout, no blocking, no IPC. Reads: db.get(), db.all() are instant. Writes: db.run(), db.exec() go through queue. Idempotent writes: db.idempotent(key, fn, ttlSeconds) executes fn only once per key — prevents double-charge/double-insert when retries or cluster workers duplicate a request. Idempotency keys stored in _idempotency table (auto-created on connect), shared across all workers via WAL mode.",
     metadata: { topic: "skill-sql-best-practices" },
   },
   {
@@ -120,7 +120,7 @@ const SEED_DOCS = [
     metadata: { topic: "process-manager" },
   },
   {
-    text: "Auto-clustering: wolverine detects machine capabilities (cores, RAM, disk, platform, Docker/K8s, cloud provider) and forks optimal workers. 2 cores = 2 workers, 3-4 = cores-1, 5-8 = cores-1 cap 6, 9+ = cores/2 cap 16. Workers auto-respawn on crash with exponential backoff. CLI: --single (no cluster), --workers N (fixed), --info (show system). Settings in server/config/settings.json cluster.mode.",
+    text: "Cluster mode: server handles its own clustering (not wolverine-level). WOLVERINE_CLUSTER=true enables it. Server forks N workers (WOLVERINE_RECOMMENDED_WORKERS set by system detection). Workers share port 3000 via reusePort. Wolverine kills entire process tree on restart (_killProcessTree: taskkill /T on Windows, kill -pgid + pgrep -P on Linux). Idempotency protection prevents double-fire: idempotencyGuard() middleware deduplicates write requests across workers using shared SQLite _idempotency table. Client sends X-Idempotency-Key header, or auto-generated from method+path+body hash. All workers see the same table via WAL mode. SafeDB.idempotent(key, fn) for database-level dedup.",
     metadata: { topic: "clustering" },
   },
   {
@@ -220,8 +220,12 @@ const SEED_DOCS = [
     metadata: { topic: "agent-tools-v2" },
   },
   {
-    text: "Server problem categories the agent can fix: CODE BUGS (SyntaxError, TypeError, ReferenceError → edit_file), DEPENDENCIES (Cannot find module → npm install, corrupted node_modules → rm + reinstall), DATABASE (invalid entries → run_db_fix UPDATE, missing table → CREATE TABLE, schema mismatch → ALTER TABLE, constraint violation → fix data or schema), CONFIG (invalid JSON → edit_file, missing env vars → write .env, wrong port → edit config), FILESYSTEM (misplaced files → move_file, missing directories → bash_exec mkdir, wrong permissions → chmod), NETWORK (port conflict → check_port + kill, service down → restart, connection refused → check config), STATE (corrupted cache → delete + restart, stale locks → remove lock file, git conflicts → resolve markers). The agent investigates before fixing — reads files, checks directories, inspects databases, never guesses.",
+    text: "Server problem categories the agent can fix: CODE BUGS (SyntaxError, TypeError, ReferenceError → edit_file), DEPENDENCIES (Cannot find module → npm install, corrupted node_modules → rm + reinstall), DATABASE (invalid entries → run_db_fix UPDATE, missing table → CREATE TABLE, schema mismatch → ALTER TABLE, constraint violation → fix data or schema), CONFIG (invalid JSON → edit_file, missing env vars → write .env, wrong port → edit config), FILESYSTEM (misplaced files → move_file, missing directories → bash_exec mkdir, wrong permissions → chmod), NETWORK (port conflict → check_port + kill, service down → restart, connection refused → check config), STATE (corrupted cache → delete + restart, stale locks → remove lock file, git conflicts → resolve markers), IDEMPOTENCY (double-fire → add idempotencyGuard middleware, missing idempotency key → add X-Idempotency-Key header support, duplicate DB entries → add UNIQUE constraint or use db.idempotent()). The agent investigates before fixing — reads files, checks directories, inspects databases, never guesses.",
     metadata: { topic: "server-problems" },
+  },
+  {
+    text: "Idempotency protection: two layers prevent double-fire in cluster mode. Layer 1: idempotencyGuard() Fastify middleware — intercepts POST/PUT/PATCH/DELETE, checks X-Idempotency-Key header (or auto-generates key from method+path+body hash), queries _idempotency table. If key exists and not expired → return cached response with X-Idempotency-Cached:true header, skip handler. If new → pass through, idempotencyAfterHook() stores response. Layer 2: SafeDB.idempotent(key, fn) — database-level dedup. Wraps fn in transaction, checks key, executes only if new. Returns {executed:true/false, result, cached}. Keys expire after TTL (default 24h). All workers share the SQLite _idempotency table via WAL mode — globally consistent. Auto-pruned on connect and via db.pruneIdempotency().",
+    metadata: { topic: "idempotency" },
   },
   {
     text: "Heal pipeline no longer requires a file path. When no file is identified from the error (database errors, config problems, port conflicts), the pipeline skips fast path and goes straight to the agent, which uses investigation tools (glob_files, grep_code, list_dir, inspect_db, check_env, check_port) to find the root cause. Agent verification for no-file errors: if agent made changes or ran commands, trust the agent's assessment. For file-based errors, verification uses syntax check + boot probe as before.",
