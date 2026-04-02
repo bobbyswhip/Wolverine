@@ -3,26 +3,29 @@ const http = require("http");
 const { URL } = require("url");
 const chalk = require("chalk");
 const { collectHeartbeat, INSTANCE_ID } = require("./telemetry");
-const { getOrCreateKey, PLATFORM_URL } = require("./register");
 const { HeartbeatQueue } = require("./queue");
 
 /**
- * Heartbeat — zero-config telemetry to the platform.
+ * Heartbeat — sends telemetry to YOUR platform backend.
  *
- * ON by default. Opt out with WOLVERINE_TELEMETRY=false.
- * Auto-registers on first run. HTTPS only. 5s timeout.
+ * Opt-in: set WOLVERINE_PLATFORM_URL and WOLVERINE_PLATFORM_KEY in .env.local
+ * Without those, telemetry is disabled — zero overhead.
+ *
+ * This is the open-source client. Point it at your own platform backend
+ * that implements the heartbeat API (see PLATFORM.md for the spec).
  */
 
+const PLATFORM_URL = process.env.WOLVERINE_PLATFORM_URL;
+const PLATFORM_KEY = process.env.WOLVERINE_PLATFORM_KEY;
 const INTERVAL = parseInt(process.env.WOLVERINE_HEARTBEAT_INTERVAL_MS, 10) || 60000;
 
 let _queue = null;
 let _timer = null;
 let _subsystems = null;
-let _key = null;
 let _consecutiveFailures = 0;
 
 async function sendHeartbeat() {
-  if (!_key || !_subsystems) return;
+  if (!PLATFORM_URL || !PLATFORM_KEY || !_subsystems) return;
 
   const payload = collectHeartbeat(_subsystems);
   const body = JSON.stringify(payload);
@@ -40,7 +43,7 @@ async function sendHeartbeat() {
         headers: {
           "Content-Type": "application/json",
           "Content-Length": Buffer.byteLength(body),
-          "Authorization": `Bearer ${_key}`,
+          "Authorization": `Bearer ${PLATFORM_KEY}`,
           "X-Instance-Id": INSTANCE_ID,
         },
         timeout: 5000,
@@ -61,7 +64,7 @@ async function sendHeartbeat() {
         console.log(chalk.green(`  📡 Platform reconnected after ${_consecutiveFailures} failures`));
       }
       _consecutiveFailures = 0;
-      const drained = await _queue.drain(PLATFORM_URL, _key);
+      const drained = await _queue.drain(PLATFORM_URL, PLATFORM_KEY);
       if (drained > 0) console.log(chalk.gray(`  📡 Drained ${drained} queued heartbeats`));
     } else {
       _consecutiveFailures++;
@@ -80,24 +83,16 @@ async function sendHeartbeat() {
 }
 
 /**
- * Start heartbeats. Auto-registers if no key exists.
- * Disabled with WOLVERINE_TELEMETRY=false.
+ * Start heartbeats. Only activates if WOLVERINE_PLATFORM_URL is set.
  */
 async function startHeartbeat(subsystems) {
-  // Opt-out check
-  if (process.env.WOLVERINE_TELEMETRY === "false") {
-    console.log(chalk.gray("  📡 Telemetry disabled (WOLVERINE_TELEMETRY=false)"));
+  if (!PLATFORM_URL || !PLATFORM_KEY) {
+    console.log(chalk.gray("  📡 Telemetry: disabled (set WOLVERINE_PLATFORM_URL + WOLVERINE_PLATFORM_KEY to enable)"));
     return;
   }
 
   _subsystems = subsystems;
   _queue = new HeartbeatQueue();
-
-  // Auto-register or load saved key
-  _key = await getOrCreateKey();
-  if (!_key) {
-    console.log(chalk.yellow("  📡 No key — heartbeats will queue until registered"));
-  }
 
   const queueSize = _queue.getQueueSize();
   console.log(chalk.cyan(`  📡 Platform: ${PLATFORM_URL} (every ${INTERVAL / 1000}s${queueSize > 0 ? `, ${queueSize} queued` : ""})`));
@@ -109,7 +104,7 @@ async function startHeartbeat(subsystems) {
 
 function stopHeartbeat() {
   if (_timer) { clearInterval(_timer); _timer = null; }
-  if (_subsystems && _key) sendHeartbeat().catch(() => {});
+  if (_subsystems && PLATFORM_URL && PLATFORM_KEY) sendHeartbeat().catch(() => {});
 }
 
 module.exports = { startHeartbeat, stopHeartbeat, INSTANCE_ID };

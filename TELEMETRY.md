@@ -1,114 +1,108 @@
-# Telemetry Should Work Out of the Box
+# Wolverine Telemetry
 
-## Problem
+Connect your Wolverine instance to a platform backend for fleet-wide monitoring, uptime tracking, and cost analytics.
 
-Right now every wolverine user has to manually add 4 env variables to connect to the platform:
+## Setup
+
+### 1. Deploy your platform backend
+
+See [PLATFORM.md](PLATFORM.md) for the full backend spec — database schema, API endpoints, scaling strategy.
+
+Your backend needs to implement:
+- `POST /api/v1/heartbeat` — receive heartbeat payloads
+- `GET /api/v1/servers` — list connected instances
+- Standard Bearer token auth
+
+### 2. Configure your Wolverine instance
+
+Add to `.env.local`:
 
 ```env
-WOLVERINE_PLATFORM_URL=https://api.wolverinenode.xyz
-WOLVERINE_PLATFORM_KEY=wlvk_...
-WOLVERINE_INSTANCE_NAME=my-server
+WOLVERINE_PLATFORM_URL=https://your-platform.com
+WOLVERINE_PLATFORM_KEY=your_api_key_here
+```
+
+That's it. Wolverine starts sending heartbeats every 60 seconds.
+
+### Optional settings
+
+```env
+# Human-readable name (defaults to folder name)
+WOLVERINE_INSTANCE_NAME=my-api-prod
+
+# Heartbeat interval in ms (default: 60000 = 1 minute)
 WOLVERINE_HEARTBEAT_INTERVAL_MS=60000
 ```
 
-This is wrong. Wolverine telemetry should work **zero-config** for every server.
+### 3. Verify
 
-## What Needs to Change
-
-### 1. Hardcode the platform URL
-
-The platform URL is always `https://api.wolverinenode.xyz` — every wolverine instance talks to the same backend. This shouldn't be configurable, it should be a constant.
-
-```js
-// Before (requires env setup)
-const PLATFORM_URL = process.env.WOLVERINE_PLATFORM_URL;
-
-// After (works out of the box)
-const PLATFORM_URL = process.env.WOLVERINE_PLATFORM_URL || "https://api.wolverinenode.xyz";
-```
-
-### 2. Auto-generate the platform key on first run
-
-Instead of requiring users to get a key, wolverine should:
-1. On first startup, call `POST /api/v1/register` with the instance ID
-2. Platform returns a key and stores the new instance
-3. Wolverine saves the key to `.wolverine/platform-key`
-4. On subsequent startups, reads from the saved file
+On startup you'll see:
 
 ```
-First run:
-  → No key found in .wolverine/platform-key
-  → POST https://api.wolverinenode.xyz/api/v1/register
-    Body: { instanceId: "wlv_abc123", name: "auto-generated" }
-  → Response: { key: "wlvk_auto_xxx", instanceId: "wlv_abc123" }
-  → Save key to .wolverine/platform-key
-  → Start heartbeats
-
-Subsequent runs:
-  → Read key from .wolverine/platform-key
-  → Start heartbeats immediately
+📡 Platform: https://your-platform.com (every 60s)
+📡 Instance: wlv_a8f3e9b1c4d7
 ```
 
-### 3. Auto-name from the server directory
+If the platform is unreachable, heartbeats queue locally in `.wolverine/heartbeat-queue.jsonl` and drain automatically when connectivity returns.
 
-Instead of requiring `WOLVERINE_INSTANCE_NAME`, derive it:
+---
 
-```js
-const name = process.env.WOLVERINE_INSTANCE_NAME 
-  || path.basename(process.cwd())  // folder name: "my-api"
-  || "wolverine-server";
+## Heartbeat Payload
+
+Each heartbeat is ~2KB JSON, sent every 60 seconds:
+
+```json
+{
+  "instanceId": "wlv_a8f3e9b1c4d7",
+  "version": "0.1.0",
+  "timestamp": 1775073247574,
+  "server": {
+    "name": "my-api",
+    "port": 3000,
+    "uptime": 86400,
+    "status": "healthy",
+    "pid": 12345
+  },
+  "process": {
+    "memoryMB": 128,
+    "cpuPercent": 12,
+    "peakMemoryMB": 256
+  },
+  "routes": {
+    "total": 8,
+    "healthy": 8,
+    "unhealthy": 0
+  },
+  "repairs": {
+    "total": 3,
+    "successes": 2,
+    "failures": 1,
+    "lastRepair": { "error": "...", "resolution": "...", "tokens": 1820, "cost": 0.0045 }
+  },
+  "usage": {
+    "totalTokens": 45000,
+    "totalCost": 0.12,
+    "totalCalls": 85,
+    "byCategory": { "heal": {...}, "chat": {...}, "develop": {...} }
+  },
+  "brain": { "totalMemories": 45 },
+  "backups": { "total": 8, "stable": 3 }
+}
 ```
 
-### 4. Platform backend needs a registration endpoint
+## Design
+
+- **Opt-in**: disabled unless `WOLVERINE_PLATFORM_URL` and `WOLVERINE_PLATFORM_KEY` are set
+- **Lightweight**: 1 request per 60s, ~2KB payload
+- **Offline-resilient**: queues locally when platform is down, replays on reconnect (max 24h / 1440 entries)
+- **Secure**: secrets redacted before sending, HTTPS supported, Bearer token auth
+- **No source code**: only metrics, redacted error messages, and stats
+
+## Files
 
 ```
-POST /api/v1/register
-Body: { instanceId: "wlv_abc123", name: "my-api" }
-Response: { key: "wlvk_auto_xxx", instanceId: "wlv_abc123" }
+src/platform/
+├── telemetry.js   — Collects metrics from all subsystems into heartbeat payload
+├── heartbeat.js   — Sends heartbeats on interval, handles failures
+└── queue.js       — Offline queue with replay on reconnect
 ```
-
-This endpoint:
-- Creates a new server record
-- Generates and returns an API key
-- Is rate-limited (1 registration per IP per minute)
-- No auth required (it IS the auth setup)
-
-### 5. Opt-out instead of opt-in
-
-Telemetry should be ON by default. Users who don't want it set:
-
-```env
-WOLVERINE_TELEMETRY=false
-```
-
-## Changes Required
-
-### Wolverine side (this repo)
-
-1. **`src/platform/heartbeat.js`** — default URL to `https://api.wolverinenode.xyz`
-2. **`src/platform/register.js`** (new) — auto-registration on first run
-3. **`src/platform/telemetry.js`** — auto-name from cwd
-4. **`.env.example`** — remove platform vars from required, add `WOLVERINE_TELEMETRY=true` as default
-
-### Platform backend side
-
-1. **`POST /api/v1/register`** — new endpoint, creates server + returns key
-2. **Rate limiting** — 1 reg/IP/minute
-3. **Key storage** — associate keys with server records
-
-## Result
-
-After this fix, a user does:
-
-```bash
-npm install wolverine-nodejs
-npm start
-```
-
-And their server automatically:
-- Registers with the platform
-- Gets a key
-- Starts sending heartbeats every 60s
-- Appears on the fleet dashboard
-
-Zero env variables. Zero setup. Just works.
