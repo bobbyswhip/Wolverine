@@ -28,7 +28,7 @@ function normalizeRoute(routePath) {
  */
 
 class ErrorMonitor {
-  constructor({ threshold = 3, windowMs = 30000, cooldownMs = 60000, onError, logger } = {}) {
+  constructor({ threshold = 1, windowMs = 30000, cooldownMs = 60000, onError, logger } = {}) {
     this.threshold = threshold;     // consecutive 5xx before triggering heal
     this.windowMs = windowMs;       // time window for counting errors
     this.cooldownMs = cooldownMs;   // cooldown after triggering (prevent heal spam)
