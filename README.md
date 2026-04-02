@@ -10,23 +10,28 @@ Built on patterns from [claw-code](https://github.com/instructkr/claw-code) — 
 
 ## Quick Start
 
-```bash
-# Install from npm
-npm i wolverine-ai
+### Install from npm
 
-# Or clone from GitHub
+```bash
+npm i wolverine-ai
+cp node_modules/wolverine-ai/.env.example .env.local
+# Edit .env.local — add your OPENAI_API_KEY
+npx wolverine server/index.js
+```
+
+### Or clone from GitHub
+
+```bash
 git clone https://github.com/bobbyswhip/Wolverine.git
 cd Wolverine
 npm install
-
-# Configure
 cp .env.example .env.local
-# Edit .env.local — add your OPENAI_API_KEY and generate an ADMIN_KEY
-
-# Run
+# Edit .env.local — add your OPENAI_API_KEY
 npm start
-# or: npx wolverine server/index.js
 ```
+
+[![npm](https://img.shields.io/npm/v/wolverine-ai)](https://www.npmjs.com/package/wolverine-ai)
+[![GitHub](https://img.shields.io/github/stars/bobbyswhip/Wolverine)](https://github.com/bobbyswhip/Wolverine)
 
 Dashboard opens at `http://localhost:PORT+1`. Server runs on `PORT`.
 
