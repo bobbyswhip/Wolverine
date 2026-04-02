@@ -16,9 +16,11 @@ const { INSTANCE_ID } = require("./telemetry");
  */
 
 const KEY_PATH = path.join(process.cwd(), ".wolverine", "platform-key");
+let _registerAttempts = 0;
 
 /**
  * Get platform key — load saved or auto-register to get one.
+ * Called on startup and retried every heartbeat tick until success.
  */
 async function getOrCreateKey(platformUrl) {
   // Check env override first
@@ -33,11 +35,18 @@ async function getOrCreateKey(platformUrl) {
   // No key — register with platform
   if (!platformUrl) return null;
 
+  _registerAttempts++;
+
   const name = process.env.WOLVERINE_INSTANCE_NAME
     || path.basename(process.cwd())
     || "wolverine-server";
 
-  console.log(chalk.cyan(`  📡 Registering with ${platformUrl}...`));
+  // Log on first attempt and every 10th retry (don't spam)
+  if (_registerAttempts === 1) {
+    console.log(chalk.cyan(`  📡 Registering with ${platformUrl}...`));
+  } else if (_registerAttempts % 10 === 0) {
+    console.log(chalk.gray(`  📡 Registration retry #${_registerAttempts}...`));
+  }
 
   try {
     const result = await postJSON(`${platformUrl}/api/v1/register`, {
@@ -48,14 +57,16 @@ async function getOrCreateKey(platformUrl) {
 
     if (result.key) {
       saveKey(result.key);
-      console.log(chalk.green(`  📡 Registered: ${INSTANCE_ID} (${name})`));
+      console.log(chalk.green(`  📡 Registered: ${INSTANCE_ID} (${name})${_registerAttempts > 1 ? ` after ${_registerAttempts} attempts` : ""}`));
+      _registerAttempts = 0;
       return result.key;
     }
 
-    console.log(chalk.yellow(`  📡 Registration returned no key`));
     return null;
   } catch (err) {
-    console.log(chalk.yellow(`  📡 Registration failed: ${err.message} — will retry next startup`));
+    if (_registerAttempts === 1) {
+      console.log(chalk.yellow(`  📡 Registration failed: ${err.message} — will keep retrying`));
+    }
     return null;
   }
 }

@@ -28,7 +28,14 @@ let _key = null;
 let _consecutiveFailures = 0;
 
 async function sendHeartbeat() {
-  if (!PLATFORM_URL || !_key || !_subsystems) return;
+  if (!PLATFORM_URL || !_subsystems) return;
+
+  // No key yet — retry registration every heartbeat until we get one
+  if (!_key) {
+    _key = await getOrCreateKey(PLATFORM_URL);
+    if (!_key) return; // still no key — try again next tick
+    console.log(chalk.green(`  📡 Registration succeeded — heartbeats starting`));
+  }
 
   const payload = collectHeartbeat(_subsystems);
   const body = JSON.stringify(payload);
@@ -98,10 +105,10 @@ async function startHeartbeat(subsystems) {
   _subsystems = subsystems;
   _queue = new HeartbeatQueue();
 
-  // Auto-register or use saved/env key
+  // Auto-register or use saved/env key — retries every heartbeat if it fails
   _key = await getOrCreateKey(PLATFORM_URL);
   if (!_key) {
-    console.log(chalk.yellow("  📡 No key — heartbeats will queue until registered"));
+    console.log(chalk.yellow("  📡 No key yet — will retry registration every heartbeat"));
   }
 
   const queueSize = _queue.getQueueSize();
