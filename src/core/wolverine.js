@@ -413,6 +413,29 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
     });
   }
 
+  // Record outcome to brain — both successes AND failures with full context
+  if (brain && brain._initialized) {
+    try {
+      if (goalResult.success) {
+        await brain.remember("fixes",
+          `FIXED (${goalResult.mode}, iter ${goalResult.iteration}): ${parsed.errorMessage} in ${parsed.filePath}:${parsed.line}. ` +
+          `Solution: ${goalResult.explanation?.slice(0, 200)}. Files: ${(goalResult.agentStats?.filesModified || []).join(", ")}`,
+          { type: "fix-success", file: parsed.filePath, error: parsed.errorMessage, mode: goalResult.mode }
+        );
+      } else {
+        // Record failure with all attempts so brain knows what NOT to do
+        const attemptSummary = (goalResult.attempts || []).map(a =>
+          `Iter ${a.iteration} (${a.mode}): ${a.explanation?.slice(0, 80)}`
+        ).join("; ");
+        await brain.remember("errors",
+          `UNRESOLVED: ${parsed.errorMessage} in ${parsed.filePath}:${parsed.line}. ` +
+          `Tried ${goalResult.iteration} iterations: ${attemptSummary}. All failed.`,
+          { type: "fix-failure", file: parsed.filePath, error: parsed.errorMessage, attempts: goalResult.iteration }
+        );
+      }
+    } catch {}
+  }
+
   if (goalResult.success) {
     if (logger) logger.info(EVENT_TYPES.HEAL_SUCCESS, goalResult.explanation, { iteration: goalResult.iteration, mode: goalResult.mode });
     return { healed: true, ...goalResult };

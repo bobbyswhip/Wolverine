@@ -55,7 +55,7 @@ class ResearchAgent {
 
     const namespace = success ? "fixes" : "errors";
     const prefix = success ? "FIXED" : "FAILED";
-    const text = `${prefix}: ${safeError} in ${filePath}. ${success ? "Solution" : "Attempted"}: ${safeExplanation}`;
+    const text = `${prefix}: ${safeError} in ${filePath}. ${success ? "Solution" : "Attempted (DO NOT REPEAT)"}: ${safeExplanation}`;
 
     await this.brain.remember(namespace, text, { type: success ? "fix-success" : "fix-failure", file: filePath });
     console.log(chalk.gray(`  🧠 ${success ? "✅" : "❌"} Recorded ${prefix.toLowerCase()} for ${safeError.slice(0, 50)}`));
