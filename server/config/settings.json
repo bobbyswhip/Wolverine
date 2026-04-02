@@ -5,7 +5,7 @@
     "env": "development"
   },
 
-  "provider": "openai",
+  "provider": "anthropic",
 
   "models": {
     "reasoning": "gpt-5.4-mini",
@@ -20,14 +20,14 @@
   },
 
   "_anthropic_models": {
-    "reasoning": "claude-sonnet-4-20250514",
-    "coding": "claude-sonnet-4-20250514",
-    "chat": "claude-haiku-4-20250414",
-    "tool": "claude-sonnet-4-20250514",
-    "classifier": "claude-haiku-4-20250414",
-    "audit": "claude-haiku-4-20250414",
-    "compacting": "claude-haiku-4-20250414",
-    "research": "claude-sonnet-4-20250514",
+    "reasoning": "claude-sonnet-4-6",
+    "coding": "claude-opus-4-6",
+    "chat": "claude-haiku-4-5",
+    "tool": "claude-opus-4-6",
+    "classifier": "claude-haiku-4-5",
+    "audit": "claude-haiku-4-5",
+    "compacting": "claude-sonnet-4-6",
+    "research": "claude-sonnet-4-6",
     "embedding": "text-embedding-3-small"
   },
 
