@@ -175,9 +175,12 @@ function safeUpdate(cwd, options = {}) {
     // 3. Update framework ONLY — server/ is never touched
     if (isGit) {
       console.log(chalk.blue("  📦 Selective git update (server/ untouched)"));
-      const frameworkPaths = "src/ bin/ package.json package-lock.json examples/ tests/ CLAUDE.md README.md CHANGELOG.md .npmignore";
+      // ONLY update framework files — never touch server/ or its deps
+      const frameworkPaths = "src/ bin/ examples/ tests/ CLAUDE.md README.md CHANGELOG.md .npmignore";
       execSync(`git checkout origin/master -- ${frameworkPaths}`, { cwd, stdio: "pipe", timeout: 30000 });
-      execSync("npm install --production", { cwd, stdio: "pipe", timeout: 120000 });
+      // Update package.json separately, then install deps to restore anything lost
+      execSync("git checkout origin/master -- package.json", { cwd, stdio: "pipe", timeout: 10000 });
+      execSync("npm install", { cwd, stdio: "pipe", timeout: 120000 });
     } else {
       const cmd = `npm install ${PACKAGE_NAME}@${latestVersion}`;
       console.log(chalk.blue(`  📦 ${cmd}`));
