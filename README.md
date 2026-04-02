@@ -11,12 +11,22 @@ Built on patterns from [claw-code](https://github.com/instructkr/claw-code) — 
 ## Quick Start
 
 ```bash
+# Install from npm
+npm i wolverine-ai
+# or: npm i wolverine-node
+
+# Or clone from GitHub
 git clone https://github.com/bobbyswhip/Wolverine.git
 cd Wolverine
 npm install
+
+# Configure
 cp .env.example .env.local
 # Edit .env.local — add your OPENAI_API_KEY and generate an ADMIN_KEY
+
+# Run
 npm start
+# or: npx wolverine server/index.js
 ```
 
 Dashboard opens at `http://localhost:PORT+1`. Server runs on `PORT`.

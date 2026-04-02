@@ -139,6 +139,54 @@ const SEED_DOCS = [
     text: "Telemetry architecture: 4 files, ~250 lines total. heartbeat.js sends one HTTP POST every 60s (5s timeout, non-blocking). register.js auto-registers and caches key in memory + disk. queue.js appends to JSONL file only on failure, trims lazily. telemetry.js collects from subsystems using optional chaining (no crashes if subsystem missing). All secrets redacted before sending. Response bodies drained immediately (res.resume). No blocking, no delays, no busy waits.",
     metadata: { topic: "telemetry-architecture" },
   },
+  {
+    text: "Server uses Fastify (migrated from Express). 5.6x faster routing: ~114k req/s vs Express ~20k req/s. Routes are async plugin functions: async function routes(fastify) { fastify.get('/', async () => ({...})); } module.exports = routes. Registered in index.js with fastify.register(require('./routes/X'), {prefix:'/X'}). JSON parsing is built-in, no middleware needed.",
+    metadata: { topic: "fastify" },
+  },
+  {
+    text: "npm package: published as wolverine-node and wolverine-ai on npmjs.com. Install with: npm i wolverine-node or npm i wolverine-ai. Both are the same package. v1.0.0, 79 files, 125KB compressed. Includes src/, bin/, server/, examples/. GitHub: https://github.com/bobbyswhip/Wolverine",
+    metadata: { topic: "npm-package" },
+  },
+  {
+    text: "Dashboard has 9 panels: Overview (stats cards + recent events), Events (live SSE stream), Performance (endpoint metrics), Analytics (memory/CPU charts, route health, response times), Command (admin chat with 3-route classifier), Backups (server/ snapshots with status badges), Brain (vector store stats + function map), Repairs (error/resolution audit trail with tokens and cost), Tools (agent tool harness listing), Usage (token analytics by model/category/tool with USD costs).",
+    metadata: { topic: "dashboard-panels" },
+  },
+  {
+    text: "Command interface routing: AI classifier (CLASSIFIER_MODEL) returns SIMPLE/TOOLS/AGENT. SIMPLE = brain knowledge only (CHAT_MODEL, no tools). TOOLS = live data with function calling (TOOL_MODEL, call_endpoint/read_file/search_brain). AGENT SMALL = smart edit (CODING_MODEL, 1 AI call, structured JSON file operations). AGENT MEDIUM = single agent (REASONING_MODEL, 8 turns). AGENT LARGE = sub-agents (explore→plan→fix).",
+    metadata: { topic: "command-routing" },
+  },
+  {
+    text: "Smart edit: for SMALL tier tasks, one AI call returns JSON with file operations: [{action:'create',path:'server/routes/X.js',content:'...'},{action:'edit',path:'server/index.js',find:'...',replace:'...'}]. Creates backup before changes, restarts server after, tests endpoint, rescans brain with new routes. Skills auto-injected into prompt when relevant.",
+    metadata: { topic: "smart-edit" },
+  },
+  {
+    text: "Token tracking: every AI call tracked with input/output tokens + USD cost. Categories: heal, develop, chat, security, classify, research, brain. Tracked by model, by category, by tool. Persisted to .wolverine/usage.json (aggregates) and .wolverine/usage-history.jsonl (full timeline). Auto-saves on every call. Dashboard shows charts + cost breakdowns. Pricing from src/logger/pricing.js, customizable via .wolverine/pricing.json.",
+    metadata: { topic: "token-tracking" },
+  },
+  {
+    text: "Repair history: dedicated audit trail at .wolverine/repair-history.json. Each entry: error, file, line, resolution, success, mode (fast/agent/sub-agents), model, tokens, cost, iteration, duration, filesModified. Dashboard Repairs panel shows stats (total, success rate, total cost, avg tokens) + scrollable history with per-repair details.",
+    metadata: { topic: "repair-history" },
+  },
+  {
+    text: "Skill registry: auto-discovers skills from src/skills/ on startup. Each skill exports SKILL_NAME, SKILL_DESCRIPTION, SKILL_KEYWORDS, SKILL_USAGE. Registry matches skills to commands using token scoring (claw-code pattern). Matched skills get injected into agent prompts before AI calls. SQL skill auto-injects when building database features.",
+    metadata: { topic: "skill-registry" },
+  },
+  {
+    text: "Notifications: detects human-required errors (expired keys, billing, service down, certs, permissions, disk). Classifies errors as AI-fixable vs human-required using pattern matching. Generates AI summary (CHAT_MODEL). Fires before wasting tokens on repair. Console alert + dashboard event + optional webhook. Categories: auth, billing, service, cert, permission, disk.",
+    metadata: { topic: "notifications" },
+  },
+  {
+    text: "MCP integration: connect external tools via Model Context Protocol. Configure in .wolverine/mcp.json with per-server tool allowlists. Security: arg sanitization (secrets redacted before sending to MCP servers), result injection scanning, rate limiting per server, audit logging. Tools appear as mcp__server__tool in the agent. Supports stdio and HTTP transports.",
+    metadata: { topic: "mcp" },
+  },
+  {
+    text: "Demos: 7 demo servers in examples/demos/. Demo runner (examples/run-demo.js) copies demo into server/, runs wolverine, restores on exit. npm run demo:list shows all demos. Each demo is a proper Fastify server with routes/ that mirrors the real server/ structure. Tests: basic typo, multi-file, syntax error, secret leak, expired key, JSON config, null crash.",
+    metadata: { topic: "demos" },
+  },
+  {
+    text: "10 configurable models: REASONING_MODEL (multi-file agent), CODING_MODEL (code repair, Responses API for codex), CHAT_MODEL (simple text), TOOL_MODEL (function calling), CLASSIFIER_MODEL (routing), AUDIT_MODEL (injection detection), COMPACTING_MODEL (brain text compression), RESEARCH_MODEL (deep research), TEXT_EMBEDDING_MODEL (vectors). All in server/config/settings.json. Reasoning models auto-get 4x token limits for chain-of-thought.",
+    metadata: { topic: "model-slots" },
+  },
 ];
 
 class Brain {

@@ -1,7 +1,7 @@
 {
-  "name": "wolverine-nodejs",
-  "version": "0.1.0",
-  "description": "Self-healing Node.js backend powered by AI. Automatically detects, diagnoses, and repairs runtime errors using OpenAI.",
+  "name": "wolverine-node",
+  "version": "1.0.0",
+  "description": "Self-healing Node.js server framework powered by AI. Catches crashes, diagnoses errors, generates fixes, verifies, and restarts — automatically.",
   "main": "src/index.js",
   "bin": {
     "wolverine": "./bin/wolverine.js"
@@ -13,31 +13,51 @@
     "server": "node server/index.js",
     "demo": "node examples/run-demo.js",
     "demo:list": "node examples/run-demo.js --list",
-    "demo:01": "node examples/run-demo.js 01-basic-typo",
-    "demo:02": "node examples/run-demo.js 02-multi-file",
-    "demo:03": "node examples/run-demo.js 03-syntax-error",
-    "demo:04": "node examples/run-demo.js 04-secret-leak",
-    "demo:05": "node examples/run-demo.js 05-expired-key",
-    "demo:06": "node examples/run-demo.js 06-json-config",
-    "demo:07": "node examples/run-demo.js 07-null-crash",
     "test:pentest": "node tests/pentest-secrets.js"
   },
   "keywords": [
     "self-healing",
     "ai",
     "nodejs",
+    "server",
     "error-recovery",
+    "auto-repair",
+    "process-manager",
     "openai",
+    "fastify",
     "wolverine",
+    "devops",
+    "monitoring",
+    "analytics",
+    "dashboard",
+    "mcp",
+    "agent",
     "claude-code"
   ],
-  "author": "",
+  "author": "bobbyswhip",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bobbyswhip/Wolverine.git"
+  },
+  "homepage": "https://github.com/bobbyswhip/Wolverine#readme",
+  "bugs": {
+    "url": "https://github.com/bobbyswhip/Wolverine/issues"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "server/",
+    "examples/",
+    "PLATFORM.md",
+    "TELEMETRY.md",
+    "SERVER_BEST_PRACTICES.md",
+    "README.md"
+  ],
   "dependencies": {
     "chalk": "^4.1.2",
     "diff": "^7.0.0",
     "dotenv": "^16.4.7",
-    "express": "^5.2.1",
     "fastify": "^5.8.4",
     "openai": "^4.73.0"
   },
