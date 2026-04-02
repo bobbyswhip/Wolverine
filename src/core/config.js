@@ -26,25 +26,25 @@ function loadConfig() {
     }
   }
 
-  // Resolve model set: if provider is "anthropic", use _anthropic_models as base
+  // Resolve provider and model set
+  // "openai" → openai_settings, "anthropic" → anthropic_settings, "hybrid" → hybrid_settings
   const provider = process.env.WOLVERINE_PROVIDER || fileConfig.provider || "openai";
-  const modelSource = provider === "anthropic" && fileConfig._anthropic_models
-    ? fileConfig._anthropic_models
-    : fileConfig.models;
+  const settingsKey = `${provider}_settings`;
+  const modelSource = fileConfig[settingsKey] || fileConfig.openai_settings || fileConfig.models || {};
 
   _config = {
     provider,
 
     models: {
-      reasoning:  process.env.REASONING_MODEL    || modelSource?.reasoning  || "gpt-4o",
-      coding:     process.env.CODING_MODEL       || modelSource?.coding     || "gpt-4o",
-      chat:       process.env.CHAT_MODEL         || modelSource?.chat       || "gpt-4o-mini",
-      tool:       process.env.TOOL_MODEL         || modelSource?.tool       || "gpt-4o-mini",
-      classifier: process.env.CLASSIFIER_MODEL   || modelSource?.classifier || "gpt-4o-mini",
-      audit:      process.env.AUDIT_MODEL        || modelSource?.audit      || "gpt-4o-mini",
-      compacting: process.env.COMPACTING_MODEL   || modelSource?.compacting || "gpt-4o-mini",
-      research:   process.env.RESEARCH_MODEL     || modelSource?.research   || "gpt-4o",
-      embedding:  process.env.TEXT_EMBEDDING_MODEL || modelSource?.embedding || "text-embedding-3-small",
+      reasoning:  process.env.REASONING_MODEL    || modelSource.reasoning  || "gpt-4o",
+      coding:     process.env.CODING_MODEL       || modelSource.coding     || "gpt-4o",
+      chat:       process.env.CHAT_MODEL         || modelSource.chat       || "gpt-4o-mini",
+      tool:       process.env.TOOL_MODEL         || modelSource.tool       || "gpt-4o-mini",
+      classifier: process.env.CLASSIFIER_MODEL   || modelSource.classifier || "gpt-4o-mini",
+      audit:      process.env.AUDIT_MODEL        || modelSource.audit      || "gpt-4o-mini",
+      compacting: process.env.COMPACTING_MODEL   || modelSource.compacting || "gpt-4o-mini",
+      research:   process.env.RESEARCH_MODEL     || modelSource.research   || "gpt-4o",
+      embedding:  process.env.TEXT_EMBEDDING_MODEL || modelSource.embedding || "text-embedding-3-small",
     },
 
     server: {

@@ -5,9 +5,9 @@
     "env": "development"
   },
 
-  "provider": "anthropic",
+  "provider": "hybrid",
 
-  "models": {
+  "openai_settings": {
     "reasoning": "gpt-5.4-mini",
     "coding": "gpt-5.1-codex-mini",
     "chat": "gpt-5-nano",
@@ -19,7 +19,7 @@
     "embedding": "text-embedding-3-small"
   },
 
-  "_anthropic_models": {
+  "anthropic_settings": {
     "reasoning": "claude-sonnet-4-6",
     "coding": "claude-opus-4-6",
     "chat": "claude-haiku-4-5",
@@ -27,6 +27,18 @@
     "classifier": "claude-haiku-4-5",
     "audit": "claude-haiku-4-5",
     "compacting": "claude-sonnet-4-6",
+    "research": "claude-sonnet-4-6",
+    "embedding": "text-embedding-3-small"
+  },
+
+  "hybrid_settings": {
+    "reasoning": "claude-sonnet-4-6",
+    "coding": "claude-opus-4-6",
+    "chat": "claude-haiku-4-5",
+    "tool": "claude-opus-4-6",
+    "classifier": "claude-haiku-4-5",
+    "audit": "gpt-4o-mini",
+    "compacting": "gpt-4o-mini",
     "research": "claude-sonnet-4-6",
     "embedding": "text-embedding-3-small"
   },
