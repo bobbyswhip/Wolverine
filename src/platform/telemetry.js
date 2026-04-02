@@ -1,4 +1,5 @@
 const crypto = require("crypto");
+const path = require("path");
 
 /**
  * Telemetry — collects heartbeat data from all wolverine subsystems.
@@ -51,7 +52,7 @@ function collectHeartbeat(subsystems) {
     timestamp: Date.now(),
 
     server: {
-      name: process.env.WOLVERINE_INSTANCE_NAME || "unnamed",
+      name: process.env.WOLVERINE_INSTANCE_NAME || path.basename(process.cwd()) || "wolverine-server",
       port: parseInt(process.env.PORT, 10) || 3000,
       uptime: Math.round(process.uptime()),
       status: procMetrics.alive !== false ? "healthy" : "down",

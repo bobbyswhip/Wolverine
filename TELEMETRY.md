@@ -1,287 +1,114 @@
-# Wolverine Telemetry Setup
+# Telemetry Should Work Out of the Box
 
-Connect your Wolverine instance to the platform to broadcast heartbeats, track repairs, and monitor fleet health.
+## Problem
 
----
-
-## 1. Add env variables
-
-Add these to your `.env.local`:
+Right now every wolverine user has to manually add 4 env variables to connect to the platform:
 
 ```env
 WOLVERINE_PLATFORM_URL=https://api.wolverinenode.xyz
-WOLVERINE_PLATFORM_KEY=wlvk_platform_2026_a8f3e9b1c4d7
-WOLVERINE_INSTANCE_NAME=my-server-name
+WOLVERINE_PLATFORM_KEY=wlvk_...
+WOLVERINE_INSTANCE_NAME=my-server
 WOLVERINE_HEARTBEAT_INTERVAL_MS=60000
 ```
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `WOLVERINE_PLATFORM_URL` | Yes | Platform API base URL |
-| `WOLVERINE_PLATFORM_KEY` | Yes | Bearer token for authentication |
-| `WOLVERINE_INSTANCE_NAME` | Yes | Human-readable name for this instance |
-| `WOLVERINE_HEARTBEAT_INTERVAL_MS` | No | Heartbeat interval in ms (default: 60000) |
+This is wrong. Wolverine telemetry should work **zero-config** for every server.
 
----
+## What Needs to Change
 
-## 2. Add the telemetry module
+### 1. Hardcode the platform URL
 
-Create `src/platform/` in your Wolverine project with three files:
-
-### `src/platform/telemetry.js`
-
-Collects metrics from all Wolverine subsystems into a heartbeat payload.
+The platform URL is always `https://api.wolverinenode.xyz` — every wolverine instance talks to the same backend. This shouldn't be configurable, it should be a constant.
 
 ```js
-const os = require("os");
-const { v4: uuidv4 } = require("uuid");
-
-const INSTANCE_ID = process.env.WOLVERINE_INSTANCE_ID || `wlv_${uuidv4().slice(0, 8)}`;
-
-function collectHeartbeat({ processMonitor, routeProber, tokenTracker, repairHistory, backupManager, brain, notifier }) {
-  const mem = process.memoryUsage();
-
-  return {
-    instanceId: INSTANCE_ID,
-    version: require("../../package.json").version,
-    timestamp: Date.now(),
-
-    server: {
-      name: process.env.WOLVERINE_INSTANCE_NAME || "unnamed",
-      port: parseInt(process.env.PORT) || 3000,
-      uptime: process.uptime(),
-      status: "healthy",
-      pid: process.pid,
-    },
-
-    process: {
-      memoryMB: Math.round(mem.rss / 1024 / 1024),
-      cpuPercent: processMonitor?.getCpuPercent?.() || 0,
-      peakMemoryMB: processMonitor?.getPeakMemory?.() || Math.round(mem.rss / 1024 / 1024),
-    },
-
-    routes: {
-      total: routeProber?.getMetrics?.()?.total || 0,
-      healthy: routeProber?.getMetrics?.()?.healthy || 0,
-      unhealthy: routeProber?.getMetrics?.()?.unhealthy || 0,
-      slowest: routeProber?.getMetrics?.()?.slowest || null,
-    },
-
-    repairs: {
-      total: repairHistory?.getStats?.()?.total || 0,
-      successes: repairHistory?.getStats?.()?.successes || 0,
-      failures: repairHistory?.getStats?.()?.failures || 0,
-      lastRepair: repairHistory?.getStats?.()?.lastRepair || null,
-    },
-
-    usage: {
-      totalTokens: tokenTracker?.getAnalytics?.()?.totalTokens || 0,
-      totalCost: tokenTracker?.getAnalytics?.()?.totalCost || 0,
-      totalCalls: tokenTracker?.getAnalytics?.()?.totalCalls || 0,
-      byCategory: tokenTracker?.getAnalytics?.()?.byCategory || {},
-    },
-
-    brain: {
-      totalMemories: brain?.getStats?.()?.totalMemories || 0,
-      namespaces: brain?.getStats?.()?.namespaces || {},
-    },
-
-    backups: {
-      total: backupManager?.getStats?.()?.total || 0,
-      stable: backupManager?.getStats?.()?.stable || 0,
-      verified: backupManager?.getStats?.()?.verified || 0,
-      unstable: backupManager?.getStats?.()?.unstable || 0,
-    },
-
-    alerts: notifier?.getActiveAlerts?.() || [],
-  };
-}
-
-module.exports = { collectHeartbeat, INSTANCE_ID };
-```
-
-### `src/platform/heartbeat.js`
-
-Sends the heartbeat to the platform on an interval.
-
-```js
-const { collectHeartbeat } = require("./telemetry");
-const { HeartbeatQueue } = require("./queue");
-
+// Before (requires env setup)
 const PLATFORM_URL = process.env.WOLVERINE_PLATFORM_URL;
-const PLATFORM_KEY = process.env.WOLVERINE_PLATFORM_KEY;
-const INTERVAL = parseInt(process.env.WOLVERINE_HEARTBEAT_INTERVAL_MS) || 60000;
 
-let queue;
-let timer;
-
-async function sendHeartbeat(subsystems) {
-  if (!PLATFORM_URL || !PLATFORM_KEY) return;
-
-  const payload = collectHeartbeat(subsystems);
-
-  try {
-    const res = await fetch(`${PLATFORM_URL}/api/v1/heartbeat`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${PLATFORM_KEY}`,
-      },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(5000),
-    });
-
-    if (res.ok) {
-      // Drain queued heartbeats on success
-      await queue.drain(PLATFORM_URL, PLATFORM_KEY);
-    } else {
-      queue.enqueue(payload);
-    }
-  } catch (err) {
-    // Platform unreachable — queue for later
-    queue.enqueue(payload);
-  }
-}
-
-function startHeartbeat(subsystems) {
-  if (!PLATFORM_URL) return;
-
-  queue = new HeartbeatQueue();
-  console.log(`[Platform] Heartbeat → ${PLATFORM_URL} every ${INTERVAL / 1000}s`);
-
-  // Send first heartbeat after 5s (let subsystems initialize)
-  setTimeout(() => sendHeartbeat(subsystems), 5000);
-  timer = setInterval(() => sendHeartbeat(subsystems), INTERVAL);
-}
-
-function stopHeartbeat() {
-  if (timer) clearInterval(timer);
-}
-
-module.exports = { startHeartbeat, stopHeartbeat };
+// After (works out of the box)
+const PLATFORM_URL = process.env.WOLVERINE_PLATFORM_URL || "https://api.wolverinenode.xyz";
 ```
 
-### `src/platform/queue.js`
+### 2. Auto-generate the platform key on first run
 
-Queues heartbeats when the platform is unreachable.
+Instead of requiring users to get a key, wolverine should:
+1. On first startup, call `POST /api/v1/register` with the instance ID
+2. Platform returns a key and stores the new instance
+3. Wolverine saves the key to `.wolverine/platform-key`
+4. On subsequent startups, reads from the saved file
+
+```
+First run:
+  → No key found in .wolverine/platform-key
+  → POST https://api.wolverinenode.xyz/api/v1/register
+    Body: { instanceId: "wlv_abc123", name: "auto-generated" }
+  → Response: { key: "wlvk_auto_xxx", instanceId: "wlv_abc123" }
+  → Save key to .wolverine/platform-key
+  → Start heartbeats
+
+Subsequent runs:
+  → Read key from .wolverine/platform-key
+  → Start heartbeats immediately
+```
+
+### 3. Auto-name from the server directory
+
+Instead of requiring `WOLVERINE_INSTANCE_NAME`, derive it:
 
 ```js
-const fs = require("fs");
-const path = require("path");
-
-const QUEUE_PATH = path.join(process.cwd(), ".wolverine", "heartbeat-queue.jsonl");
-const MAX_ENTRIES = 1440; // 24 hours of heartbeats
-
-class HeartbeatQueue {
-  enqueue(payload) {
-    try {
-      fs.mkdirSync(path.dirname(QUEUE_PATH), { recursive: true });
-      fs.appendFileSync(QUEUE_PATH, JSON.stringify(payload) + "\n");
-
-      // Trim if over max
-      const lines = fs.readFileSync(QUEUE_PATH, "utf8").trim().split("\n");
-      if (lines.length > MAX_ENTRIES) {
-        fs.writeFileSync(QUEUE_PATH, lines.slice(-MAX_ENTRIES).join("\n") + "\n");
-      }
-    } catch {}
-  }
-
-  async drain(platformUrl, platformKey) {
-    if (!fs.existsSync(QUEUE_PATH)) return;
-
-    const lines = fs.readFileSync(QUEUE_PATH, "utf8").trim().split("\n").filter(Boolean);
-    if (lines.length === 0) return;
-
-    let sent = 0;
-    for (const line of lines) {
-      try {
-        const res = await fetch(`${platformUrl}/api/v1/heartbeat`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${platformKey}`,
-          },
-          body: line,
-          signal: AbortSignal.timeout(5000),
-        });
-        if (res.ok) sent++;
-        else break; // Stop draining if platform rejects
-      } catch {
-        break; // Stop draining if platform is down again
-      }
-    }
-
-    if (sent > 0) {
-      const remaining = lines.slice(sent);
-      if (remaining.length === 0) fs.unlinkSync(QUEUE_PATH);
-      else fs.writeFileSync(QUEUE_PATH, remaining.join("\n") + "\n");
-    }
-  }
-}
-
-module.exports = { HeartbeatQueue };
+const name = process.env.WOLVERINE_INSTANCE_NAME 
+  || path.basename(process.cwd())  // folder name: "my-api"
+  || "wolverine-server";
 ```
 
----
+### 4. Platform backend needs a registration endpoint
 
-## 3. Wire it up
-
-In your Wolverine startup code (e.g. `src/core/runner.js` or wherever subsystems are initialized), add:
-
-```js
-const { startHeartbeat } = require("../platform/heartbeat");
-
-// After all subsystems are initialized:
-startHeartbeat({ processMonitor, routeProber, tokenTracker, repairHistory, backupManager, brain, notifier });
+```
+POST /api/v1/register
+Body: { instanceId: "wlv_abc123", name: "my-api" }
+Response: { key: "wlvk_auto_xxx", instanceId: "wlv_abc123" }
 ```
 
----
+This endpoint:
+- Creates a new server record
+- Generates and returns an API key
+- Is rate-limited (1 registration per IP per minute)
+- No auth required (it IS the auth setup)
 
-## Heartbeat payload
+### 5. Opt-out instead of opt-in
 
-Each heartbeat is a single JSON POST (~2KB, gzipped <500 bytes) sent every 60 seconds:
+Telemetry should be ON by default. Users who don't want it set:
 
-```json
-{
-  "instanceId": "wlv_a1b2c3d4",
-  "version": "0.1.0",
-  "timestamp": 1775073247574,
-  "server": { "name": "my-api", "port": 3000, "uptime": 86400, "status": "healthy", "pid": 12345 },
-  "process": { "memoryMB": 128, "cpuPercent": 12, "peakMemoryMB": 256 },
-  "routes": { "total": 8, "healthy": 8, "unhealthy": 0 },
-  "repairs": { "total": 3, "successes": 2, "failures": 1, "lastRepair": { ... } },
-  "usage": { "totalTokens": 45000, "totalCost": 0.12, "totalCalls": 85, "byCategory": { ... } },
-  "brain": { "totalMemories": 45, "namespaces": { ... } },
-  "backups": { "total": 8, "stable": 3, "verified": 2, "unstable": 3 },
-  "alerts": []
-}
+```env
+WOLVERINE_TELEMETRY=false
 ```
 
----
+## Changes Required
 
-## Platform API
+### Wolverine side (this repo)
 
-All endpoints require `Authorization: Bearer <PLATFORM_KEY>` header.
+1. **`src/platform/heartbeat.js`** — default URL to `https://api.wolverinenode.xyz`
+2. **`src/platform/register.js`** (new) — auto-registration on first run
+3. **`src/platform/telemetry.js`** — auto-name from cwd
+4. **`.env.example`** — remove platform vars from required, add `WOLVERINE_TELEMETRY=true` as default
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/v1/heartbeat` | Send heartbeat (called automatically) |
-| `GET` | `/api/v1/servers` | List all connected instances |
-| `GET` | `/api/v1/servers/:id` | Single instance detail + history |
-| `GET` | `/api/v1/servers/:id/heartbeats` | Heartbeat time-series for charting |
-| `GET` | `/api/v1/servers/:id/repairs` | Repair history for one instance |
-| `GET` | `/api/v1/analytics` | Fleet-wide aggregated stats |
-| `GET` | `/api/v1/analytics/cost` | Cost breakdown by server/model/time |
-| `GET` | `/api/v1/alerts` | Active alerts across fleet |
-| `PATCH` | `/api/v1/alerts/:id` | Acknowledge or resolve an alert |
+### Platform backend side
 
----
+1. **`POST /api/v1/register`** — new endpoint, creates server + returns key
+2. **Rate limiting** — 1 reg/IP/minute
+3. **Key storage** — associate keys with server records
 
-## Design principles
+## Result
 
-- **Lightweight**: 1 request per 60s, ~2KB payload
-- **Idempotent**: Same heartbeat can be sent twice safely
-- **Offline-resilient**: Queues locally when platform is unreachable, replays on reconnect
-- **No secrets**: Secret redactor runs on payload before sending
-- **No source code**: Only metrics, redacted error messages, and stats
-- **TLS only**: Platform endpoint is HTTPS
+After this fix, a user does:
+
+```bash
+npm install wolverine-nodejs
+npm start
+```
+
+And their server automatically:
+- Registers with the platform
+- Gets a key
+- Starts sending heartbeats every 60s
+- Appears on the fleet dashboard
+
+Zero env variables. Zero setup. Just works.
