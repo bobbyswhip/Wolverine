@@ -45,6 +45,13 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
   const healStartTime = Date.now();
   const { redact, hasSecrets } = require("../security/secret-redactor");
 
+  // Guard: don't burn tokens on empty stderr (signal kills, clean shutdowns, etc.)
+  if (!stderr || stderr.trim().length < 10) {
+    console.log(chalk.yellow("\n🐺 Empty stderr — nothing to heal (likely signal kill)"));
+    if (logger) logger.warn(EVENT_TYPES.HEAL_FAILED, "Empty stderr — skipping heal");
+    return { healed: false, explanation: "Empty stderr — nothing to diagnose" };
+  }
+
   // Redact secrets BEFORE any processing, logging, or AI calls
   const safeStderr = redact(stderr);
 

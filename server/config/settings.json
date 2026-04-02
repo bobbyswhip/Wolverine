@@ -34,11 +34,11 @@
   "hybrid_settings": {
     "reasoning": "claude-haiku-4-5",
     "coding": "claude-sonnet-4-6",
-    "chat": "claude-haiku-4-5",
+    "chat": "gpt-5-nano",
     "tool": "claude-sonnet-4-6",
     "classifier": "gpt-4o-mini",
     "audit": "gpt-4o-mini",
-    "compacting": "claude-haiku-4-5",
+    "compacting": "gpt-4o-mini",
     "research": "o4-mini-deep-research",
     "embedding": "text-embedding-3-small"
   },

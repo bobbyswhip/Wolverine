@@ -405,9 +405,18 @@ class WolverineRunner {
 
       if (!this.running) return;
 
-      if (code === 0 || signal === "SIGTERM") {
+      // Clean exit or graceful shutdown — don't heal
+      if (code === 0 || signal === "SIGTERM" || signal === "SIGINT") {
         console.log(chalk.green("\n✅ Process exited cleanly."));
         this.logger.info(EVENT_TYPES.PROCESS_HEALTHY, "Process exited cleanly");
+        return;
+      }
+
+      // Killed by signal with no stderr — just restart, don't waste tokens healing
+      if (!this._stderrBuffer.trim() || this._stderrBuffer.trim().length < 10) {
+        console.log(chalk.yellow(`\n⚠️  Process killed (code: ${code}, signal: ${signal}) — no error to heal, restarting`));
+        this.logger.warn(EVENT_TYPES.PROCESS_CRASH, `Killed with no stderr (code: ${code}, signal: ${signal})`, { exitCode: code, signal });
+        this._spawn();
         return;
       }
 
