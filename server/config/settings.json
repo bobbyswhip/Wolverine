@@ -5,6 +5,8 @@
     "env": "development"
   },
 
+  "provider": "openai",
+
   "models": {
     "reasoning": "gpt-5.4-mini",
     "coding": "gpt-5.1-codex-mini",
@@ -14,6 +16,18 @@
     "audit": "gpt-4o-mini",
     "compacting": "gpt-4o-mini",
     "research": "o4-mini-deep-research",
+    "embedding": "text-embedding-3-small"
+  },
+
+  "_anthropic_models": {
+    "reasoning": "claude-sonnet-4-20250514",
+    "coding": "claude-sonnet-4-20250514",
+    "chat": "claude-haiku-4-20250414",
+    "tool": "claude-sonnet-4-20250514",
+    "classifier": "claude-haiku-4-20250414",
+    "audit": "claude-haiku-4-20250414",
+    "compacting": "claude-haiku-4-20250414",
+    "research": "claude-sonnet-4-20250514",
     "embedding": "text-embedding-3-small"
   },
 
