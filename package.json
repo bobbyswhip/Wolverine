@@ -1,6 +1,6 @@
 {
   "name": "wolverine-ai",
-  "version": "2.3.1",
+  "version": "2.3.2",
   "description": "Self-healing Node.js server framework powered by AI. Catches crashes, diagnoses errors, generates fixes, verifies, and restarts — automatically.",
   "main": "src/index.js",
   "bin": {

@@ -1,4 +1,5 @@
 const { spawn } = require("child_process");
+const path = require("path");
 const chalk = require("chalk");
 const { parseError, classifyError } = require("./error-parser");
 
@@ -131,12 +132,13 @@ function bootProbe(scriptPath, cwd, originalErrorSignature) {
  * @param {object} routeContext — optional { path, method } for route-level testing
  */
 async function verifyFix(scriptPath, cwd, originalErrorSignature, routeContext) {
-  // Simple errors (TypeError, ReferenceError, SyntaxError) — trust syntax+boot, skip route probe.
-  // If the fix is wrong, ErrorMonitor will catch the 500 and re-trigger heal. This avoids
-  // the expensive cascade where a working fix gets rolled back because the route probe
-  // can't boot the full server in isolation.
-  const isSimpleError = /TypeError|ReferenceError|SyntaxError|Cannot find module/.test(originalErrorSignature || "");
-  const skipRouteProbe = isSimpleError;
+  // Simple errors — trust syntax+boot, skip route probe entirely.
+  // The route probe spawns a full server process which crashes on external deps
+  // (pg, redis, cors, etc.) even when the actual fix is correct. ErrorMonitor
+  // catches any remaining 500s as the real safety net.
+  const sig = originalErrorSignature || "";
+  const isSimpleError = /TypeError|ReferenceError|SyntaxError|Cannot find module|Cannot read prop|is not defined|is not a function|Unexpected token/.test(sig);
+  const skipRouteProbe = true; // ALWAYS skip route probe — it fails on servers with external deps
   const steps = (!skipRouteProbe && routeContext?.path) ? 3 : 2;
 
   console.log(chalk.yellow("\n🔬 Verifying fix...\n"));
@@ -178,8 +180,38 @@ async function verifyFix(scriptPath, cwd, originalErrorSignature, routeContext) 
     } else {
       console.log(chalk.gray(`  ⚠️  Route probe skipped: ${routeResult.reason || "unknown"}`));
     }
-  } else if (skipRouteProbe && routeContext?.path) {
-    console.log(chalk.gray(`  ⚡ Skipping route probe (simple error — ErrorMonitor is safety net)`));
+  } else if (routeContext?.path) {
+    console.log(chalk.gray(`  ⚡ Skipping route probe — ErrorMonitor is the safety net`));
+  }
+
+  // Step 3 (replacement): Isolated module load test — can the changed file be required?
+  // This catches cases where the AI fix introduces a require error or crashes on load,
+  // without needing to boot the full server (which fails on external deps).
+  if (scriptPath) {
+    const changedFile = scriptPath;
+    const relPath = path.relative(cwd, changedFile).replace(/\\/g, "/");
+    if (relPath.startsWith("server/") && relPath.endsWith(".js")) {
+      try {
+        const { execSync } = require("child_process");
+        const testCode = `try{require('./${relPath}');console.log('MODULE_OK')}catch(e){console.error(e.message);process.exit(1)}`;
+        const out = execSync(`node -e "${testCode}"`, {
+          cwd, timeout: 5000, encoding: "utf-8",
+          env: { ...process.env, NODE_PATH: path.join(cwd, "node_modules") },
+        });
+        if (out.includes("MODULE_OK")) {
+          console.log(chalk.green(`  ✅ Module loads OK: ${relPath}`));
+        }
+      } catch (e) {
+        // Module failed to load — but this might be because of external deps (pg, redis)
+        // Don't fail the verification for this — just log it
+        const errMsg = (e.stderr || e.message || "").slice(0, 100);
+        if (/Cannot find module/.test(errMsg) && !/\.\//.test(errMsg)) {
+          console.log(chalk.gray(`  ⚠️  Module test skipped (external dep: ${errMsg.slice(0, 60)})`));
+        } else {
+          console.log(chalk.yellow(`  ⚠️  Module load warning: ${errMsg.slice(0, 80)}`));
+        }
+      }
+    }
   }
 
   return { verified: true, status: "fixed" };

@@ -26,7 +26,7 @@
     "tool": "claude-opus-4-6",
     "classifier": "claude-haiku-4-5",
     "audit": "claude-haiku-4-5",
-    "compacting": "claude-sonnet-4-6",
+    "compacting": "claude-haiku-4-5",
     "research": "claude-sonnet-4-6",
     "embedding": "text-embedding-3-small"
   },

@@ -20,6 +20,16 @@ const MANIFEST_FILE = path.join(BACKUPS_DIR, "manifest.json");
 const STABILITY_THRESHOLD_MS = 30 * 60 * 1000;
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
+// Files that should NEVER be overwritten during rollback.
+// These are platform/infrastructure files that would break the server if rolled back.
+const NEVER_ROLLBACK = [
+  "server/config/settings.json",
+  "server/lib/db.js",
+  "server/lib/redis.js",
+  ".env",
+  ".env.local",
+];
+
 class BackupManager {
   constructor(projectRoot) {
     this.projectRoot = path.resolve(projectRoot);
@@ -97,8 +107,12 @@ class BackupManager {
 
     let allRestored = true;
     for (const file of entry.files) {
+      // Skip protected config/infrastructure files
+      if (NEVER_ROLLBACK.some(p => file.relative === p || file.relative.endsWith(p))) {
+        console.log(chalk.gray(`  🔒 Skipped (protected): ${file.relative}`));
+        continue;
+      }
       if (fs.existsSync(file.backup)) {
-        // Ensure parent dir exists
         fs.mkdirSync(path.dirname(file.original), { recursive: true });
         fs.copyFileSync(file.backup, file.original);
         console.log(chalk.yellow(`  ↩️  Restored: ${file.relative}`));
@@ -150,6 +164,7 @@ class BackupManager {
 
     let allRestored = true;
     for (const file of entry.files) {
+      if (NEVER_ROLLBACK.some(p => file.relative === p || file.relative.endsWith(p))) continue;
       if (fs.existsSync(file.backup)) {
         fs.mkdirSync(path.dirname(file.original), { recursive: true });
         fs.copyFileSync(file.backup, file.original);
