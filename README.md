@@ -450,6 +450,8 @@ Three layers prevent token waste:
 
 | Technique | What it does | Cost |
 |-----------|-------------|------|
+| **Prompt caching** | Anthropic system prompt cached server-side — 90% cheaper on repeat calls | 12-16K tokens saved per heal |
+| **Tool result truncation** | Tool output capped at 4K chars — prevents context blowup from large reads | Up to 30K saved per turn |
 | **Zero-cost compaction** | Extracts structural signals (tools, files, errors) from history — no LLM call | $0.00 |
 | **Token estimation** | `text.length / 4` approximation — fast budget checks without tokenizer | 0ms |
 | **Error-graceful tools** | Tool errors returned as `[ERROR]` results, not thrown — agent decides next step | More resilient |

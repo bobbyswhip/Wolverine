@@ -13,6 +13,8 @@ function _extractTokens(usage) {
   return {
     input: usage.prompt_tokens || usage.input_tokens || 0,
     output: usage.completion_tokens || usage.output_tokens || 0,
+    cacheCreation: usage.cache_creation_input_tokens || 0,
+    cacheRead: usage.cache_read_input_tokens || 0,
   };
 }
 
@@ -188,9 +190,16 @@ async function _anthropicCall({ model, systemPrompt, userPrompt, maxTokens, tool
     messages: [{ role: "user", content: userPrompt }],
   };
 
-  if (systemPrompt) params.system = systemPrompt;
+  // Prompt caching: mark system prompt for Anthropic's server-side cache.
+  // Same system prompt across agent turns gets cached after first call — 90% cheaper.
+  if (systemPrompt) {
+    params.system = [{
+      type: "text",
+      text: systemPrompt,
+      cache_control: { type: "ephemeral" },
+    }];
+  }
 
-  // Convert OpenAI-style tools to Anthropic format
   if (tools && tools.length > 0) {
     params.tools = tools.map(_toAnthropicTool).filter(Boolean);
     if (toolChoice === "required") params.tool_choice = { type: "any" };
@@ -270,7 +279,14 @@ async function _anthropicCallWithHistory({ model, messages, tools, maxTokens }) 
     messages: merged,
   };
 
-  if (systemPrompt) params.system = systemPrompt;
+  // Prompt caching for multi-turn: system prompt cached across all turns
+  if (systemPrompt) {
+    params.system = [{
+      type: "text",
+      text: systemPrompt,
+      cache_control: { type: "ephemeral" },
+    }];
+  }
 
   if (tools && tools.length > 0) {
     params.tools = tools.map(_toAnthropicTool).filter(Boolean);

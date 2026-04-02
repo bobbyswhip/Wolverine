@@ -548,10 +548,19 @@ Project root: ${this.cwd}${primaryFile ? `\nPrimary crash file: ${primaryFile}` 
         // Post-hook: audit/modify result
         _runPostHook(toolCall.function?.name, toolCall.function?.arguments, result.content, isError, this.cwd);
 
+        // Tool result truncation: cap at 4K chars to prevent context blowup.
+        // One grep_code can return 30K+ chars — the model doesn't need all of it.
+        const MAX_TOOL_RESULT = 4000;
+        let toolContent = isError ? `[ERROR] ${result.content}` : result.content;
+        if (toolContent && toolContent.length > MAX_TOOL_RESULT) {
+          const truncated = toolContent.length - MAX_TOOL_RESULT;
+          toolContent = toolContent.slice(0, MAX_TOOL_RESULT) + `\n\n... (truncated ${truncated} chars. Use offset/limit for large results.)`;
+        }
+
         this.messages.push({
           role: "tool",
           tool_call_id: toolCall.id,
-          content: isError ? `[ERROR] ${result.content}` : result.content,
+          content: toolContent,
         });
 
         if (result.done) {
