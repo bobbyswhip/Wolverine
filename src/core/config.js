@@ -15,14 +15,14 @@ let _config = null;
 function loadConfig() {
   if (_config) return _config;
 
-  // Try loading wolverine.config.js
-  const configPath = path.join(process.cwd(), "wolverine.config.js");
+  // Load from server/config/settings.json
+  const configPath = path.join(process.cwd(), "server", "config", "settings.json");
   let fileConfig = {};
   if (fs.existsSync(configPath)) {
     try {
-      fileConfig = require(configPath);
+      fileConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
     } catch (err) {
-      console.log(`  ⚠️  Failed to load wolverine.config.js: ${err.message}`);
+      console.log(`  ⚠️  Failed to load server/config/settings.json: ${err.message}`);
     }
   }
 

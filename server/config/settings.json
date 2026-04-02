@@ -4,15 +4,51 @@
     "version": "1.0.0",
     "env": "development"
   },
+
+  "models": {
+    "reasoning": "gpt-5.4-mini",
+    "coding": "gpt-5.1-codex-mini",
+    "chat": "gpt-5-nano",
+    "tool": "gpt-5.4-mini",
+    "classifier": "gpt-4o-mini",
+    "audit": "gpt-4o-mini",
+    "compacting": "gpt-4o-mini",
+    "research": "o4-mini-deep-research",
+    "embedding": "text-embedding-3-small"
+  },
+
+  "server": {
+    "port": 6969,
+    "maxRetries": 3,
+    "maxMemoryMB": 512
+  },
+
+  "telemetry": {
+    "enabled": true,
+    "heartbeatIntervalMs": 60000
+  },
+
+  "rateLimiting": {
+    "maxCallsPerWindow": 32,
+    "windowMs": 100000,
+    "minGapMs": 5000,
+    "maxTokensPerHour": 1000000
+  },
+
+  "healthCheck": {
+    "intervalMs": 15000,
+    "timeoutMs": 5000,
+    "failThreshold": 3,
+    "startDelayMs": 10000
+  },
+
+  "dashboard": {},
+
   "cors": {
     "enabled": true,
     "origins": ["http://localhost:3000"]
   },
-  "rateLimit": {
-    "enabled": false,
-    "windowMs": 60000,
-    "maxRequests": 100
-  },
+
   "logging": {
     "level": "info",
     "requests": true,
