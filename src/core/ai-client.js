@@ -335,7 +335,7 @@ async function _chatCallWithHistory(openai, { model, messages, tools, maxTokens 
  * Send an error context to OpenAI and get a repair patch back.
  * Uses CODING_MODEL — routes to correct API automatically.
  */
-async function requestRepair({ filePath, sourceCode, errorMessage, stackTrace }) {
+async function requestRepair({ filePath, sourceCode, backupSourceCode, errorMessage, stackTrace }) {
   const model = getModel("coding");
 
   const systemPrompt = "You are a Node.js debugging expert. Respond with ONLY valid JSON, no markdown fences.";
@@ -357,7 +357,7 @@ ${errorMessage}
 ${stackTrace}
 \`\`\`
 
-## Instructions
+${backupSourceCode ? `## Last Known Working Version\n\`\`\`javascript\n${backupSourceCode}\n\`\`\`\n\nCompare the current broken code with this working version. If the broken code added something that doesn't work, REVERT that addition rather than patching around it.\n` : ""}## Instructions
 1. Identify the root cause of the error.
 2. Not all errors are code bugs. Choose the correct fix type:
    - "Cannot find module 'X'" (not starting with ./ or ../) = missing npm package → use "commands" to npm install

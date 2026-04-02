@@ -47,6 +47,12 @@
     "startDelayMs": 10000
   },
 
+  "errorMonitor": {
+    "defaultThreshold": 3,
+    "windowMs": 30000,
+    "cooldownMs": 60000
+  },
+
   "dashboard": {},
 
   "cors": {

@@ -871,6 +871,7 @@ ${context ? "\nBrain:\n" + context : ""}`,
       backups: this.backupManager ? this.backupManager.getStats() : {},
       health: this.healthMonitor ? this.healthMonitor.getStats() : {},
       errorMonitor: this.errorMonitor ? this.errorMonitor.getStats() : {},
+      heal: this.runner ? this.runner._healStatus : null,
     }));
   }
 

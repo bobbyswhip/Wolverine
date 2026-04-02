@@ -83,16 +83,22 @@ async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager
   let openaiClient = null;
   try { openaiClient = getClient(); } catch { /* will fail later */ }
 
-  const injectionResult = await detectInjection(parsed.errorMessage, parsed.stackTrace, { openaiClient });
+  // Skip injection scan on empty/trivial stderr (prevents false positives on clean restarts)
+  const stderrContent = (parsed.errorMessage || "").trim() + (parsed.stackTrace || "").trim();
+  if (stderrContent.length < 20) {
+    console.log(chalk.gray("  🛡️  Stderr too short for injection scan — skipping"));
+  } else {
+    const injectionResult = await detectInjection(parsed.errorMessage, parsed.stackTrace, { openaiClient });
 
-  if (logger) logger.info(EVENT_TYPES.HEAL_INJECTION_SCAN, `Injection scan: ${injectionResult.safe ? "clean" : "BLOCKED"}`, injectionResult);
+    if (logger) logger.info(EVENT_TYPES.HEAL_INJECTION_SCAN, `Injection scan: ${injectionResult.safe ? "clean" : "BLOCKED"}`, injectionResult);
 
-  if (!injectionResult.safe) {
-    console.log(chalk.red("  🚨 BLOCKED: Potential prompt injection detected."));
-    if (logger) logger.critical(EVENT_TYPES.SECURITY_INJECTION_DETECTED, "Injection detected — repair blocked", injectionResult);
-    return { healed: false, explanation: "Prompt injection detected — repair blocked" };
+    if (!injectionResult.safe) {
+      console.log(chalk.red("  🚨 BLOCKED: Potential prompt injection detected."));
+      if (logger) logger.critical(EVENT_TYPES.SECURITY_INJECTION_DETECTED, "Injection detected — repair blocked", injectionResult);
+      return { healed: false, explanation: "Prompt injection detected — repair blocked" };
+    }
+    console.log(chalk.green("  ✅ Clean — no injection detected."));
   }
-  console.log(chalk.green("  ✅ Clean — no injection detected."));
 
   // 4b. Check if this is a human-required issue (expired keys, billing, etc.)
   if (notifier) {
@@ -127,6 +133,26 @@ async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager
 
   // 5. Read the source file (if available) + get brain context
   const sourceCode = hasFile ? sandbox.readFile(parsed.filePath) : "";
+
+  // 5b. Get last known good version from backup (helps AI revert vs patch)
+  let backupSourceCode = "";
+  if (hasFile && backupManager) {
+    try {
+      const fs = require("fs");
+      const path = require("path");
+      const stableBackups = backupManager.getAll().filter(b => b.status === "stable" || b.status === "verified");
+      if (stableBackups.length > 0) {
+        const latest = stableBackups[stableBackups.length - 1];
+        const relPath = path.relative(cwd, parsed.filePath).replace(/[/\\]/g, "__");
+        const backupFile = path.join(cwd, ".wolverine", "backups", latest.id, relPath);
+        if (fs.existsSync(backupFile)) {
+          backupSourceCode = fs.readFileSync(backupFile, "utf-8");
+          if (backupSourceCode === sourceCode) backupSourceCode = ""; // Same — no useful diff
+          else console.log(chalk.gray(`  📋 Found last known good version (backup ${latest.id})`));
+        }
+      }
+    } catch { /* non-fatal */ }
+  }
 
   let brainContext = "";
   // Inject relevant skill context (claw-code: pre-enrich prompt with matched tools)
@@ -183,7 +209,7 @@ async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager
         console.log(chalk.yellow(`  🧠 Fast path (${getModel("coding")})...`));
         try {
           const repair = await requestRepair({
-            filePath: parsed.filePath, sourceCode,
+            filePath: parsed.filePath, sourceCode, backupSourceCode,
             errorMessage: parsed.errorMessage, stackTrace: parsed.stackTrace,
           });
           rateLimiter.record(errorSignature);
@@ -243,7 +269,7 @@ async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager
         const agentResult = await agent.run({
           errorMessage: parsed.errorMessage, stackTrace: parsed.stackTrace,
           primaryFile: parsed.filePath, sourceCode,
-          brainContext: fullContext,
+          brainContext: fullContext + (backupSourceCode ? `\n\nLAST KNOWN WORKING VERSION of ${parsed.filePath}:\n${backupSourceCode}\nIf the broken code added something that doesn't work, revert it rather than patching around it.` : ""),
         });
         rateLimiter.record(errorSignature, agentResult.totalTokens);
 

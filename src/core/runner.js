@@ -139,6 +139,7 @@ class WolverineRunner {
     this._stabilityTimer = null;
     this._stderrBuffer = "";
     this._healInProgress = false;
+    this._healStatus = null; // { active, file, error, phase, startedAt, iteration }
   }
 
   async start() {
@@ -410,6 +411,7 @@ class WolverineRunner {
   async _healAndRestart() {
     if (this._healInProgress) return;
     this._healInProgress = true;
+    this._healStatus = { active: true, error: this._stderrBuffer.slice(0, 200), phase: "diagnosing", startedAt: Date.now() };
 
     try {
       const result = await heal({
@@ -429,14 +431,23 @@ class WolverineRunner {
 
       if (result.healed) {
         this._lastBackupId = result.backupId;
-        const mode = result.mode === "agent" ? "multi-file agent" : "fast path";
+        this.retryCount = 0; // Fresh start after successful heal
+        const mode = result.mode === "agent" ? "multi-file agent" : result.mode || "fast path";
         console.log(chalk.green(`\n🐺 Wolverine healed the error via ${mode}! Restarting...\n`));
 
         if (result.agentStats) {
           console.log(chalk.gray(`   Agent stats: ${result.agentStats.turns} turns, ${result.agentStats.tokens} tokens, ${result.agentStats.filesModified.length} files modified`));
         }
 
+        // Broadcast heal success to dashboard SSE
+        if (this.logger) {
+          this.logger.info("heal.success", `Healed via ${mode}: ${result.explanation?.slice(0, 100)}`, {
+            mode, file: result.agentStats?.filesModified?.[0], duration: Date.now() - (this._healStatus?.startedAt || Date.now()),
+          });
+        }
+
         this._healInProgress = false;
+        this._healStatus = null;
         this._spawn();
       } else {
         console.log(chalk.red(`\n🐺 Wolverine could not heal: ${result.explanation}`));
@@ -479,6 +490,7 @@ class WolverineRunner {
     this._healInProgress = true;
 
     console.log(chalk.yellow(`\n🐺 Wolverine healing caught error on ${routePath}...`));
+    this._healStatus = { active: true, route: routePath, error: errorDetails?.message?.slice(0, 200), phase: "diagnosing", startedAt: Date.now() };
     this.logger.info("heal.error_monitor", `Healing caught 500 on ${routePath}`, { route: routePath });
 
     // Build a synthetic stderr from the error details
@@ -506,16 +518,28 @@ class WolverineRunner {
 
       if (result.healed) {
         console.log(chalk.green(`\n🐺 Wolverine healed ${routePath} via ${result.mode}! Restarting...\n`));
+        this.retryCount = 0; // Fresh start after successful heal
         this.errorMonitor.clearRoute(routePath);
+
+        // Broadcast heal success to dashboard SSE
+        if (this.logger) {
+          this.logger.info("heal.success", `Healed ${routePath} via ${result.mode}: ${result.explanation?.slice(0, 100)}`, {
+            mode: result.mode, route: routePath, duration: Date.now() - (this._healStatus?.startedAt || Date.now()),
+          });
+        }
+
         this._healInProgress = false;
+        this._healStatus = null;
         this.restart();
       } else {
         console.log(chalk.red(`\n🐺 Could not heal ${routePath}: ${result.explanation}`));
         this._healInProgress = false;
+        this._healStatus = null;
       }
     } catch (err) {
       console.log(chalk.red(`\n🐺 Error during heal: ${err.message}`));
       this._healInProgress = false;
+      this._healStatus = null;
     }
   }
 
