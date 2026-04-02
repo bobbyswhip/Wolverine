@@ -62,6 +62,7 @@ class DashboardServer {
       if (req.url === "/api/brain") return this._handleBrain(req, res);
       if (req.url === "/api/usage") return this._handleUsage(req, res);
       if (req.url === "/api/repairs") return this._handleRepairs(req, res);
+      if (req.url === "/api/system") return this._handleSystem(req, res);
       if (req.url === "/api/process") return this._handleProcess(req, res);
       if (req.url === "/api/routes") return this._handleRoutes(req, res);
       if (req.url === "/api/usage/history") return this._handleUsageHistory(req, res);
@@ -883,6 +884,12 @@ ${context ? "\nBrain:\n" + context : ""}`,
   _handleUsageHistory(req, res) {
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify(this.tokenTracker ? this.tokenTracker.getAggregates() : {}));
+  }
+
+  _handleSystem(req, res) {
+    const { detect } = require("../core/system-info");
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(detect()));
   }
 
   _handleProcess(req, res) {

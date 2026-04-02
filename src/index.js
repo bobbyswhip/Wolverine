@@ -29,6 +29,9 @@ const { Brain } = require("./brain/brain");
 const { VectorStore } = require("./brain/vector-store");
 const { embed, embedBatch, compact } = require("./brain/embedder");
 const { scanProject } = require("./brain/function-map");
+const { detect: detectSystem } = require("./core/system-info");
+const { ClusterManager } = require("./core/cluster-manager");
+const { loadConfig, getConfig } = require("./core/config");
 const { sqlGuard, SafeDB, scanForInjection } = require("./skills/sql");
 
 module.exports = {
@@ -80,6 +83,10 @@ module.exports = {
   embedBatch,
   compact,
   scanProject,
+  detectSystem,
+  ClusterManager,
+  loadConfig,
+  getConfig,
   // Skills
   sqlGuard,
   SafeDB,

@@ -23,6 +23,11 @@
     "maxMemoryMB": 512
   },
 
+  "cluster": {
+    "mode": "auto",
+    "workers": 0
+  },
+
   "telemetry": {
     "enabled": true,
     "heartbeatIntervalMs": 60000
