@@ -96,7 +96,7 @@ const SEED_DOCS = [
     metadata: { topic: "skill-sql-patterns" },
   },
   {
-    text: "Database best practices enforced by SQL skill: ALWAYS use parameterized queries with ? placeholders, NEVER concatenate user input into SQL strings, use connection pooling, handle connection errors gracefully, use WAL journal mode for SQLite, enable foreign keys, close connections on process exit. The SafeDB class throws an error if string concatenation is detected in a query.",
+    text: "Database best practices enforced by SQL skill: ALWAYS use parameterized queries with ? placeholders, NEVER concatenate user input into SQL strings. SafeDB is cluster-safe: SQLite uses WAL mode (concurrent reads + serialized writes), busy_timeout=5s (waits instead of SQLITE_BUSY), write lock queue (prevents corruption in multi-worker), WAL checkpoint on close. Each worker gets its own connection. Use db.transaction(fn) for atomic batch writes. For PostgreSQL/MySQL, each worker gets its own pool.",
     metadata: { topic: "skill-sql-best-practices" },
   },
   {

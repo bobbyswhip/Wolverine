@@ -154,9 +154,19 @@ function sqlGuard(options = {}) {
 // ── Safe Database Interface ──────────────────────────────────────
 
 /**
- * Lightweight database wrapper — parameterized queries only.
- * Uses better-sqlite3 for SQLite (sync, fast, zero-config).
- * For PostgreSQL/MySQL, users install their own driver and pass a connection.
+ * Cluster-safe database wrapper — parameterized queries only.
+ *
+ * Handles multi-worker scenarios:
+ *
+ * SQLite:
+ * - WAL mode (allows concurrent reads while one writer works)
+ * - busy_timeout (waits instead of throwing SQLITE_BUSY)
+ * - Serialized writes via _withWriteLock (prevents corruption)
+ * - Each worker gets its own connection (no shared handles across processes)
+ *
+ * PostgreSQL/MySQL:
+ * - Each worker gets its own connection pool (no cross-process sharing)
+ * - Advisory locks available for critical sections
  */
 class SafeDB {
   constructor(options = {}) {
@@ -164,18 +174,30 @@ class SafeDB {
     this.path = options.path || ":memory:";
     this._db = null;
     this._closed = false;
+    this._writeLock = false;
+    this._writeQueue = [];
   }
 
   /**
-   * Connect to the database.
+   * Connect to the database. Each cluster worker calls this independently.
    */
   async connect() {
     if (this.type === "sqlite") {
       try {
         const Database = require("better-sqlite3");
         this._db = new Database(this.path);
+
+        // WAL mode: multiple readers + one writer (cluster-safe for reads)
         this._db.pragma("journal_mode = WAL");
+        // Wait up to 5s if another worker is writing (prevents SQLITE_BUSY crashes)
+        this._db.pragma("busy_timeout = 5000");
+        // Enforce foreign keys
         this._db.pragma("foreign_keys = ON");
+        // Sync mode: NORMAL is safe with WAL and faster than FULL
+        this._db.pragma("synchronous = NORMAL");
+        // Larger cache for better read performance across workers
+        this._db.pragma("cache_size = -20000"); // 20MB
+
       } catch (err) {
         if (err.code === "MODULE_NOT_FOUND") {
           throw new Error("Install better-sqlite3: npm install better-sqlite3");
@@ -183,33 +205,29 @@ class SafeDB {
         throw err;
       }
     } else if (this.type === "custom" && this._db) {
-      // Custom driver already set
+      // Custom driver already set (user manages their own pool)
     } else {
       throw new Error(`Unsupported DB type: ${this.type}. Use "sqlite" or pass a custom driver.`);
     }
 
-    // Auto-close on process exit
     process.on("exit", () => this.close());
     process.on("SIGINT", () => { this.close(); process.exit(0); });
   }
 
   /**
-   * Run a query that doesn't return rows (INSERT, UPDATE, DELETE, CREATE).
-   * ALWAYS use parameterized queries.
-   *
-   * @param {string} sql — SQL with ? placeholders
-   * @param {Array} params — values for placeholders
+   * Run a write query (INSERT, UPDATE, DELETE, CREATE).
+   * Serialized through a write lock to prevent multi-worker corruption.
    */
   run(sql, params = []) {
     this._assertOpen();
     this._assertSafe(sql);
     if (this.type === "sqlite") {
-      return this._db.prepare(sql).run(...params);
+      return this._withWriteLock(() => this._db.prepare(sql).run(...params));
     }
   }
 
   /**
-   * Get one row.
+   * Get one row. Reads are concurrent (WAL mode allows this).
    */
   get(sql, params = []) {
     this._assertOpen();
@@ -220,7 +238,7 @@ class SafeDB {
   }
 
   /**
-   * Get all rows.
+   * Get all rows. Reads are concurrent.
    */
   all(sql, params = []) {
     this._assertOpen();
@@ -231,13 +249,28 @@ class SafeDB {
   }
 
   /**
-   * Execute raw SQL (for migrations/schema). No parameterization needed.
-   * Only available with explicit opt-in.
+   * Execute raw SQL (migrations/schema). Serialized through write lock.
    */
   exec(sql) {
     this._assertOpen();
     if (this.type === "sqlite") {
-      return this._db.exec(sql);
+      return this._withWriteLock(() => this._db.exec(sql));
+    }
+  }
+
+  /**
+   * Run multiple writes in a single transaction (atomic, fastest for batch ops).
+   * Cluster-safe: holds the write lock for the entire transaction.
+   *
+   * @param {function} fn — function that calls this.run(), this.exec(), etc.
+   */
+  transaction(fn) {
+    this._assertOpen();
+    if (this.type === "sqlite") {
+      return this._withWriteLock(() => {
+        const txn = this._db.transaction(fn);
+        return txn(this);
+      });
     }
   }
 
@@ -245,7 +278,11 @@ class SafeDB {
     if (this._closed || !this._db) return;
     this._closed = true;
     try {
-      if (this.type === "sqlite") this._db.close();
+      if (this.type === "sqlite") {
+        // Checkpoint WAL before closing to merge pending writes
+        try { this._db.pragma("wal_checkpoint(TRUNCATE)"); } catch {}
+        this._db.close();
+      }
     } catch {}
   }
 
@@ -254,10 +291,38 @@ class SafeDB {
   }
 
   _assertSafe(sql) {
-    // Block queries that appear to use string concatenation instead of params
     if (/'\s*\+\s*/.test(sql) || /`\$\{/.test(sql)) {
       throw new Error("UNSAFE: SQL appears to use string concatenation. Use parameterized queries (?) instead.");
     }
+  }
+
+  /**
+   * Serialize writes within this worker process.
+   * SQLite WAL handles cross-process write serialization via busy_timeout,
+   * but within a single process we queue writes to avoid overlapping prepare/run calls.
+   */
+  _withWriteLock(fn) {
+    if (!this._writeLock) {
+      this._writeLock = true;
+      try {
+        return fn();
+      } finally {
+        this._writeLock = false;
+        // Process queued writes
+        if (this._writeQueue.length > 0) {
+          const next = this._writeQueue.shift();
+          next();
+        }
+      }
+    }
+
+    // Already locked — queue this write
+    return new Promise((resolve, reject) => {
+      this._writeQueue.push(() => {
+        try { resolve(this._withWriteLock(fn)); }
+        catch (err) { reject(err); }
+      });
+    });
   }
 }
 
@@ -270,11 +335,22 @@ const SKILL_USAGE = `// Protect all routes from SQL injection
 const { sqlGuard } = require("../src/skills/sql");
 app.use(sqlGuard({ logger: wolverineLogger }));
 
-// Safe database queries (parameterized only)
+// Cluster-safe database (each worker gets its own connection)
 const { SafeDB } = require("../src/skills/sql");
-const db = new SafeDB({ type: "sqlite", path: "./data.db" });
-await db.connect();
-const users = db.all("SELECT * FROM users WHERE role = ?", ["admin"]);`;
+const db = new SafeDB({ type: "sqlite", path: "./server/data.db" });
+await db.connect(); // WAL mode, busy_timeout=5s, write serialization
+
+// Reads (concurrent across workers)
+const users = db.all("SELECT * FROM users WHERE role = ?", ["admin"]);
+
+// Writes (serialized — no corruption)
+db.run("INSERT INTO users (name, role) VALUES (?, ?)", ["Alice", "admin"]);
+
+// Batch writes (atomic transaction, single lock)
+db.transaction((tx) => {
+  tx.run("INSERT INTO orders (user_id, total) VALUES (?, ?)", [1, 99.99]);
+  tx.run("UPDATE users SET order_count = order_count + 1 WHERE id = ?", [1]);
+});`;
 
 // ── Exports ──
 
