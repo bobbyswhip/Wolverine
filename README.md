@@ -446,6 +446,25 @@ Three layers prevent token waste:
 
 ---
 
+## Agent Efficiency (claw-code patterns)
+
+| Technique | What it does | Cost |
+|-----------|-------------|------|
+| **Zero-cost compaction** | Extracts structural signals (tools, files, errors) from history — no LLM call | $0.00 |
+| **Token estimation** | `text.length / 4` approximation — fast budget checks without tokenizer | 0ms |
+| **Error-graceful tools** | Tool errors returned as `[ERROR]` results, not thrown — agent decides next step | More resilient |
+| **Pre/post tool hooks** | Shell commands in `.wolverine/hooks.json` — exit 0=allow, 2=deny | Extensible |
+
+**Hook configuration** (`.wolverine/hooks.json`):
+```json
+{
+  "pre_tool_use": ["bash -c 'if [ \"$HOOK_TOOL_NAME\" = \"bash_exec\" ]; then exit 2; fi'"],
+  "post_tool_use": ["bash -c 'echo \"Tool: $HOOK_TOOL_NAME\" >> /tmp/audit.log'"]
+}
+```
+
+---
+
 ## Cost Optimization
 
 Wolverine minimizes AI spend through 7 techniques:

@@ -463,33 +463,24 @@ Project root: ${this.cwd}${primaryFile ? `\nPrimary crash file: ${primaryFile}` 
 
       console.log(chalk.gray(`  🤖 Agent turn ${this.turnCount}/${this.maxTurns} (${this.totalTokens} tokens used)`));
 
-      // Compact context every 3 turns to prevent token blowup
-      // Turn 6 without compacting: ~95K tokens. With compacting: ~20K tokens.
-      if (this.turnCount > 1 && this.turnCount % 3 === 0 && this.messages.length > 4) {
-        try {
-          const { aiCall } = require("./ai-client") || require("../core/ai-client");
-          const { getModel: _gm } = require("./models") || require("../core/models");
-          const historyToCompact = this.messages.slice(1, -2); // keep system + last exchange
-          if (historyToCompact.length > 2) {
-            const historyText = historyToCompact.map(m => `${m.role}: ${(m.content || "").slice(0, 500)}`).join("\n");
-            const compactResult = await aiCall({
-              model: _gm("compacting"),
-              systemPrompt: "Summarize this agent conversation history into a concise status report. Keep: files read, changes made, errors found, what was tried. Remove: full file contents, redundant tool results.",
-              userPrompt: historyText.slice(0, 8000),
-              maxTokens: 512,
-              category: "brain",
-            });
-            if (compactResult.content) {
-              this.messages = [
-                this.messages[0], // system prompt
-                { role: "assistant", content: `[Prior work summary]\n${compactResult.content}` },
-                { role: "user", content: "Continue from where you left off." },
-                ...this.messages.slice(-2), // last exchange
-              ];
-              console.log(chalk.gray(`  📦 Compacted ${historyToCompact.length} messages → summary (${compactResult.content.length} chars)`));
-            }
-          }
-        } catch { /* compacting failed — continue with full context */ }
+      // Zero-cost structural compaction (claw-code pattern)
+      // Extracts signals from message history WITHOUT an LLM call.
+      // Preserves last 4 messages verbatim, summarizes older ones structurally.
+      // Triggers when estimated tokens > 10K (text.length / 4 approximation).
+      const estimatedTokens = this.messages.reduce((s, m) => s + _estimateTokens(m), 0);
+      if (this.messages.length > 6 && estimatedTokens > 10000) {
+        const preserveCount = 4; // keep system + last 3 exchanges
+        const toCompact = this.messages.slice(1, -preserveCount);
+        if (toCompact.length > 2) {
+          const summary = _structuralSummary(toCompact, this.filesRead, this.filesModified, this.toolCalls);
+          this.messages = [
+            this.messages[0], // system prompt
+            { role: "assistant", content: summary },
+            { role: "user", content: "Continue from where you left off." },
+            ...this.messages.slice(-preserveCount),
+          ];
+          console.log(chalk.gray(`  📦 Compacted ${toCompact.length} messages (${estimatedTokens} → ~${_estimateTokens({ content: summary })} tokens) — $0.00`));
+        }
       }
 
       let response;
@@ -533,11 +524,34 @@ Project root: ${this.cwd}${primaryFile ? `\nPrimary crash file: ${primaryFile}` 
       }
 
       for (const toolCall of assistantMessage.tool_calls) {
-        const result = await this._executeTool(toolCall);
+        // Error-graceful tool execution (claw-code pattern)
+        // Tool errors are returned as is_error results, not thrown.
+        // This lets the model see the error and decide how to proceed.
+        let result;
+        let isError = false;
+        try {
+          // Pre-hook: check if tool should be blocked
+          const hookResult = _runPreHook(toolCall.function?.name, toolCall.function?.arguments, this.cwd);
+          if (hookResult.denied) {
+            result = { content: `Blocked by hook: ${hookResult.message}` };
+            isError = true;
+          } else {
+            result = await this._executeTool(toolCall);
+          }
+        } catch (err) {
+          // Error-graceful: return error as tool result, don't break the loop
+          result = { content: `Tool error: ${err.message?.slice(0, 200)}` };
+          isError = true;
+          console.log(chalk.yellow(`    ⚠️ Tool error (${toolCall.function?.name}): ${err.message?.slice(0, 80)}`));
+        }
+
+        // Post-hook: audit/modify result
+        _runPostHook(toolCall.function?.name, toolCall.function?.arguments, result.content, isError, this.cwd);
+
         this.messages.push({
           role: "tool",
           tool_call_id: toolCall.id,
-          content: result.content,
+          content: isError ? `[ERROR] ${result.content}` : result.content,
         });
 
         if (result.done) {
@@ -547,6 +561,7 @@ Project root: ${this.cwd}${primaryFile ? `\nPrimary crash file: ${primaryFile}` 
             filesModified: result.filesModified || this.filesModified,
             turnCount: this.turnCount,
             totalTokens: this.totalTokens,
+            toolCalls: this.toolCalls,
           };
         }
       }
@@ -1088,6 +1103,132 @@ Project root: ${this.cwd}${primaryFile ? `\nPrimary crash file: ${primaryFile}` 
     return protectedPrefixes.some(p => normalized.startsWith(p))
       || protectedExact.some(p => normalized === p);
   }
+}
+
+// ── Zero-Cost Compaction Helpers (claw-code pattern) ──
+
+/**
+ * Estimate tokens without a tokenizer. Fast approximation: text.length / 4 + 1.
+ * Good enough for budget decisions — off by ~10% which is fine.
+ */
+function _estimateTokens(message) {
+  if (!message) return 0;
+  const content = message.content || "";
+  const toolArgs = message.tool_calls?.reduce((s, tc) => s + (tc.function?.arguments?.length || 0), 0) || 0;
+  return Math.ceil((content.length + toolArgs) / 4) + 1;
+}
+
+/**
+ * Extract structural signals from message history WITHOUT an LLM call.
+ * Returns a concise summary preserving: tools used, files touched, errors found,
+ * what was tried, and pending work. Costs $0.00.
+ */
+function _structuralSummary(messages, filesRead, filesModified, toolCalls) {
+  const toolsUsed = new Set();
+  const filesReferenced = new Set();
+  const errors = [];
+  const userRequests = [];
+  const actions = [];
+
+  for (const msg of messages) {
+    if (msg.role === "user") {
+      const text = (msg.content || "").slice(0, 160);
+      if (text) userRequests.push(text);
+    }
+    if (msg.role === "assistant" && msg.tool_calls) {
+      for (const tc of msg.tool_calls) {
+        toolsUsed.add(tc.function?.name);
+        // Extract file paths from tool args
+        try {
+          const args = JSON.parse(tc.function?.arguments || "{}");
+          if (args.path) filesReferenced.add(args.path);
+          if (args.pattern) filesReferenced.add(args.pattern);
+        } catch {}
+      }
+    }
+    if (msg.role === "tool") {
+      const content = msg.content || "";
+      if (content.startsWith("[ERROR]") || content.includes("Error:")) {
+        errors.push(content.slice(0, 100));
+      }
+      // Extract file paths from tool results
+      const pathMatches = content.match(/(?:server|src)\/[^\s"']+/g);
+      if (pathMatches) pathMatches.forEach(p => filesReferenced.add(p));
+    }
+    if (msg.role === "assistant" && msg.content) {
+      const text = msg.content.slice(0, 100);
+      if (text && !text.startsWith("[")) actions.push(text);
+    }
+  }
+
+  const lines = [
+    "[Compacted conversation summary — $0.00, no LLM call]",
+    `Messages compacted: ${messages.length}`,
+    `Tools used: ${[...toolsUsed].join(", ") || "none"}`,
+    `Files read: ${[...filesRead].slice(0, 10).join(", ") || "none"}`,
+    `Files modified: ${[...filesModified].join(", ") || "none"}`,
+    `Files referenced: ${[...filesReferenced].slice(0, 10).join(", ") || "none"}`,
+    errors.length > 0 ? `Errors encountered: ${errors.slice(0, 3).join("; ")}` : null,
+    userRequests.length > 0 ? `User requests: ${userRequests.slice(-2).join(" | ")}` : null,
+    actions.length > 0 ? `Actions taken: ${actions.slice(-3).join(" | ")}` : null,
+  ].filter(Boolean);
+
+  return lines.join("\n");
+}
+
+// ── Pre/Post Tool Hooks (claw-code pattern) ──
+
+/**
+ * Pre-tool hook: check if tool execution should be blocked.
+ * Reads hooks from .wolverine/hooks.json if it exists.
+ * Exit code 0 = allow, 2 = deny.
+ */
+function _runPreHook(toolName, toolInput, cwd) {
+  try {
+    const hooksPath = path.join(cwd, ".wolverine", "hooks.json");
+    if (!fs.existsSync(hooksPath)) return { denied: false };
+    const hooks = JSON.parse(fs.readFileSync(hooksPath, "utf-8"));
+    if (!hooks.pre_tool_use || hooks.pre_tool_use.length === 0) return { denied: false };
+
+    for (const cmd of hooks.pre_tool_use) {
+      try {
+        const { execSync } = require("child_process");
+        execSync(cmd, {
+          input: JSON.stringify({ event: "PreToolUse", tool_name: toolName, tool_input: toolInput }),
+          env: { ...process.env, HOOK_TOOL_NAME: toolName || "", HOOK_TOOL_INPUT: (toolInput || "").slice(0, 1000) },
+          stdio: ["pipe", "pipe", "pipe"],
+          timeout: 5000,
+        });
+      } catch (e) {
+        if (e.status === 2) return { denied: true, message: (e.stdout?.toString() || "Hook denied").trim() };
+      }
+    }
+  } catch {}
+  return { denied: false };
+}
+
+/**
+ * Post-tool hook: audit/log tool execution.
+ */
+function _runPostHook(toolName, toolInput, toolOutput, isError, cwd) {
+  try {
+    const hooksPath = path.join(cwd, ".wolverine", "hooks.json");
+    if (!fs.existsSync(hooksPath)) return;
+    const hooks = JSON.parse(fs.readFileSync(hooksPath, "utf-8"));
+    if (!hooks.post_tool_use || hooks.post_tool_use.length === 0) return;
+
+    for (const cmd of hooks.post_tool_use) {
+      try {
+        const { execSync } = require("child_process");
+        execSync(cmd, {
+          input: JSON.stringify({ event: "PostToolUse", tool_name: toolName, tool_input: toolInput, tool_output: (toolOutput || "").slice(0, 500), is_error: isError }),
+          env: { ...process.env, HOOK_TOOL_NAME: toolName || "", HOOK_TOOL_IS_ERROR: isError ? "1" : "0" },
+          stdio: ["pipe", "pipe", "pipe"],
+          timeout: 5000,
+        });
+      } catch {}
+    }
+  } catch {}
 }
 
 module.exports = { AgentEngine, TOOL_DEFINITIONS, BLOCKED_COMMANDS };
