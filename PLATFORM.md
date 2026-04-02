@@ -103,6 +103,14 @@ Content-Type: application/json
       "chat": { "tokens": 25000, "cost": 0.05, "calls": 60 },
       "classify": { "tokens": 3000, "cost": 0.001, "calls": 15 },
       "develop": { "tokens": 5000, "cost": 0.03, "calls": 5 }
+    },
+    "byModel": {
+      "gpt-5.4-mini": { "tokens": 30000, "cost": 0.06, "calls": 40 },
+      "gpt-4o-mini": { "tokens": 15000, "cost": 0.02, "calls": 45 }
+    },
+    "byTool": {
+      "call_endpoint": { "tokens": 5000, "cost": 0.01, "calls": 20 },
+      "search_brain": { "tokens": 2000, "cost": 0.005, "calls": 10 }
     }
   },
 

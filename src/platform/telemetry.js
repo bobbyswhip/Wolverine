@@ -52,6 +52,8 @@ function collectHeartbeat(subsystems) {
       totalCost: usage?.session?.totalCostUsd || 0,
       totalCalls: usage?.session?.totalCalls || 0,
       byCategory: usage?.byCategory || {},
+      byModel: usage?.byModel || {},
+      byTool: usage?.byTool || {},
     },
 
     brain: { totalMemories: brain?.getStats()?.totalEntries || 0 },

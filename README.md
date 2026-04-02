@@ -368,7 +368,8 @@ Startup:
 - Auto-registers on first run, retries every 60s until platform responds
 - Saves key to `.wolverine/platform-key` (survives restarts)
 - Sends one ~2KB JSON POST every 60 seconds (5s timeout, non-blocking)
-- Payload matches [PLATFORM.md](PLATFORM.md) spec: `instanceId`, `server`, `process`, `routes`, `repairs`, `usage`, `brain`, `backups`
+- Payload matches [PLATFORM.md](PLATFORM.md) spec: `instanceId`, `server`, `process`, `routes`, `repairs`, `usage` (tokens/cost/calls + `byCategory` + `byModel` + `byTool`), `brain`, `backups`
+- Platform analytics aggregates across all servers: total tokens/cost, breakdown by category (heal/chat/develop/security/classify/research/brain), by model, by tool
 - Secrets redacted before sending
 - Offline-resilient: queues up to 1440 heartbeats locally, drains on reconnect
 
