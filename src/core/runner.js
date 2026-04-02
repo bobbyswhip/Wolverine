@@ -140,6 +140,20 @@ class WolverineRunner {
       maxRetries: this.maxRetries,
     });
 
+    // Port safety check
+    const port = parseInt(process.env.PORT, 10) || 3000;
+    const safeDevPorts = [3000, 3001, 8080, 8443];
+    const safeProdPorts = [80, 443, 8080, 8443];
+    const env = process.env.NODE_ENV || "development";
+
+    if (env === "production" && port !== 443 && port !== 80 && port !== 8443 && port !== 8080) {
+      console.log(chalk.yellow(`  ⚠️  Port ${port} in production — recommend 443 (HTTPS) or 80 (HTTP) behind a reverse proxy`));
+    } else if (env !== "production" && !safeDevPorts.includes(port) && port < 1024) {
+      console.log(chalk.yellow(`  ⚠️  Port ${port} requires root/admin — use 3000 for local development`));
+    } else if (port > 9999) {
+      console.log(chalk.yellow(`  ⚠️  Port ${port} is non-standard — use 3000 (dev) or 443 (prod) for best compatibility`));
+    }
+
     // Initialize brain (scan project, seed docs, embed function map)
     try {
       await this.brain.init();

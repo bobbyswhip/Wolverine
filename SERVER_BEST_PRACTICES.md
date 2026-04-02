@@ -19,13 +19,21 @@ server/
 
 ## Rules
 
+### Ports
+- **Development**: use port 3000 (standard, no admin required, firewall-friendly)
+- **Production**: use port 443 (HTTPS) or 80 (HTTP) behind a reverse proxy (nginx/caddy)
+- **Never** use random high ports in production — they bypass firewalls and confuse load balancers
+- **Always** use HTTPS in production — terminate TLS at the reverse proxy, not in Node
+- Dashboard runs on port+1 automatically (3001 in dev, not exposed in prod)
+
 ### Security
 - Never expose secrets in responses — use env vars, never hardcode
-- Validate ALL input — use express.json() with size limits
-- Use helmet() for HTTP security headers in production
+- Validate ALL input — Fastify has built-in JSON schema validation
+- Use HTTPS in production — reverse proxy (nginx/caddy) handles TLS
 - Rate limit public endpoints
-- Sanitize user input before database queries
+- Sanitize user input before database queries — use the SQL skill
 - Never return stack traces in production error responses
+- Use the sqlGuard() middleware on all routes that accept user input
 
 ### Scalability
 - Keep routes thin — business logic goes in services/

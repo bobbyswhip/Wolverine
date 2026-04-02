@@ -187,6 +187,10 @@ const SEED_DOCS = [
     text: "10 configurable models: REASONING_MODEL (multi-file agent), CODING_MODEL (code repair, Responses API for codex), CHAT_MODEL (simple text), TOOL_MODEL (function calling), CLASSIFIER_MODEL (routing), AUDIT_MODEL (injection detection), COMPACTING_MODEL (brain text compression), RESEARCH_MODEL (deep research), TEXT_EMBEDDING_MODEL (vectors). All in server/config/settings.json. Reasoning models auto-get 4x token limits for chain-of-thought.",
     metadata: { topic: "model-slots" },
   },
+  {
+    text: "Port best practices: development uses port 3000 (standard, no admin, firewall-friendly). Production uses 443 (HTTPS) or 80 (HTTP) behind a reverse proxy (nginx/caddy). Never use random high ports in production — they bypass firewalls and confuse load balancers. Always use HTTPS in production — terminate TLS at the proxy, not in Node. Dashboard auto-runs on port+1. Wolverine warns on startup if the port is non-standard.",
+    metadata: { topic: "port-security" },
+  },
 ];
 
 class Brain {

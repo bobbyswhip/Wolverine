@@ -18,7 +18,7 @@
   },
 
   "server": {
-    "port": 6969,
+    "port": 3000,
     "maxRetries": 3,
     "maxMemoryMB": 512
   },
