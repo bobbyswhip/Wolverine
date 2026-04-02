@@ -94,7 +94,9 @@ function getModel(role) {
   if (!config) {
     throw new Error(`Unknown model role: "${role}". Valid roles: ${Object.keys(MODEL_ROLES).join(", ")}`);
   }
-  return process.env[config.envKey] || config.default;
+  // Priority: env var → wolverine.config.js → hardcoded default
+  const { getConfig } = require("./config");
+  return process.env[config.envKey] || getConfig(`models.${role}`) || config.default;
 }
 
 /**
