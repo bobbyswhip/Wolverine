@@ -185,16 +185,18 @@ Most production bugs don't crash the process — Fastify/Express catch them and 
 ```
 Route returns 500 (process still alive)
   → Error hook reports to parent via IPC (auto-injected, zero user code changes)
-  → ErrorMonitor tracks consecutive 500s per route
-  → 3 failures in 30s → triggers heal pipeline (same as crash healing)
+  → ErrorMonitor tracks errors per normalized route (/api/users/:id)
+  → Single error triggers heal pipeline immediately (configurable threshold)
   → Fix applied → server restarted → route prober verifies fix
 ```
 
 | Setting | Default | Env Variable |
 |---------|---------|-------------|
-| Failure threshold | 3 | `WOLVERINE_ERROR_THRESHOLD` |
+| Failure threshold | 1 | `WOLVERINE_ERROR_THRESHOLD` |
 | Time window | 30s | `WOLVERINE_ERROR_WINDOW_MS` |
 | Cooldown per route | 60s | `WOLVERINE_ERROR_COOLDOWN_MS` |
+
+Routes are auto-normalized: `/api/users/123` and `/api/users/456` aggregate as `/api/users/:id`.
 
 The error hook auto-patches Fastify and Express via `--require` preload. No middleware, no code changes to your server.
 
@@ -315,7 +317,7 @@ Reasoning models (`o-series`, `gpt-5-nano`) automatically get 4x token limits to
 | **Admin Auth** | Dashboard requires key + IP allowlist. Localhost always allowed. Remote IPs via `WOLVERINE_ADMIN_IPS` env var or `POST /api/admin/add-ip` at runtime. Timing-safe comparison, lockout after 10 failures |
 | **Rate Limiter** | Sliding window, min gap, hourly budget, exponential backoff on error loops |
 | **MCP Security** | Per-server tool allowlists, arg sanitization, result injection scanning |
-| **SQL Skill** | `sqlGuard()` middleware blocks 15 injection pattern families on all endpoints |
+| **SQL Skill** | `sqlGuard()` blocks 15 injection pattern families; `idempotencyGuard()` prevents double-fire in cluster mode |
 
 ---
 
@@ -354,16 +356,34 @@ The `📊 Analytics` dashboard panel shows memory/CPU charts, route health statu
 
 ---
 
-## Auto-Clustering
+## Cluster Mode
 
-Wolverine detects your machine and forks the optimal number of workers:
+The server handles its own clustering. Wolverine is the single process manager — it spawns your server, which forks workers internally.
 
 ```bash
-wolverine server/index.js           # auto-detect: 20 cores → 10 workers
-wolverine server/index.js --single  # force single worker (dev mode)
-wolverine server/index.js --workers 4  # force 4 workers
-wolverine --info                    # show system capabilities
+# Enable cluster mode
+WOLVERINE_CLUSTER=true wolverine server/index.js
+
+# System info (cores, RAM, recommended workers)
+wolverine --info
 ```
+
+**How it works:**
+```
+Wolverine (single process manager)
+  └── spawns server/index.js
+        ├── WOLVERINE_CLUSTER=false → single server (default)
+        └── WOLVERINE_CLUSTER=true  → master forks N workers
+             ├── Worker 1 (port 3000, reusePort)
+             ├── Worker 2 (port 3000, reusePort)
+             └── Worker N (port 3000, reusePort)
+```
+
+- **`WOLVERINE_RECOMMENDED_WORKERS`** auto-set based on CPU cores/RAM
+- Workers share port 3000 via `reusePort` — OS handles load balancing
+- Dead workers auto-respawn by the master process
+- Wolverine kills the **entire process tree** on restart (no orphaned workers)
+- **Idempotency protection** prevents double-fire across workers (see below)
 
 **System detection:**
 - CPU cores, model, speed
@@ -371,18 +391,6 @@ wolverine --info                    # show system capabilities
 - Platform (Linux, macOS, Windows)
 - Container environment (Docker, Kubernetes)
 - Cloud provider (AWS, GCP, Azure, Railway, Fly, Render, Heroku)
-
-**Scaling rules:**
-
-| Cores | Workers |
-|-------|---------|
-| 1 | 1 (no clustering) |
-| 2 | 2 |
-| 3-4 | cores - 1 |
-| 5-8 | cores - 1, cap 6 |
-| 9+ | cores / 2, cap 16 |
-
-Workers auto-respawn on crash with exponential backoff (1s → 30s). Max 5 restarts per worker.
 
 ---
 
@@ -412,8 +420,8 @@ Startup:
 - Auto-registers on first run, retries every 60s until platform responds
 - Saves key to `.wolverine/platform-key` (survives restarts)
 - Sends one ~2KB JSON POST every 60 seconds (5s timeout, non-blocking)
-- Payload matches [PLATFORM.md](PLATFORM.md) spec: `instanceId`, `server`, `process`, `routes`, `repairs`, `usage` (tokens/cost/calls + `byCategory` + `byModel` + `byTool`), `brain`, `backups`
-- Platform analytics aggregates across all servers: total tokens/cost, breakdown by category (heal/chat/develop/security/classify/research/brain), by model, by tool
+- Payload: `instanceId`, `server`, `process`, `routes`, `repairs`, `usage` (tokens/cost/calls + `byCategory` + `byModel` + `byTool`), `brain`, `backups`
+- Platform aggregates across all servers: total tokens/cost by category, model, tool
 - Secrets redacted before sending
 - Offline-resilient: queues up to 1440 heartbeats locally, drains on reconnect
 
@@ -422,7 +430,7 @@ Startup:
 **Override:** `WOLVERINE_PLATFORM_URL=https://your-own-platform.com`
 **Opt out:** `WOLVERINE_TELEMETRY=false`
 
-See [PLATFORM.md](PLATFORM.md) for the backend spec and [TELEMETRY.md](TELEMETRY.md) for the protocol.
+Telemetry payload includes: `instanceId`, `server`, `process`, `routes`, `repairs`, `usage` (by category/model/tool), `brain`, `backups`.
 
 ---
 
@@ -478,11 +486,50 @@ Full `server/` directory snapshots with lifecycle management:
 Auto-discovered from `src/skills/`. Each skill exports metadata for the registry:
 
 ### SQL Skill (`src/skills/sql.js`)
-- **sqlGuard()** — Express middleware blocking SQL injection (UNION, stacked queries, tautologies, timing attacks, etc.)
-- **SafeDB** — Parameterized-only database wrapper (blocks string concatenation in queries)
+- **sqlGuard()** — Fastify/Express middleware blocking SQL injection (UNION, stacked queries, tautologies, timing attacks, 15 pattern families)
+- **SafeDB** — Cluster-safe database with split read/write connections, FIFO write queue, WAL mode
+- **idempotencyGuard()** — Prevents double-fire of write requests in cluster mode (see below)
+- **db.idempotent(key, fn)** — Database-level dedup for critical writes (payments, orders)
 - Auto-injected into agent prompts when building database features
 
 Add new skills by creating a file in `src/skills/` with `SKILL_NAME`, `SKILL_DESCRIPTION`, `SKILL_KEYWORDS`, `SKILL_USAGE` exports.
+
+---
+
+## Idempotency (Double-Fire Protection)
+
+In cluster mode, a retry or duplicate request can land on a different worker and execute twice. Two layers prevent this:
+
+### Layer 1: HTTP Middleware
+
+```javascript
+const { idempotencyGuard, idempotencyAfterHook } = require("wolverine-ai");
+
+fastify.addHook("preHandler", idempotencyGuard({ db, logger }));
+fastify.addHook("onSend", idempotencyAfterHook(db));
+```
+
+- Client sends `X-Idempotency-Key: order-abc-123` header
+- Without header: auto-generates key from `sha256(method + url + body)`
+- First request: executes handler, caches response in shared SQLite table
+- Duplicate: returns cached response with `X-Idempotency-Cached: true` header
+- Safe methods (GET/HEAD/OPTIONS) always pass through
+- Keys expire after 24h (configurable)
+
+### Layer 2: Database-Level
+
+```javascript
+const result = await db.idempotent("charge-abc-123", (tx) => {
+  tx.run("INSERT INTO charges (id, amount) VALUES (?, ?)", ["abc-123", 99.99]);
+  tx.run("UPDATE balance SET amount = amount - ? WHERE user_id = ?", [99.99, 1]);
+  return { charged: true };
+});
+// result.executed = true (first time) or false (duplicate)
+```
+
+- Wraps `fn` in a transaction with idempotency key check
+- All workers share the `_idempotency` table via WAL mode — globally consistent
+- Auto-created on `db.connect()`, pruned via `db.pruneIdempotency()`
 
 ---
 
