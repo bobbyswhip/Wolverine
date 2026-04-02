@@ -238,7 +238,7 @@ const SEED_DOCS = [
     metadata: { topic: "skill-deps" },
   },
   {
-    text: "CRITICAL: Never run raw 'npm install wolverine-ai' or 'git pull' to update — these OVERWRITE server/, .wolverine/ (brain, backups, events), and .env.local. Always use the safe update skill: wolverine --update (CLI), safeUpdate(cwd) (programmatic), or let auto-update handle it. The update skill: (1) creates safe backup in ~/.wolverine-safe-backups/ (outside project, survives everything), (2) backs up server/ + .wolverine/ + .env to memory, (3) selectively updates ONLY src/ bin/ package.json via git checkout, (4) restores all user files, (5) signals brain to merge new seed docs. Restore with: wolverine --restore <backup-name>. List backups: wolverine --backups.",
+    text: "CRITICAL: Never run raw 'npm install wolverine-ai' or 'git pull' to update — these OVERWRITE server/, .wolverine/ (brain, backups, events), and .env.local. Always use the safe update skill: wolverine --update (CLI), safeUpdate(cwd) (programmatic), or let auto-update handle it. ALL backups (heal snapshots + update snapshots) stored in ~/.wolverine-safe-backups/ (OUTSIDE project, survives git clean, rm -rf, project deletion). Structure: ~/.wolverine-safe-backups/snapshots/ (heal backups), ~/.wolverine-safe-backups/updates/ (pre-update snapshots), ~/.wolverine-safe-backups/manifest.json (backup registry). Old .wolverine/backups/ auto-migrated on first run. Restore with: wolverine --restore <name>. List: wolverine --backups.",
     metadata: { topic: "safe-update-warning" },
   },
   {

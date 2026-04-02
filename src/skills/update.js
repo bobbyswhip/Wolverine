@@ -27,6 +27,7 @@ const chalk = require("chalk");
 
 const PACKAGE_NAME = "wolverine-ai";
 const SAFE_BACKUP_DIR = path.join(require("os").homedir(), ".wolverine-safe-backups");
+const SAFE_SNAPSHOTS_DIR = path.join(SAFE_BACKUP_DIR, "snapshots");
 
 /**
  * Create a safe backup snapshot outside the project directory.
@@ -34,7 +35,7 @@ const SAFE_BACKUP_DIR = path.join(require("os").homedir(), ".wolverine-safe-back
  */
 function createSafeBackup(cwd) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
-  const backupDir = path.join(SAFE_BACKUP_DIR, timestamp);
+  const backupDir = path.join(SAFE_BACKUP_DIR, "updates", timestamp);
   fs.mkdirSync(backupDir, { recursive: true });
 
   const dirsToBackup = [
@@ -76,12 +77,13 @@ function createSafeBackup(cwd) {
  * List available safe backups.
  */
 function listSafeBackups() {
-  if (!fs.existsSync(SAFE_BACKUP_DIR)) return [];
-  return fs.readdirSync(SAFE_BACKUP_DIR)
-    .filter(d => fs.statSync(path.join(SAFE_BACKUP_DIR, d)).isDirectory())
+  const updatesDir = path.join(SAFE_BACKUP_DIR, "updates");
+  if (!fs.existsSync(updatesDir)) return [];
+  return fs.readdirSync(updatesDir)
+    .filter(d => fs.statSync(path.join(updatesDir, d)).isDirectory())
     .map(d => {
       try {
-        const manifest = JSON.parse(fs.readFileSync(path.join(SAFE_BACKUP_DIR, d, "manifest.json"), "utf-8"));
+        const manifest = JSON.parse(fs.readFileSync(path.join(SAFE_BACKUP_DIR, "updates", d, "manifest.json"), "utf-8"));
         return { dir: d, ...manifest };
       } catch { return { dir: d }; }
     })
@@ -92,7 +94,7 @@ function listSafeBackups() {
  * Restore from a safe backup.
  */
 function restoreFromSafeBackup(cwd, backupName) {
-  const backupDir = path.join(SAFE_BACKUP_DIR, backupName);
+  const backupDir = path.join(SAFE_BACKUP_DIR, "updates", backupName);
   if (!fs.existsSync(backupDir)) throw new Error(`Backup not found: ${backupName}`);
 
   const dirsToRestore = [".wolverine", "server"];

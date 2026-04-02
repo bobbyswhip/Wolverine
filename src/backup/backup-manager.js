@@ -14,9 +14,13 @@ const { redact } = require("../security/secret-redactor");
  * Stable backups older than 7 days → keep 1 per day (most recent).
  */
 
-const WOLVERINE_DIR = ".wolverine";
-const BACKUPS_DIR = path.join(WOLVERINE_DIR, "backups");
-const MANIFEST_FILE = path.join(BACKUPS_DIR, "manifest.json");
+const os = require("os");
+
+// Safe backup location — OUTSIDE the project directory.
+// Survives git pull, npm install, rm -rf .wolverine, project deletion.
+// All backup infrastructure (heal snapshots, update snapshots, rollbacks) uses this.
+const SAFE_BACKUP_ROOT = path.join(os.homedir(), ".wolverine-safe-backups");
+const MANIFEST_FILE_NAME = "manifest.json";
 const STABILITY_THRESHOLD_MS = 30 * 60 * 1000;
 const RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -33,9 +37,11 @@ const NEVER_ROLLBACK = [
 class BackupManager {
   constructor(projectRoot) {
     this.projectRoot = path.resolve(projectRoot);
-    this.backupsDir = path.join(this.projectRoot, BACKUPS_DIR);
-    this.manifestPath = path.join(this.projectRoot, MANIFEST_FILE);
+    // All backups in safe home directory — never inside the project
+    this.backupsDir = path.join(SAFE_BACKUP_ROOT, "snapshots");
+    this.manifestPath = path.join(SAFE_BACKUP_ROOT, MANIFEST_FILE_NAME);
     this._ensureDirs();
+    this._migrateOldBackups(); // one-time migration from .wolverine/backups/
     this.manifest = this._loadManifest();
   }
 
@@ -276,7 +282,37 @@ class BackupManager {
 
   // -- Private --
 
-  _ensureDirs() { fs.mkdirSync(this.backupsDir, { recursive: true }); }
+  _ensureDirs() {
+    fs.mkdirSync(this.backupsDir, { recursive: true });
+    fs.mkdirSync(SAFE_BACKUP_ROOT, { recursive: true });
+  }
+
+  /**
+   * One-time migration: move backups from old .wolverine/backups/ to safe location.
+   */
+  _migrateOldBackups() {
+    const oldDir = path.join(this.projectRoot, ".wolverine", "backups");
+    const oldManifest = path.join(oldDir, "manifest.json");
+    if (!fs.existsSync(oldManifest) || fs.existsSync(this.manifestPath)) return;
+
+    try {
+      // Copy manifest
+      fs.copyFileSync(oldManifest, this.manifestPath);
+      // Copy backup dirs
+      for (const entry of fs.readdirSync(oldDir, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const src = path.join(oldDir, entry.name);
+        const dest = path.join(this.backupsDir, entry.name);
+        if (!fs.existsSync(dest)) {
+          fs.mkdirSync(dest, { recursive: true });
+          for (const file of fs.readdirSync(src)) {
+            fs.copyFileSync(path.join(src, file), path.join(dest, file));
+          }
+        }
+      }
+      console.log(chalk.gray(`  📦 Migrated backups to safe location: ${SAFE_BACKUP_ROOT}`));
+    } catch {}
+  }
 
   _loadManifest() {
     if (fs.existsSync(this.manifestPath)) {
@@ -323,4 +359,4 @@ class BackupManager {
   }
 }
 
-module.exports = { BackupManager, STABILITY_THRESHOLD_MS };
+module.exports = { BackupManager, STABILITY_THRESHOLD_MS, SAFE_BACKUP_ROOT };
