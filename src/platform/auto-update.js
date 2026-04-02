@@ -181,7 +181,9 @@ function startAutoUpdate({ cwd, logger, onUpdate, intervalMs }) {
   const interval = intervalMs || CHECK_INTERVAL_MS;
 
   // Check on startup (delayed 30s to not block boot)
+  console.log(chalk.gray(`  🔄 Auto-update scheduled: first check in 30s, then every ${Math.round(interval / 60000)}min`));
   setTimeout(() => {
+    console.log(chalk.gray(`  🔄 Checking for updates (v${getCurrentVersion()})...`));
     const result = checkForUpdate();
     if (result?.available) {
       const upgraded = upgrade(cwd, logger);
@@ -189,6 +191,10 @@ function startAutoUpdate({ cwd, logger, onUpdate, intervalMs }) {
         console.log(chalk.blue("  🔄 Restarting with new version..."));
         onUpdate(upgraded);
       }
+    } else if (result) {
+      console.log(chalk.gray(`  🔄 Up to date (v${result.current}${result.latest ? ", npm: " + result.latest : ""})`));
+    } else {
+      console.log(chalk.yellow("  🔄 Update check failed (npm unreachable?)"));
     }
   }, 30000);
 

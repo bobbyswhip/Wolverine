@@ -20,6 +20,7 @@ const { ProcessMonitor } = require("../monitor/process-monitor");
 const { RouteProber } = require("../monitor/route-prober");
 const { startHeartbeat, stopHeartbeat } = require("../platform/heartbeat");
 const { Notifier } = require("../notifications/notifier");
+const { loadConfig } = require("./config");
 const { ErrorMonitor } = require("../monitor/error-monitor");
 const { startAutoUpdate, stopAutoUpdate } = require("../platform/auto-update");
 
@@ -215,20 +216,22 @@ class WolverineRunner {
     });
 
     // Auto-update: check for new wolverine-ai versions
-    const { getConfig: _gc } = require("./config");
-    const autoUpdateEnabled = _gc("autoUpdate.enabled") !== false;
+    const autoUpdateCfg = loadConfig().autoUpdate || {};
+    const autoUpdateEnabled = process.env.WOLVERINE_AUTO_UPDATE !== "false" && autoUpdateCfg.enabled !== false;
     if (autoUpdateEnabled) {
+      const { getCurrentVersion } = require("../platform/auto-update");
+      const updateInterval = autoUpdateCfg.intervalMs || 3600000;
       startAutoUpdate({
         cwd: this.cwd,
         logger: this.logger,
-        intervalMs: parseInt(process.env.WOLVERINE_UPDATE_INTERVAL_MS, 10) || 3600000,
+        intervalMs: updateInterval,
         onUpdate: (result) => {
           console.log(chalk.blue(`  🔄 Wolverine updated ${result.from} → ${result.to}, restarting...`));
           this.logger.info("update.restart", `Restarting after update ${result.from} → ${result.to}`);
           this.restart();
         },
       });
-      console.log(chalk.gray("  🔄 Auto-update: enabled (checks hourly)"));
+      console.log(chalk.gray(`  🔄 Auto-update: enabled (v${getCurrentVersion()}, checks every ${Math.round(updateInterval / 60000)}min)`));
     } else {
       console.log(chalk.gray("  🔄 Auto-update: disabled"));
     }

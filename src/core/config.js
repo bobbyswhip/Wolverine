@@ -76,7 +76,21 @@ function loadConfig() {
     dashboard: {
       port: parseInt(process.env.WOLVERINE_DASHBOARD_PORT, 10) || fileConfig.dashboard?.port || null,
     },
+
+    autoUpdate: {
+      enabled: process.env.WOLVERINE_AUTO_UPDATE !== "false" && (fileConfig.autoUpdate?.enabled !== false),
+      intervalMs: parseInt(process.env.WOLVERINE_UPDATE_INTERVAL_MS, 10) || fileConfig.autoUpdate?.intervalMs || 3600000,
+    },
+
+    errorMonitor: {
+      threshold: parseInt(process.env.WOLVERINE_ERROR_THRESHOLD, 10) || fileConfig.errorMonitor?.defaultThreshold || 1,
+      windowMs: parseInt(process.env.WOLVERINE_ERROR_WINDOW_MS, 10) || fileConfig.errorMonitor?.windowMs || 30000,
+      cooldownMs: parseInt(process.env.WOLVERINE_ERROR_COOLDOWN_MS, 10) || fileConfig.errorMonitor?.cooldownMs || 60000,
+    },
   };
+
+  // Merge any missing defaults into the live settings.json
+  _ensureDefaults(fileConfig, configPath);
 
   return _config;
 }
@@ -93,5 +107,36 @@ function getConfig(dotPath) {
  * Reset config cache (for testing).
  */
 function resetConfig() { _config = null; }
+
+/**
+ * Ensure the live settings.json has all required sections.
+ * If a section is missing, add it with defaults. Never overwrites existing values.
+ */
+function _ensureDefaults(fileConfig, configPath) {
+  const DEFAULTS = {
+    autoUpdate: { enabled: true, intervalMs: 3600000 },
+    errorMonitor: { defaultThreshold: 1, windowMs: 30000, cooldownMs: 60000 },
+    healthCheck: { intervalMs: 15000, timeoutMs: 5000, failThreshold: 3, startDelayMs: 10000 },
+    rateLimiting: { maxCallsPerWindow: 32, windowMs: 100000, minGapMs: 5000, maxTokensPerHour: 1000000 },
+    telemetry: { enabled: true, heartbeatIntervalMs: 60000 },
+    cluster: { enabled: false, workers: 0 },
+  };
+
+  let needsWrite = false;
+  for (const [key, defaults] of Object.entries(DEFAULTS)) {
+    if (!fileConfig[key]) {
+      fileConfig[key] = defaults;
+      needsWrite = true;
+    }
+  }
+
+  if (needsWrite && configPath) {
+    try {
+      const tmpPath = configPath + ".tmp";
+      fs.writeFileSync(tmpPath, JSON.stringify(fileConfig, null, 2), "utf-8");
+      fs.renameSync(tmpPath, configPath);
+    } catch { /* non-fatal — config still works from defaults in memory */ }
+  }
+}
 
 module.exports = { loadConfig, getConfig, resetConfig };
