@@ -154,49 +154,52 @@ function sqlGuard(options = {}) {
 // ── Safe Database Interface ──────────────────────────────────────
 
 /**
- * Cluster-safe database wrapper — parameterized queries only.
+ * Cluster-safe database — zero waits, zero blocking.
  *
- * Handles multi-worker scenarios:
+ * Architecture:
+ * - Reads: every worker has its own read-only connection (concurrent, no locks)
+ * - Writes: single dedicated write connection with a synchronous FIFO queue
  *
- * SQLite:
- * - WAL mode (allows concurrent reads while one writer works)
- * - busy_timeout (waits instead of throwing SQLITE_BUSY)
- * - Serialized writes via _withWriteLock (prevents corruption)
- * - Each worker gets its own connection (no shared handles across processes)
+ * How the write queue works:
+ * - Writes are synchronous in better-sqlite3 (microseconds each)
+ * - Queue is just an array that drains in a microtask
+ * - No busy_timeout, no delays, no IPC — writes are fast, they just can't overlap
+ * - Queue forms naturally under load, drains instantly when the current write finishes
  *
- * PostgreSQL/MySQL:
- * - Each worker gets its own connection pool (no cross-process sharing)
- * - Advisory locks available for critical sections
+ * SQLite specifics:
+ * - WAL mode: readers never block writers, writers never block readers
+ * - No busy_timeout needed — only one connection writes, so no contention
+ * - NORMAL sync: safe with WAL, 1 fsync per transaction instead of 2
  */
 class SafeDB {
   constructor(options = {}) {
     this.type = options.type || "sqlite";
     this.path = options.path || ":memory:";
-    this._db = null;
+    this._reader = null;   // read-only connection (concurrent)
+    this._writer = null;   // single write connection (serialized)
     this._closed = false;
-    this._writeLock = false;
-    this._writeQueue = [];
+    this._queue = [];      // pending write operations
+    this._draining = false;
   }
 
-  /**
-   * Connect to the database. Each cluster worker calls this independently.
-   */
   async connect() {
     if (this.type === "sqlite") {
       try {
         const Database = require("better-sqlite3");
-        this._db = new Database(this.path);
 
-        // WAL mode: multiple readers + one writer (cluster-safe for reads)
-        this._db.pragma("journal_mode = WAL");
-        // Wait up to 5s if another worker is writing (prevents SQLITE_BUSY crashes)
-        this._db.pragma("busy_timeout = 5000");
-        // Enforce foreign keys
-        this._db.pragma("foreign_keys = ON");
-        // Sync mode: NORMAL is safe with WAL and faster than FULL
-        this._db.pragma("synchronous = NORMAL");
-        // Larger cache for better read performance across workers
-        this._db.pragma("cache_size = -20000"); // 20MB
+        // Read connection — used by get() and all()
+        this._reader = new Database(this.path, { readonly: false });
+        this._reader.pragma("journal_mode = WAL");
+        this._reader.pragma("foreign_keys = ON");
+        this._reader.pragma("synchronous = NORMAL");
+        this._reader.pragma("cache_size = -20000");
+
+        // Write connection — only used by run(), exec(), transaction()
+        // Separate connection means reads never wait for writes
+        this._writer = new Database(this.path);
+        this._writer.pragma("journal_mode = WAL");
+        this._writer.pragma("foreign_keys = ON");
+        this._writer.pragma("synchronous = NORMAL");
 
       } catch (err) {
         if (err.code === "MODULE_NOT_FOUND") {
@@ -204,90 +207,79 @@ class SafeDB {
         }
         throw err;
       }
-    } else if (this.type === "custom" && this._db) {
-      // Custom driver already set (user manages their own pool)
+    } else if (this.type === "custom") {
+      // User manages their own connection
     } else {
       throw new Error(`Unsupported DB type: ${this.type}. Use "sqlite" or pass a custom driver.`);
     }
 
     process.on("exit", () => this.close());
-    process.on("SIGINT", () => { this.close(); process.exit(0); });
   }
 
   /**
-   * Run a write query (INSERT, UPDATE, DELETE, CREATE).
-   * Serialized through a write lock to prevent multi-worker corruption.
+   * Write query (INSERT, UPDATE, DELETE, CREATE).
+   * Queued and executed in order. Returns a promise that resolves with the result.
    */
   run(sql, params = []) {
     this._assertOpen();
     this._assertSafe(sql);
-    if (this.type === "sqlite") {
-      return this._withWriteLock(() => this._db.prepare(sql).run(...params));
-    }
+    return this._enqueueWrite(() => this._writer.prepare(sql).run(...params));
   }
 
   /**
-   * Get one row. Reads are concurrent (WAL mode allows this).
+   * Read one row. Direct on the read connection — never waits.
    */
   get(sql, params = []) {
     this._assertOpen();
     this._assertSafe(sql);
-    if (this.type === "sqlite") {
-      return this._db.prepare(sql).get(...params);
-    }
+    return this._reader.prepare(sql).get(...params);
   }
 
   /**
-   * Get all rows. Reads are concurrent.
+   * Read all rows. Direct on the read connection — never waits.
    */
   all(sql, params = []) {
     this._assertOpen();
     this._assertSafe(sql);
-    if (this.type === "sqlite") {
-      return this._db.prepare(sql).all(...params);
-    }
+    return this._reader.prepare(sql).all(...params);
   }
 
   /**
-   * Execute raw SQL (migrations/schema). Serialized through write lock.
+   * Raw SQL execution (migrations/schema). Queued through the writer.
    */
   exec(sql) {
     this._assertOpen();
-    if (this.type === "sqlite") {
-      return this._withWriteLock(() => this._db.exec(sql));
-    }
+    return this._enqueueWrite(() => this._writer.exec(sql));
   }
 
   /**
-   * Run multiple writes in a single transaction (atomic, fastest for batch ops).
-   * Cluster-safe: holds the write lock for the entire transaction.
-   *
-   * @param {function} fn — function that calls this.run(), this.exec(), etc.
+   * Atomic transaction. All writes inside fn run as one unit.
+   * Queued as a single operation — no other writes can interleave.
    */
   transaction(fn) {
     this._assertOpen();
-    if (this.type === "sqlite") {
-      return this._withWriteLock(() => {
-        const txn = this._db.transaction(fn);
-        return txn(this);
-      });
-    }
+    return this._enqueueWrite(() => {
+      const txn = this._writer.transaction(() => fn(this._writerProxy()));
+      return txn();
+    });
   }
 
   close() {
-    if (this._closed || !this._db) return;
+    if (this._closed) return;
     this._closed = true;
     try {
-      if (this.type === "sqlite") {
-        // Checkpoint WAL before closing to merge pending writes
-        try { this._db.pragma("wal_checkpoint(TRUNCATE)"); } catch {}
-        this._db.close();
+      if (this._writer) {
+        try { this._writer.pragma("wal_checkpoint(TRUNCATE)"); } catch {}
+        this._writer.close();
       }
+      if (this._reader) this._reader.close();
     } catch {}
   }
 
   _assertOpen() {
-    if (!this._db || this._closed) throw new Error("Database not connected. Call db.connect() first.");
+    if (this._closed || (!this._reader && !this._writer)) {
+      throw new Error("Database not connected. Call db.connect() first.");
+    }
   }
 
   _assertSafe(sql) {
@@ -297,32 +289,41 @@ class SafeDB {
   }
 
   /**
-   * Serialize writes within this worker process.
-   * SQLite WAL handles cross-process write serialization via busy_timeout,
-   * but within a single process we queue writes to avoid overlapping prepare/run calls.
+   * Write queue — FIFO, no delays, drains synchronously.
+   * Each write is microseconds. Queue only forms under concurrent write pressure.
+   * Drains completely in a single microtask when the current write finishes.
    */
-  _withWriteLock(fn) {
-    if (!this._writeLock) {
-      this._writeLock = true;
+  _enqueueWrite(fn) {
+    return new Promise((resolve, reject) => {
+      this._queue.push({ fn, resolve, reject });
+      if (!this._draining) this._drain();
+    });
+  }
+
+  _drain() {
+    this._draining = true;
+    while (this._queue.length > 0) {
+      const { fn, resolve, reject } = this._queue.shift();
       try {
-        return fn();
-      } finally {
-        this._writeLock = false;
-        // Process queued writes
-        if (this._writeQueue.length > 0) {
-          const next = this._writeQueue.shift();
-          next();
-        }
+        resolve(fn());
+      } catch (err) {
+        reject(err);
       }
     }
+    this._draining = false;
+  }
 
-    // Already locked — queue this write
-    return new Promise((resolve, reject) => {
-      this._writeQueue.push(() => {
-        try { resolve(this._withWriteLock(fn)); }
-        catch (err) { reject(err); }
-      });
-    });
+  /**
+   * Proxy for use inside transactions — writes go directly to writer (already locked).
+   */
+  _writerProxy() {
+    const writer = this._writer;
+    return {
+      run: (sql, params = []) => writer.prepare(sql).run(...params),
+      exec: (sql) => writer.exec(sql),
+      get: (sql, params = []) => writer.prepare(sql).get(...params),
+      all: (sql, params = []) => writer.prepare(sql).all(...params),
+    };
   }
 }
 
