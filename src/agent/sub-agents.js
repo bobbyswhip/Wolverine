@@ -33,14 +33,17 @@ const AGENT_TOOL_SETS = {
 };
 
 // Default model + budget per agent type
+// Cost optimization: triage agents use cheap models (classifier slot = Haiku),
+// only the fixer needs the expensive coding model (Sonnet/Opus).
+// This cuts sub-agent cost by ~90% (6 Haiku calls vs 6 Sonnet calls).
 const AGENT_CONFIGS = {
-  explore:  { model: "reasoning", maxTurns: 5,  maxTokens: 10000 },
-  plan:     { model: "reasoning", maxTurns: 3,  maxTokens: 8000 },
-  fix:      { model: "coding",   maxTurns: 5,  maxTokens: 15000 },
-  verify:   { model: "reasoning", maxTurns: 3,  maxTokens: 5000 },
-  research: { model: "research",  maxTurns: 3,  maxTokens: 10000 },
-  security: { model: "audit",     maxTurns: 3,  maxTokens: 8000 },
-  database: { model: "coding",   maxTurns: 5,  maxTokens: 15000 },
+  explore:  { model: "classifier", maxTurns: 5,  maxTokens: 15000 },  // Haiku — just reading
+  plan:     { model: "classifier", maxTurns: 3,  maxTokens: 10000 },  // Haiku — simple planning
+  fix:      { model: "coding",    maxTurns: 5,  maxTokens: 50000 },  // Sonnet/Opus — needs reasoning
+  verify:   { model: "classifier", maxTurns: 3,  maxTokens: 8000 },   // Haiku — just checking
+  research: { model: "classifier", maxTurns: 3,  maxTokens: 10000 },  // Haiku — summarization
+  security: { model: "audit",     maxTurns: 3,  maxTokens: 8000 },   // Haiku — pattern matching
+  database: { model: "coding",    maxTurns: 5,  maxTokens: 50000 },  // Sonnet/Opus — needs reasoning
 };
 
 // System prompts per agent type

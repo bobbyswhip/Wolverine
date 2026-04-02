@@ -57,16 +57,17 @@ class GoalLoop {
         }
       }
 
-      // Attempt the fix
+      // Attempt the fix — pass prior attempts so the handler can include concise summary
       let attempt;
       try {
-        attempt = await this.onAttempt(iteration, context);
+        attempt = await this.onAttempt(iteration, context, this._attempts);
       } catch (err) {
         attempt = { healed: false, explanation: `Error: ${err.message}` };
       }
 
       this._attempts.push({
         iteration,
+        mode: attempt.mode || "unknown",
         success: attempt.healed,
         explanation: attempt.explanation || "No explanation",
       });

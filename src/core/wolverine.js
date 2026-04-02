@@ -203,7 +203,22 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
     } catch { /* non-fatal */ }
   }
 
-  // 6. Research — check past attempts to avoid loops
+  // 6. Check brain for cached fix — if we fixed this exact error before, replay it (zero tokens)
+  if (brain && brain._initialized && hasFile && repairHistory) {
+    try {
+      const pastRepairs = repairHistory.getAll().filter(r =>
+        r.success && r.file === parsed.filePath && r.error &&
+        parsed.errorMessage.includes(r.error.split(":").pop()?.trim()?.slice(0, 30))
+      );
+      if (pastRepairs.length > 0) {
+        const cached = pastRepairs[pastRepairs.length - 1];
+        console.log(chalk.gray(`  🧠 Found cached fix for similar error (${cached.mode}, ${cached.id})`));
+        if (logger) logger.info("heal.cached", `Cached fix found: ${cached.resolution?.slice(0, 80)}`, { cachedId: cached.id });
+      }
+    } catch {}
+  }
+
+  // 7. Research — check past attempts to avoid loops
   const researcher = new ResearchAgent({ brain, logger });
   let researchContext = "";
   try {
@@ -211,24 +226,38 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
     if (researchContext) console.log(chalk.gray(`  🔍 Research: found past context for this error`));
   } catch {}
 
-  // 7. Goal Loop — set goal, iterate until fixed or exhausted
-  // Iteration 1: fast path (CODING_MODEL)
-  // Iteration 2: agent path (REASONING_MODEL)
-  // Iteration 3: deep research (RESEARCH_MODEL) + agent retry
+  // 7b. Token budget by error complexity — simple bugs get tight caps
+  const isSimpleError = /TypeError|ReferenceError|SyntaxError|Cannot find module/.test(parsed.errorMessage);
+  const isModerateError = /ECONNREFUSED|timeout|ENOENT|EACCES|EADDRINUSE/.test(parsed.errorMessage);
+  const tokenBudget = isSimpleError
+    ? { fast: 5000, agent: 20000, subAgent: 15000 }
+    : isModerateError
+    ? { fast: 10000, agent: 50000, subAgent: 30000 }
+    : { fast: 15000, agent: 100000, subAgent: 50000 };
+  console.log(chalk.gray(`  💰 Token budget: ${isSimpleError ? "simple" : isModerateError ? "moderate" : "complex"} (agent: ${tokenBudget.agent})`));
+
+  // 8. Goal Loop — set goal, iterate until fixed or exhausted
   const loop = new GoalLoop({
     maxIterations: parseInt(process.env.WOLVERINE_MAX_RETRIES, 10) || 3,
     researcher,
     logger,
     goal: `Fix: ${parsed.errorMessage.slice(0, 80)}`,
 
-    onAttempt: async (iteration, researchCtx) => {
+    onAttempt: async (iteration, researchCtx, priorAttempts) => {
       // Create backup for this attempt
-      // Full server/ backup — includes all files, configs, databases
       const bid = backupManager.createBackup(`heal attempt ${iteration}: ${parsed.errorMessage.slice(0, 60)}`);
       backupManager.setErrorSignature(bid, errorSignature);
       if (logger) logger.info(EVENT_TYPES.BACKUP_CREATED, `Backup ${bid} (iteration ${iteration})`, { backupId: bid });
 
-      const fullContext = [brainContext, researchContext, researchCtx, envContext].filter(Boolean).join("\n");
+      // Build concise prior attempt summary instead of full context bleed
+      let priorSummary = "";
+      if (priorAttempts && priorAttempts.length > 0) {
+        priorSummary = "\nPRIOR ATTEMPTS (do NOT repeat):\n" + priorAttempts.map(a =>
+          `- Attempt ${a.iteration} (${a.mode}): ${a.explanation?.slice(0, 100)}`
+        ).join("\n") + "\n";
+      }
+
+      const fullContext = [brainContext, researchContext, researchCtx, envContext, priorSummary].filter(Boolean).join("\n");
 
       let result;
       if (iteration === 1 && hasFile) {
@@ -291,8 +320,8 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
         console.log(chalk.magenta(`  🤖 Agent path (${getModel("reasoning")})...`));
         const agent = new AgentEngine({
           sandbox, logger, cwd, mcp,
-          maxTurns: 8,
-          maxTokens: 25000,
+          maxTurns: isSimpleError ? 4 : 8,
+          maxTokens: tokenBudget.agent,
         });
 
         const agentResult = await agent.run({

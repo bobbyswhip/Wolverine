@@ -131,7 +131,14 @@ function bootProbe(scriptPath, cwd, originalErrorSignature) {
  * @param {object} routeContext — optional { path, method } for route-level testing
  */
 async function verifyFix(scriptPath, cwd, originalErrorSignature, routeContext) {
-  const steps = routeContext?.path ? 3 : 2;
+  // Simple errors (TypeError, ReferenceError, SyntaxError) — trust syntax+boot, skip route probe.
+  // If the fix is wrong, ErrorMonitor will catch the 500 and re-trigger heal. This avoids
+  // the expensive cascade where a working fix gets rolled back because the route probe
+  // can't boot the full server in isolation.
+  const isSimpleError = /TypeError|ReferenceError|SyntaxError|Cannot find module/.test(originalErrorSignature || "");
+  const skipRouteProbe = isSimpleError;
+  const steps = (!skipRouteProbe && routeContext?.path) ? 3 : 2;
+
   console.log(chalk.yellow("\n🔬 Verifying fix...\n"));
 
   // Step 1: Syntax check
@@ -157,8 +164,9 @@ async function verifyFix(scriptPath, cwd, originalErrorSignature, routeContext) 
   }
   console.log(chalk.green("  ✅ Process booted successfully"));
 
-  // Step 3: Route probe (if we know which route was failing)
-  if (routeContext?.path) {
+  // Step 3: Route probe — only for complex errors (not simple TypeError/ReferenceError)
+  // Simple errors: trust syntax+boot. ErrorMonitor is the safety net.
+  if (!skipRouteProbe && routeContext?.path) {
     console.log(chalk.gray(`  [3/${steps}] Route probe: ${routeContext.method || "GET"} ${routeContext.path}...`));
     const routeResult = await routeProbe(scriptPath, cwd, routeContext);
     if (routeResult.status === "failed") {
@@ -170,6 +178,8 @@ async function verifyFix(scriptPath, cwd, originalErrorSignature, routeContext) 
     } else {
       console.log(chalk.gray(`  ⚠️  Route probe skipped: ${routeResult.reason || "unknown"}`));
     }
+  } else if (skipRouteProbe && routeContext?.path) {
+    console.log(chalk.gray(`  ⚡ Skipping route probe (simple error — ErrorMonitor is safety net)`));
   }
 
   return { verified: true, status: "fixed" };

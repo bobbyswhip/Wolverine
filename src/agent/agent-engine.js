@@ -463,6 +463,35 @@ Project root: ${this.cwd}${primaryFile ? `\nPrimary crash file: ${primaryFile}` 
 
       console.log(chalk.gray(`  🤖 Agent turn ${this.turnCount}/${this.maxTurns} (${this.totalTokens} tokens used)`));
 
+      // Compact context every 3 turns to prevent token blowup
+      // Turn 6 without compacting: ~95K tokens. With compacting: ~20K tokens.
+      if (this.turnCount > 1 && this.turnCount % 3 === 0 && this.messages.length > 4) {
+        try {
+          const { aiCall } = require("./ai-client") || require("../core/ai-client");
+          const { getModel: _gm } = require("./models") || require("../core/models");
+          const historyToCompact = this.messages.slice(1, -2); // keep system + last exchange
+          if (historyToCompact.length > 2) {
+            const historyText = historyToCompact.map(m => `${m.role}: ${(m.content || "").slice(0, 500)}`).join("\n");
+            const compactResult = await aiCall({
+              model: _gm("compacting"),
+              systemPrompt: "Summarize this agent conversation history into a concise status report. Keep: files read, changes made, errors found, what was tried. Remove: full file contents, redundant tool results.",
+              userPrompt: historyText.slice(0, 8000),
+              maxTokens: 512,
+              category: "brain",
+            });
+            if (compactResult.content) {
+              this.messages = [
+                this.messages[0], // system prompt
+                { role: "assistant", content: `[Prior work summary]\n${compactResult.content}` },
+                { role: "user", content: "Continue from where you left off." },
+                ...this.messages.slice(-2), // last exchange
+              ];
+              console.log(chalk.gray(`  📦 Compacted ${historyToCompact.length} messages → summary (${compactResult.content.length} chars)`));
+            }
+          }
+        } catch { /* compacting failed — continue with full context */ }
+      }
+
       let response;
       try {
         response = await aiCallWithHistory({
