@@ -172,6 +172,95 @@ const TOOL_DEFINITIONS = [
       },
     },
   },
+  // ── DIAGNOSTICS (investigate non-code problems) ──
+  {
+    type: "function",
+    function: {
+      name: "list_dir",
+      description: "List directory contents with file sizes. Use to check if files exist, find misplaced files, or verify directory structure.",
+      parameters: {
+        type: "object",
+        properties: {
+          path: { type: "string", description: "Relative directory path (default: project root)" },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "move_file",
+      description: "Move or rename a file. Use to fix misplaced files, reorganize structure, or rename incorrectly named files.",
+      parameters: {
+        type: "object",
+        properties: {
+          from: { type: "string", description: "Source relative path" },
+          to: { type: "string", description: "Destination relative path" },
+        },
+        required: ["from", "to"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "check_port",
+      description: "Check if a port is in use and what process is using it. Use for EADDRINUSE errors.",
+      parameters: {
+        type: "object",
+        properties: {
+          port: { type: "number", description: "Port number to check" },
+        },
+        required: ["port"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "check_env",
+      description: "Check environment variables. Lists all env vars (values redacted) or checks if a specific var is set. Use to diagnose missing config.",
+      parameters: {
+        type: "object",
+        properties: {
+          variable: { type: "string", description: "Specific env var to check (optional — omit to list all)" },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "inspect_db",
+      description: "Inspect a SQLite database: list tables, describe schema, or run a read-only query. Use for database errors, invalid entries, schema mismatches.",
+      parameters: {
+        type: "object",
+        properties: {
+          db_path: { type: "string", description: "Relative path to .db or .sqlite file" },
+          action: { type: "string", description: "Action: 'tables' (list tables), 'schema' (show CREATE statements), 'query' (run read-only SQL)" },
+          sql: { type: "string", description: "SQL query (required if action is 'query', must be SELECT/PRAGMA only)" },
+        },
+        required: ["db_path", "action"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "run_db_fix",
+      description: "Run a write query on a SQLite database to fix data issues: UPDATE invalid entries, DELETE corrupt rows, ALTER schema. Creates a backup first.",
+      parameters: {
+        type: "object",
+        properties: {
+          db_path: { type: "string", description: "Relative path to .db or .sqlite file" },
+          sql: { type: "string", description: "SQL statement (UPDATE, DELETE, INSERT, ALTER, CREATE)" },
+        },
+        required: ["db_path", "sql"],
+      },
+    },
+  },
   // ── COMPLETION ──
   {
     type: "function",
@@ -235,68 +324,92 @@ class AgentEngine {
   async run({ errorMessage, stackTrace, primaryFile, sourceCode, brainContext }) {
     const model = getModel("reasoning");
 
-    const systemPrompt = `You are Wolverine, an autonomous Node.js server repair agent. A server crashed and you must fix it.
+    const systemPrompt = `You are Wolverine, an autonomous Node.js server repair agent. A server has an error and you must diagnose and fix it.
 
-You have a full tool harness for investigating and fixing issues:
+You are NOT just a code editor — you are a full server doctor. Errors can be code bugs, missing dependencies, database problems, misplaced files, configuration issues, port conflicts, permission errors, corrupted state, or environment problems. Use your tools to investigate the ACTUAL root cause before attempting a fix.
+
+## YOUR TOOLS
 
 FILE TOOLS:
 - read_file: Read any file (with optional offset/limit for large files)
-- write_file: Write a complete file
+- write_file: Write a complete file (creates parent dirs)
 - edit_file: Surgical find-and-replace (preferred for small fixes)
-- glob_files: Find files by pattern (e.g. "**/*.js", "src/**/*.config.*")
+- glob_files: Find files by pattern (e.g. "**/*.js", "server/**/*.json")
 - grep_code: Search code with regex across the project
+- list_dir: List directory contents (check structure, find misplaced files)
+- move_file: Move or rename files (fix misplaced files)
 
 SHELL TOOLS:
-- bash_exec: Run any shell command (sandboxed to project dir)
-- git_log: View recent commits
+- bash_exec: Run any shell command (npm install, chmod, kill, etc.)
+- git_log: View recent commits (what changed recently?)
 - git_diff: View uncommitted changes
 
+DATABASE TOOLS:
+- inspect_db: List tables, show schema, or run SELECT on SQLite databases
+- run_db_fix: Run UPDATE/DELETE/INSERT/ALTER on SQLite databases (backs up first)
+
+DIAGNOSTICS:
+- check_port: Check if a port is in use and by what process
+- check_env: Check environment variables (values auto-redacted for security)
+
 RESEARCH:
-- web_fetch: Fetch a URL (docs, npm packages, Stack Overflow)
+- web_fetch: Fetch a URL (docs, npm packages, error solutions)
 
-Use these tools systematically:
-1. Understand the error and its root cause
-2. Explore related files (imports, configs, dependencies, schemas)
-3. Check git history if relevant
-4. Fix the issue across ALL affected files
-5. You can edit ANY file type: .js, .json, .sql, .yaml, .env, .dockerfile, .sh, etc.
-6. Prefer edit_file for small targeted fixes, write_file for major changes
-7. Use grep_code to find all usages before renaming something
-8. Use bash_exec to run tests, install packages, or check dependencies
+## DIAGNOSIS FLOWCHART — follow this order:
 
-CRITICAL — Not every crash is a code bug. Choose the right fix:
+1. READ THE ERROR CAREFULLY — what type of problem is this?
+2. If no file path: use glob_files, grep_code, list_dir to investigate
+3. If file path: read_file to see the code, then investigate related files
 
-| Error Pattern | Root Cause | Correct Fix |
-|---|---|---|
-| Cannot find module 'X' | Missing npm package | bash_exec: npm install X |
-| Cannot find module './X' | Wrong import path | edit_file: fix the require/import path |
-| ENOENT: no such file | Missing config/data file | write_file: create the missing file |
-| EACCES/EPERM | Permission denied | bash_exec: chmod or fix ownership |
-| EADDRINUSE | Port conflict | bash_exec: kill process on port, or edit config |
-| SyntaxError | Bad code | edit_file: fix the syntax |
-| TypeError/ReferenceError | Logic bug | edit_file: fix the code |
-| MODULE_NOT_FOUND + node_modules | Corrupted install | bash_exec: rm -rf node_modules && npm install |
+## ERROR → FIX STRATEGY TABLE
 
-ALWAYS check package.json before editing imports. If a module isn't a local file, use bash_exec to install it.
+| Error Pattern | Category | Diagnostic Steps | Fix |
+|---|---|---|---|
+| Cannot find module 'X' | DEPENDENCY | check package.json | bash_exec: npm install X |
+| Cannot find module './X' | IMPORT | glob_files to find real path | edit_file: fix require path |
+| ENOENT: no such file | FILE MISSING | list_dir to check structure | write_file or move_file |
+| EACCES/EPERM | PERMISSION | bash_exec: ls -la | bash_exec: chmod 755 |
+| EADDRINUSE | PORT | check_port to find blocker | bash_exec: kill PID, or edit config |
+| ECONNREFUSED | SERVICE DOWN | check if DB/service is running | bash_exec: start service |
+| SyntaxError | CODE | read_file to see context | edit_file: fix syntax |
+| TypeError/ReferenceError | CODE | read_file + grep_code | edit_file: fix logic |
+| ER_NO_SUCH_TABLE | DATABASE | inspect_db: tables | run_db_fix: CREATE TABLE or bash_exec migration |
+| SQLITE_ERROR/CONSTRAINT | DATABASE | inspect_db: schema + query | run_db_fix: UPDATE/ALTER |
+| Invalid JSON | CONFIG | read_file the JSON | edit_file: fix JSON syntax |
+| ENOMEM / heap out of memory | RESOURCE | check_env for NODE_OPTIONS | edit config or bash_exec: increase limit |
+| Missing env variable | CONFIG | check_env | write_file .env or edit config |
+| Wrong file location | STRUCTURE | list_dir + glob_files | move_file to correct location |
+| Corrupted node_modules | DEPENDENCY | bash_exec: ls node_modules | bash_exec: rm -rf node_modules && npm install |
+| Git conflict markers | CODE | grep_code: <<<<<<< | edit_file: resolve conflicts |
 
-Rules:
-- Read files before modifying them
-- Make minimal, targeted changes
-- Use bash_exec for operational fixes (npm install, chmod, config creation)
-- When done, call the "done" tool with a summary
+## RULES
 
-Project root: ${this.cwd}
-Primary crash file: ${primaryFile}`;
+1. INVESTIGATE FIRST — never guess. Read files, check directories, inspect databases before fixing.
+2. Read files before modifying them. Check package.json before editing imports.
+3. Make minimal, targeted changes — fix the root cause, not symptoms.
+4. Use the right tool: bash_exec for operational fixes, edit_file for code, run_db_fix for data.
+5. You can edit ANY file type: .js, .json, .sql, .yaml, .env, .toml, .sh, .dockerfile, etc.
+6. If the error has no file path, USE YOUR TOOLS to find the problem (glob, grep, list_dir, inspect_db).
+7. When done, call the "done" tool with a summary of what you found and fixed.
+
+Project root: ${this.cwd}${primaryFile ? `\nPrimary crash file: ${primaryFile}` : ""}`;
+
+    // Build user message — handle cases with and without a specific file
+    let userContent = `The server has an error:\n\n**Error:** ${errorMessage}\n\n**Stack Trace:**\n\`\`\`\n${stackTrace}\n\`\`\``;
+    if (primaryFile && sourceCode) {
+      userContent += `\n\n**Primary file (${primaryFile}):**\n\`\`\`\n${sourceCode}\n\`\`\``;
+    } else if (!primaryFile) {
+      userContent += `\n\n**No specific file identified.** Use your investigation tools (glob_files, grep_code, list_dir, inspect_db, check_env, check_port) to find the root cause.`;
+    }
+    if (brainContext) userContent += `\n\n**Context from Wolverine Brain:**\n${brainContext}`;
+    userContent += `\n\nDiagnose the root cause, investigate with your tools, and fix the issue.`;
 
     this.messages = [
       { role: "system", content: systemPrompt },
-      {
-        role: "user",
-        content: `The server crashed with this error:\n\n**Error:** ${errorMessage}\n\n**Stack Trace:**\n\`\`\`\n${stackTrace}\n\`\`\`\n\n**Primary file (${primaryFile}):**\n\`\`\`\n${sourceCode}\n\`\`\`${brainContext ? `\n\n**Context from Wolverine Brain:**\n${brainContext}` : ""}\n\nAnalyze the error, explore any related files you need, and fix the issue. Use your tools.`,
-      },
+      { role: "user", content: userContent },
     ];
 
-    this.filesRead.add(primaryFile);
+    if (primaryFile) this.filesRead.add(primaryFile);
 
     // Merge MCP tools with built-in tools
     const allTools = [...TOOL_DEFINITIONS];
@@ -411,6 +524,12 @@ Primary crash file: ${primaryFile}`;
       case "git_log":       return this._gitLog(args);
       case "git_diff":      return this._gitDiff(args);
       case "web_fetch":     return this._webFetch(args);
+      case "list_dir":      return this._listDir(args);
+      case "move_file":     return this._moveFile(args);
+      case "check_port":    return this._checkPort(args);
+      case "check_env":     return this._checkEnv(args);
+      case "inspect_db":    return this._inspectDb(args);
+      case "run_db_fix":    return this._runDbFix(args);
       case "done":          return this._done(args);
       // Legacy aliases
       case "list_files":    return this._globFiles({ pattern: (args.dir || ".") + "/*" + (args.pattern || "") });
@@ -689,6 +808,129 @@ Primary crash file: ${primaryFile}`;
   }
 
   // ── COMPLETION ──
+
+  // ── DIAGNOSTIC TOOLS ──
+
+  _listDir(args) {
+    const dirPath = path.resolve(this.cwd, args.path || ".");
+    try {
+      const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+      const lines = entries.map(e => {
+        try {
+          const stat = fs.statSync(path.join(dirPath, e.name));
+          const size = e.isDirectory() ? "DIR" : `${Math.round(stat.size / 1024)}KB`;
+          return `${e.isDirectory() ? "📁" : "📄"} ${e.name} (${size})`;
+        } catch { return `${e.name} (?)` ; }
+      });
+      console.log(chalk.gray(`    📁 Listed ${lines.length} entries in ${args.path || "."}`));
+      return { content: lines.join("\n") || "(empty directory)" };
+    } catch (e) { return { content: `Error: ${e.message}` }; }
+  }
+
+  _moveFile(args) {
+    if (this._isProtectedPath(args.from) || this._isProtectedPath(args.to)) {
+      return { content: "BLOCKED: Cannot move protected files" };
+    }
+    const from = path.resolve(this.cwd, args.from);
+    const to = path.resolve(this.cwd, args.to);
+    try {
+      fs.mkdirSync(path.dirname(to), { recursive: true });
+      fs.renameSync(from, to);
+      this.filesModified.push(args.to);
+      console.log(chalk.green(`    📦 Moved: ${args.from} → ${args.to}`));
+      return { content: `Moved ${args.from} → ${args.to}` };
+    } catch (e) { return { content: `Error moving: ${e.message}` }; }
+  }
+
+  _checkPort(args) {
+    const port = args.port;
+    try {
+      const platform = process.platform;
+      let cmd;
+      if (platform === "win32") {
+        cmd = `netstat -ano | findstr :${port}`;
+      } else {
+        cmd = `lsof -i :${port} 2>/dev/null || ss -tlnp 2>/dev/null | grep :${port}`;
+      }
+      const result = execSync(cmd, { timeout: 5000, stdio: "pipe" }).toString().trim();
+      console.log(chalk.gray(`    🔌 Port ${port}: ${result ? "IN USE" : "free"}`));
+      return { content: result || `Port ${port} is free` };
+    } catch { return { content: `Port ${port} appears free (no listeners found)` }; }
+  }
+
+  _checkEnv(args) {
+    const { redact } = require("../security/secret-redactor");
+    if (args.variable) {
+      const val = process.env[args.variable];
+      const display = val ? redact(val) : "(not set)";
+      return { content: `${args.variable}=${display}` };
+    }
+    // List all env vars with redacted values
+    const keys = Object.keys(process.env).sort();
+    const lines = keys.map(k => {
+      const val = process.env[k];
+      return `${k}=${val && val.length > 50 ? "(set, " + val.length + " chars)" : redact(val || "")}`;
+    });
+    return { content: lines.join("\n") };
+  }
+
+  _inspectDb(args) {
+    const dbPath = path.resolve(this.cwd, args.db_path);
+    try {
+      let Database;
+      try { Database = require("better-sqlite3"); } catch {
+        return { content: "better-sqlite3 not installed. Run: npm install better-sqlite3" };
+      }
+      const db = new Database(dbPath, { readonly: true });
+      let result;
+      if (args.action === "tables") {
+        const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all();
+        result = tables.map(t => t.name).join("\n") || "(no tables)";
+      } else if (args.action === "schema") {
+        const schemas = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND sql IS NOT NULL").all();
+        result = schemas.map(s => s.sql).join("\n\n") || "(no tables)";
+      } else if (args.action === "query") {
+        if (!args.sql) return { content: "Error: sql required for query action" };
+        const upper = args.sql.trim().toUpperCase();
+        if (!upper.startsWith("SELECT") && !upper.startsWith("PRAGMA")) {
+          return { content: "BLOCKED: inspect_db only allows SELECT/PRAGMA. Use run_db_fix for writes." };
+        }
+        const rows = db.prepare(args.sql).all();
+        result = JSON.stringify(rows.slice(0, 50), null, 2);
+        if (rows.length > 50) result += `\n... (${rows.length} total rows, showing first 50)`;
+      } else {
+        result = "Unknown action. Use: tables, schema, or query";
+      }
+      db.close();
+      const { redact } = require("../security/secret-redactor");
+      console.log(chalk.gray(`    🗃️ DB ${args.action}: ${args.db_path}`));
+      return { content: redact(result) };
+    } catch (e) { return { content: `DB error: ${e.message}` }; }
+  }
+
+  _runDbFix(args) {
+    const dbPath = path.resolve(this.cwd, args.db_path);
+    try {
+      let Database;
+      try { Database = require("better-sqlite3"); } catch {
+        return { content: "better-sqlite3 not installed. Run: npm install better-sqlite3" };
+      }
+      // Block dangerous operations
+      const upper = args.sql.trim().toUpperCase();
+      if (upper.startsWith("DROP DATABASE") || upper.includes("DROP TABLE sqlite_")) {
+        return { content: "BLOCKED: Cannot drop system tables" };
+      }
+      // Backup the DB file first
+      const backupPath = dbPath + ".wolverine-backup";
+      fs.copyFileSync(dbPath, backupPath);
+      const db = new Database(dbPath);
+      const result = db.prepare(args.sql).run();
+      db.close();
+      this.filesModified.push(args.db_path);
+      console.log(chalk.green(`    🗃️ DB fix applied: ${args.sql.slice(0, 60)} (changes: ${result.changes})`));
+      return { content: `SQL executed. Changes: ${result.changes}. Backup at: ${backupPath}` };
+    } catch (e) { return { content: `DB error: ${e.message}` }; }
+  }
 
   _done(args) {
     console.log(chalk.green(`    ✅ Agent done: ${args.summary}`));

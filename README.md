@@ -202,20 +202,26 @@ The error hook auto-patches Fastify and Express via `--require` preload. No midd
 
 ## Agent Tool Harness
 
-The AI agent has 10 built-in tools (ported from [claw-code](https://github.com/instructkr/claw-code)):
+The AI agent has 16 built-in tools (inspired by [claw-code](https://github.com/ultraworkers/claw-code)):
 
-| Tool | Source | Description |
-|------|--------|-------------|
-| `read_file` | FileReadTool | Read any file with optional offset/limit for large files |
-| `write_file` | FileWriteTool | Write complete file content, creates parent dirs |
-| `edit_file` | FileEditTool | Surgical find-and-replace without rewriting entire file |
-| `glob_files` | GlobTool | Pattern-based file discovery (`**/*.js`, `src/**/*.json`) |
-| `grep_code` | GrepTool | Regex search across codebase with context lines |
-| `bash_exec` | BashTool | Sandboxed shell execution with blocked dangerous commands |
-| `git_log` | gitOperationTracking | View recent commit history |
-| `git_diff` | gitOperationTracking | View uncommitted changes |
-| `web_fetch` | WebFetchTool | Fetch URL content for documentation/research |
-| `done` | — | Signal task completion with summary |
+| Tool | Category | Description |
+|------|----------|-------------|
+| `read_file` | File | Read any file with optional offset/limit for large files |
+| `write_file` | File | Write complete file content, creates parent dirs |
+| `edit_file` | File | Surgical find-and-replace without rewriting entire file |
+| `glob_files` | File | Pattern-based file discovery (`**/*.js`, `src/**/*.json`) |
+| `grep_code` | File | Regex search across codebase with context lines |
+| `list_dir` | File | List directory contents with sizes (find misplaced files) |
+| `move_file` | File | Move or rename files (fix structure problems) |
+| `bash_exec` | Shell | Sandboxed shell execution (npm install, chmod, kill, etc.) |
+| `git_log` | Shell | View recent commit history |
+| `git_diff` | Shell | View uncommitted changes |
+| `inspect_db` | Database | List tables, show schema, run SELECT on SQLite databases |
+| `run_db_fix` | Database | UPDATE/DELETE/INSERT/ALTER on SQLite (auto-backup before write) |
+| `check_port` | Diagnostic | Check if a port is in use and by what process |
+| `check_env` | Diagnostic | Check environment variables (values auto-redacted) |
+| `web_fetch` | Research | Fetch URL content for documentation/research |
+| `done` | Control | Signal task completion with summary |
 
 **Blocked commands** (from claw-code's `destructiveCommandWarning`):
 `rm -rf /`, `git push --force`, `git reset --hard`, `npm publish`, `curl | bash`, `eval()`
@@ -231,15 +237,15 @@ For complex repairs, wolverine spawns specialized sub-agents that run in sequenc
 
 | Agent | Access | Model | Role |
 |-------|--------|-------|------|
-| `explore` | Read-only | REASONING | Investigate codebase, find relevant files |
+| `explore` | Read+diagnostics | REASONING | Investigate codebase, check env/ports/databases |
 | `plan` | Read-only | REASONING | Analyze problem, propose fix strategy |
 | `fix` | Read+write+shell | CODING | Execute targeted fix — code edits AND npm install/chmod |
 | `verify` | Read-only | REASONING | Check if fix actually works |
 | `research` | Read-only | RESEARCH | Search brain + web for solutions |
 | `security` | Read-only | AUDIT | Audit code for vulnerabilities |
-| `database` | Read+write | CODING | Database-specific fixes (SQL skill) |
+| `database` | Read+write+SQL | CODING | Database fixes: inspect_db + run_db_fix + SQL skill |
 
-Each sub-agent gets **restricted tools** — the explorer can't write files, the fixer can't search the web. This prevents agents from overstepping their role.
+Each sub-agent gets **restricted tools** — the explorer can't write files, the fixer can't search the web. This prevents agents from overstepping their role. Diagnostic tools (check_port, check_env, inspect_db, list_dir) are available to explorers and planners for investigation.
 
 **Workflows:**
 - `exploreAndFix()` — explore → plan → fix (sequential, 3 agents)

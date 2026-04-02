@@ -47,30 +47,25 @@ async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager
 
   if (logger) logger.debug(EVENT_TYPES.HEAL_PARSE, `Parsed: ${parsed.errorMessage}`, { file: parsed.filePath, line: parsed.line });
 
-  if (!parsed.filePath) {
-    console.log(chalk.red("  Could not identify the source file from the error. Skipping repair."));
-    if (logger) logger.error(EVENT_TYPES.HEAL_FAILED, "Could not parse file path from error");
-    return { healed: false, explanation: "Could not parse file path from error" };
-  }
-
-  // 2. Sandbox check
-  try {
-    sandbox.resolve(parsed.filePath);
-  } catch (e) {
-    if (e instanceof SandboxViolationError) {
-      console.log(chalk.red(`  🔒 SANDBOX: ${e.message}`));
-      if (logger) logger.error(EVENT_TYPES.SECURITY_SANDBOX_VIOLATION, e.message, { file: parsed.filePath });
-      return { healed: false, explanation: "File outside sandbox — access denied" };
+  // File path is optional — some errors (database, config, port) don't trace to a file.
+  // When no file is found, skip fast path and go straight to agent investigation.
+  let hasFile = false;
+  if (parsed.filePath) {
+    // 2. Sandbox check
+    try {
+      sandbox.resolve(parsed.filePath);
+      hasFile = sandbox.exists(parsed.filePath);
+    } catch (e) {
+      if (e instanceof SandboxViolationError) {
+        console.log(chalk.red(`  🔒 SANDBOX: ${e.message}`));
+        if (logger) logger.error(EVENT_TYPES.SECURITY_SANDBOX_VIOLATION, e.message, { file: parsed.filePath });
+        return { healed: false, explanation: "File outside sandbox — access denied" };
+      }
+      throw e;
     }
-    throw e;
   }
 
-  if (!sandbox.exists(parsed.filePath)) {
-    console.log(chalk.red(`  Source file not found: ${parsed.filePath}`));
-    return { healed: false, explanation: "Source file not found" };
-  }
-
-  console.log(chalk.cyan(`  File:  ${parsed.filePath}`));
+  console.log(chalk.cyan(`  File:  ${parsed.filePath || "(no file — agent will investigate)"}`));
   console.log(chalk.cyan(`  Line:  ${parsed.line || "unknown"}`));
   console.log(chalk.cyan(`  Error: ${parsed.errorMessage}`));
   console.log(chalk.cyan(`  Type:  ${parsed.errorType || "unknown"}`));
@@ -130,8 +125,8 @@ async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager
     return { healed: true, explanation: opsFix.action, mode: "operational" };
   }
 
-  // 5. Read the source file + get brain context
-  const sourceCode = sandbox.readFile(parsed.filePath);
+  // 5. Read the source file (if available) + get brain context
+  const sourceCode = hasFile ? sandbox.readFile(parsed.filePath) : "";
 
   let brainContext = "";
   // Inject relevant skill context (claw-code: pre-enrich prompt with matched tools)
@@ -175,15 +170,16 @@ async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager
     onAttempt: async (iteration, researchCtx) => {
       // Create backup for this attempt
       // Full server/ backup — includes all files, configs, databases
-      const bid = backupManager.createBackup(null);
+      const bid = backupManager.createBackup(`heal attempt ${iteration}: ${parsed.errorMessage.slice(0, 60)}`);
       backupManager.setErrorSignature(bid, errorSignature);
       if (logger) logger.info(EVENT_TYPES.BACKUP_CREATED, `Backup ${bid} (iteration ${iteration})`, { backupId: bid });
 
       const fullContext = [brainContext, researchContext, researchCtx].filter(Boolean).join("\n");
 
       let result;
-      if (iteration === 1) {
+      if (iteration === 1 && hasFile) {
         // Fast path — CODING_MODEL, single file + optional commands
+        // Only available when we have a specific file to fix
         console.log(chalk.yellow(`  🧠 Fast path (${getModel("coding")})...`));
         try {
           const repair = await requestRepair({
@@ -235,8 +231,8 @@ async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager
           backupManager.rollbackTo(bid);
           return { healed: false, explanation: `Fast path error: ${err.message}` };
         }
-      } else if (iteration === 2) {
-        // Iteration 2: Single agent — REASONING_MODEL
+      } else if (iteration <= 2) {
+        // Agent path — REASONING_MODEL (also handles iteration 1 when no file)
         console.log(chalk.magenta(`  🤖 Agent path (${getModel("reasoning")})...`));
         const agent = new AgentEngine({
           sandbox, logger, cwd, mcp,
@@ -251,9 +247,17 @@ async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager
         });
         rateLimiter.record(errorSignature, agentResult.totalTokens);
 
-        if (agentResult.success && agentResult.filesModified.length > 0) {
-          const verification = await verifyFix(parsed.filePath, cwd, errorSignature);
-          if (verification.verified) {
+        if (agentResult.success) {
+          // Verify: if we have a file, do syntax + boot check. Otherwise just boot probe.
+          if (hasFile) {
+            const verification = await verifyFix(parsed.filePath, cwd, errorSignature);
+            if (verification.verified) {
+              backupManager.markVerified(bid);
+              rateLimiter.clearSignature(errorSignature);
+              return { healed: true, explanation: agentResult.summary, backupId: bid, mode: "agent", agentStats: agentResult };
+            }
+          } else if (agentResult.filesModified.length > 0 || agentResult.toolCalls?.some(t => t.name === "bash_exec")) {
+            // No specific file but agent made changes or ran commands — trust it
             backupManager.markVerified(bid);
             rateLimiter.clearSignature(errorSignature);
             return { healed: true, explanation: agentResult.summary, backupId: bid, mode: "agent", agentStats: agentResult };
@@ -267,14 +271,20 @@ async function heal({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager
         console.log(chalk.magenta(`  🤖 Sub-agent path (explore → plan → fix)...`));
 
         const subResult = await exploreAndFix(
-          `Error: ${parsed.errorMessage}\nFile: ${parsed.filePath}\nStack: ${parsed.stackTrace?.slice(0, 300)}`,
+          `Error: ${parsed.errorMessage}\n${parsed.filePath ? "File: " + parsed.filePath + "\n" : ""}Stack: ${parsed.stackTrace?.slice(0, 300)}`,
           { sandbox, logger, cwd, mcp, brainContext: fullContext }
         );
         rateLimiter.record(errorSignature, subResult.totalTokens);
 
-        if (subResult.success && subResult.filesModified.length > 0) {
-          const verification = await verifyFix(parsed.filePath, cwd, errorSignature);
-          if (verification.verified) {
+        if (subResult.success) {
+          if (hasFile) {
+            const verification = await verifyFix(parsed.filePath, cwd, errorSignature);
+            if (verification.verified) {
+              backupManager.markVerified(bid);
+              rateLimiter.clearSignature(errorSignature);
+              return { healed: true, explanation: subResult.summary, backupId: bid, mode: "sub-agents", agentStats: subResult };
+            }
+          } else {
             backupManager.markVerified(bid);
             rateLimiter.clearSignature(errorSignature);
             return { healed: true, explanation: subResult.summary, backupId: bid, mode: "sub-agents", agentStats: subResult };

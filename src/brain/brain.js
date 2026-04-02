@@ -215,6 +215,18 @@ const SEED_DOCS = [
     text: "Error Monitor: detects caught 500 errors that don't crash the process. Most production bugs are caught by Fastify/Express error handlers — the server stays alive but routes return 500. Wolverine's crash-based heal pipeline never triggers for these. ErrorMonitor tracks 5xx errors per route via IPC from child process. After N consecutive 500s within a time window (default: 3 failures in 30s), triggers the heal pipeline without killing the server. Error hook auto-injected via --require preload (no user code changes). Cooldown prevents heal spam (default: 60s per route). Stats available in dashboard and telemetry. Config: WOLVERINE_ERROR_THRESHOLD, WOLVERINE_ERROR_WINDOW_MS, WOLVERINE_ERROR_COOLDOWN_MS.",
     metadata: { topic: "error-monitor" },
   },
+  {
+    text: "Agent tool harness v2: 16 built-in tools. FILE: read_file, write_file, edit_file, glob_files, grep_code, list_dir, move_file. SHELL: bash_exec, git_log, git_diff. DATABASE: inspect_db (list tables, show schema, run SELECT), run_db_fix (UPDATE/DELETE/INSERT/ALTER with auto-backup). DIAGNOSTICS: check_port (find what's using a port), check_env (list/check env vars, values redacted). RESEARCH: web_fetch. COMPLETION: done. Sub-agents get restricted sets: explorer gets diagnostics (list_dir, check_env, check_port, inspect_db), fixer gets action tools (bash_exec, move_file, run_db_fix), verifier gets inspection tools.",
+    metadata: { topic: "agent-tools-v2" },
+  },
+  {
+    text: "Server problem categories the agent can fix: CODE BUGS (SyntaxError, TypeError, ReferenceError → edit_file), DEPENDENCIES (Cannot find module → npm install, corrupted node_modules → rm + reinstall), DATABASE (invalid entries → run_db_fix UPDATE, missing table → CREATE TABLE, schema mismatch → ALTER TABLE, constraint violation → fix data or schema), CONFIG (invalid JSON → edit_file, missing env vars → write .env, wrong port → edit config), FILESYSTEM (misplaced files → move_file, missing directories → bash_exec mkdir, wrong permissions → chmod), NETWORK (port conflict → check_port + kill, service down → restart, connection refused → check config), STATE (corrupted cache → delete + restart, stale locks → remove lock file, git conflicts → resolve markers). The agent investigates before fixing — reads files, checks directories, inspects databases, never guesses.",
+    metadata: { topic: "server-problems" },
+  },
+  {
+    text: "Heal pipeline no longer requires a file path. When no file is identified from the error (database errors, config problems, port conflicts), the pipeline skips fast path and goes straight to the agent, which uses investigation tools (glob_files, grep_code, list_dir, inspect_db, check_env, check_port) to find the root cause. Agent verification for no-file errors: if agent made changes or ran commands, trust the agent's assessment. For file-based errors, verification uses syntax check + boot probe as before.",
+    metadata: { topic: "fileless-heal" },
+  },
 ];
 
 class Brain {
