@@ -38,19 +38,42 @@ function getCurrentVersion() {
 }
 
 /**
- * Check npm registry for the latest published version.
- * Uses `npm view` — no network dependency beyond npm.
+ * Check for the latest available version.
+ * For git repos: checks remote for newer commits via `git ls-remote`.
+ * For npm installs: checks npm registry via `npm view`.
  */
-function getLatestVersion() {
+function getLatestVersion(cwd) {
+  // Try npm registry first (works for both git and npm installs)
   try {
     const result = execSync(`npm view ${PACKAGE_NAME} version 2>/dev/null`, {
       encoding: "utf-8",
       timeout: 15000,
+      cwd: cwd || process.cwd(),
     }).trim();
-    return result || null;
-  } catch {
-    return null;
-  }
+    if (result) return result;
+  } catch {}
+
+  // Fallback for git repos: check if remote has newer commits
+  try {
+    if (isGitRepo(cwd || process.cwd())) {
+      execSync("git fetch origin --quiet", { cwd: cwd || process.cwd(), stdio: "pipe", timeout: 15000 });
+      const behind = execSync("git rev-list HEAD..origin/master --count", {
+        cwd: cwd || process.cwd(), encoding: "utf-8", timeout: 5000,
+      }).trim();
+      if (parseInt(behind, 10) > 0) {
+        // There are newer commits — read version from remote package.json
+        try {
+          const remoteVersion = execSync("git show origin/master:package.json", {
+            cwd: cwd || process.cwd(), encoding: "utf-8", timeout: 5000,
+          });
+          const pkg = JSON.parse(remoteVersion);
+          return pkg.version || null;
+        } catch {}
+      }
+    }
+  } catch {}
+
+  return null;
 }
 
 /**
@@ -97,7 +120,18 @@ function restoreConfigs(cwd, backups) {
 }
 
 /**
+ * Detect if this is a git repo or an npm install.
+ */
+function isGitRepo(cwd) {
+  try {
+    execSync("git rev-parse --is-inside-work-tree", { cwd, stdio: "pipe", timeout: 3000 });
+    return true;
+  } catch { return false; }
+}
+
+/**
  * Perform the upgrade. Returns { success, from, to, error? }
+ * Supports both npm-installed and git-cloned wolverine.
  */
 function upgrade(cwd, logger) {
   const current = getCurrentVersion();
@@ -115,11 +149,21 @@ function upgrade(cwd, logger) {
   console.log(chalk.gray(`  🔒 Backed up ${Object.keys(configBackups).length} config files`));
 
   try {
-    // Determine install method: global or local
-    const isGlobal = __dirname.includes("node_modules") && !cwd.includes("node_modules");
-    const cmd = isGlobal
-      ? `npm install -g ${PACKAGE_NAME}@${latest}`
-      : `npm install ${PACKAGE_NAME}@${latest}`;
+    // Detect install method: git clone or npm package
+    const useGit = isGitRepo(cwd);
+    let cmd;
+
+    if (useGit) {
+      // Git-cloned: pull latest from origin, then npm install for deps
+      cmd = "git pull origin master && npm install";
+      console.log(chalk.blue(`  📦 Git repo detected — pulling latest`));
+    } else {
+      // npm-installed: update the package
+      const isGlobal = __dirname.includes("node_modules") && !cwd.includes("node_modules");
+      cmd = isGlobal
+        ? `npm install -g ${PACKAGE_NAME}@${latest}`
+        : `npm install ${PACKAGE_NAME}@${latest}`;
+    }
 
     console.log(chalk.blue(`  📦 Running: ${cmd}`));
     execSync(cmd, { cwd, stdio: "pipe", timeout: 120000 });
@@ -149,12 +193,12 @@ function upgrade(cwd, logger) {
  * Check for updates (non-blocking). Logs if update available.
  * Call upgrade() separately to actually apply.
  */
-function checkForUpdate() {
+function checkForUpdate(cwd) {
   if (_checking) return null;
   _checking = true;
   try {
     const current = getCurrentVersion();
-    const latest = getLatestVersion();
+    const latest = getLatestVersion(cwd);
     _checking = false;
     if (latest && isNewer(latest, current)) {
       console.log(chalk.blue(`  🔄 Update available: ${PACKAGE_NAME} ${current} → ${latest}`));
@@ -184,7 +228,7 @@ function startAutoUpdate({ cwd, logger, onUpdate, intervalMs }) {
   console.log(chalk.gray(`  🔄 Auto-update scheduled: first check in 30s, then every ${Math.round(interval / 60000)}min`));
   setTimeout(() => {
     console.log(chalk.gray(`  🔄 Checking for updates (v${getCurrentVersion()})...`));
-    const result = checkForUpdate();
+    const result = checkForUpdate(cwd);
     if (result?.available) {
       const upgraded = upgrade(cwd, logger);
       if (upgraded.success && onUpdate) {
@@ -200,7 +244,7 @@ function startAutoUpdate({ cwd, logger, onUpdate, intervalMs }) {
 
   // Periodic check
   _timer = setInterval(() => {
-    const result = checkForUpdate();
+    const result = checkForUpdate(cwd);
     if (result?.available) {
       const upgraded = upgrade(cwd, logger);
       if (upgraded.success && onUpdate) {
