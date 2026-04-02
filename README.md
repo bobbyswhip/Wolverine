@@ -552,6 +552,15 @@ All backups stored in **`~/.wolverine-safe-backups/`** — outside the project d
 - **Retention**: unstable/verified pruned after 7 days, stable keeps 1/day after 7 days
 - Protected files never overwritten during rollback: `settings.json`, `db.js`, `.env.local`
 
+```bash
+# CLI commands
+wolverine --backup "before auth changes"  # create snapshot
+wolverine --list-backups                  # show all with status/age
+wolverine --rollback mngt8mwb-v0sm        # restore specific backup
+wolverine --rollback-latest               # restore most recent
+wolverine --undo-rollback                 # undo last rollback
+```
+
 **Rollback & Recovery:**
 
 | Action | What it does |

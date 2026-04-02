@@ -37,6 +37,7 @@ const { sqlGuard, SafeDB, scanForInjection, idempotencyGuard, idempotencyAfterHo
 const { diagnose: diagnoseDeps, healthReport: depsHealthReport, getMigration } = require("./skills/deps");
 const { checkForUpdate, upgrade: upgradeWolverine, getCurrentVersion } = require("./platform/auto-update");
 const { safeUpdate, createSafeBackup, listSafeBackups, restoreFromSafeBackup } = require("./skills/update");
+const { backup, rollback, rollbackLatest, undoRollback, listBackups } = require("./skills/backup");
 
 module.exports = {
   // Core
@@ -108,4 +109,9 @@ module.exports = {
   createSafeBackup,
   listSafeBackups,
   restoreFromSafeBackup,
+  backup,
+  rollback,
+  rollbackLatest,
+  undoRollback,
+  listBackups,
 };

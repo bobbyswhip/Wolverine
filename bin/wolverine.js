@@ -72,7 +72,45 @@ if (args.includes("--restore")) {
   process.exit(0);
 }
 
-// --backups: list safe backups
+// --backup: create server snapshot
+if (args.includes("--backup")) {
+  const reason = args[args.indexOf("--backup") + 1] || "manual";
+  const { backup } = require("../src/skills/backup");
+  backup(process.cwd(), reason);
+  process.exit(0);
+}
+
+// --list-backups: list all server snapshots
+if (args.includes("--list-backups")) {
+  const { listBackups } = require("../src/skills/backup");
+  listBackups(process.cwd());
+  process.exit(0);
+}
+
+// --rollback: rollback to specific backup
+if (args.includes("--rollback") && !args.includes("--rollback-latest") && !args.includes("--undo-rollback")) {
+  const id = args[args.indexOf("--rollback") + 1];
+  if (!id) { console.log("Usage: wolverine --rollback <backup-id>"); process.exit(1); }
+  const { rollback } = require("../src/skills/backup");
+  const result = rollback(process.cwd(), id);
+  process.exit(result.success ? 0 : 1);
+}
+
+// --rollback-latest: rollback to most recent backup
+if (args.includes("--rollback-latest")) {
+  const { rollbackLatest } = require("../src/skills/backup");
+  const result = rollbackLatest(process.cwd());
+  process.exit(result.success ? 0 : 1);
+}
+
+// --undo-rollback: undo last rollback
+if (args.includes("--undo-rollback")) {
+  const { undoRollback } = require("../src/skills/backup");
+  const result = undoRollback(process.cwd());
+  process.exit(result.success ? 0 : 1);
+}
+
+// --backups: list safe backups (update snapshots)
 if (args.includes("--backups")) {
   const { listSafeBackups } = require("../src/skills/update");
   const backups = listSafeBackups();

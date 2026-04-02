@@ -238,6 +238,10 @@ const SEED_DOCS = [
     metadata: { topic: "skill-deps" },
   },
   {
+    text: "Backup skill (src/skills/backup.js): agent-friendly backup/rollback. Functions: backup(cwd, reason) creates snapshot, rollback(cwd, id) restores specific backup, rollbackLatest(cwd) restores most recent, undoRollback(cwd) undoes last rollback, listBackups(cwd) shows all with status/age/reason. Agent can use via bash_exec: node -e \"require('./src/skills/backup').backup('.', 'before change')\". CLI: wolverine --backup 'reason', wolverine --list-backups, wolverine --rollback <id>, wolverine --rollback-latest, wolverine --undo-rollback. All stored in ~/.wolverine-safe-backups/snapshots/. Create backup BEFORE any risky server change.",
+    metadata: { topic: "backup-skill" },
+  },
+  {
     text: "CRITICAL: Never run raw 'npm install wolverine-ai' or 'git pull' to update — these OVERWRITE server/, .wolverine/ (brain, backups, events), and .env.local. Always use the safe update skill: wolverine --update (CLI), safeUpdate(cwd) (programmatic), or let auto-update handle it. ALL backups (heal snapshots + update snapshots) stored in ~/.wolverine-safe-backups/ (OUTSIDE project, survives git clean, rm -rf, project deletion). Structure: ~/.wolverine-safe-backups/snapshots/ (heal backups), ~/.wolverine-safe-backups/updates/ (pre-update snapshots), ~/.wolverine-safe-backups/manifest.json (backup registry). Old .wolverine/backups/ auto-migrated on first run. Restore with: wolverine --restore <name>. List: wolverine --backups.",
     metadata: { topic: "safe-update-warning" },
   },
