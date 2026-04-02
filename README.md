@@ -358,11 +358,12 @@ High-performance vector database that grows without slowing down:
 
 **Search performance** (scales gracefully):
 
-| Entries | Semantic Search | Keyword (BM25) |
-|---------|----------------|----------------|
-| 100 | 0.2ms | 0.005ms |
-| 1,000 | 0.4ms | 0.01ms |
-| 10,000 | 4.4ms | 0.1ms |
+| Entries | Semantic Search | Keyword (BM25) | Clusters |
+|---------|----------------|----------------|----------|
+| 100 | 0.2ms | 0.005ms | 10 |
+| 1,000 | 0.4ms | 0.01ms | 32 |
+| 10,000 | 4.4ms | 0.1ms | 100 |
+| 50,000 | 23.7ms | 0.5ms | 224 |
 
 **4 optimization techniques:**
 1. **Pre-normalized vectors** — cosine similarity = dot product (no sqrt per query)
