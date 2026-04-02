@@ -86,9 +86,11 @@ Singleton initialized once via `initRedactor(projectRoot)`. Reads `.env.local`, 
 
 ## Configuration
 
-- **Secrets:** `.env.local` (OPENAI_API_KEY, WOLVERINE_ADMIN_KEY)
+- **Secrets:** `.env.local` (OPENAI_API_KEY, ANTHROPIC_API_KEY, WOLVERINE_ADMIN_KEY)
 - **Settings:** `server/config/settings.json` (models, cluster, telemetry, rate limits, health checks)
+- **Dual provider:** OpenAI + Anthropic. Provider auto-detected from model name (`claude-*` → Anthropic, `gpt-*` → OpenAI). Mix per role.
 - **10 model slots:** reasoning, coding, chat, tool, classifier, audit, compacting, research, embedding — each independently configurable
+- **Embeddings always OpenAI** — Anthropic has no embedding API
 - **Config priority:** env vars > settings.json > defaults
 
 ## Files That Matter Most

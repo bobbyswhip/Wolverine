@@ -44,7 +44,7 @@ const SEED_DOCS = [
     metadata: { topic: "security" },
   },
   {
-    text: "Wolverine model tiers: REASONING_MODEL for deep multi-step debugging. CODING_MODEL for code repair generation. CHAT_MODEL for explanations and summaries. AUDIT_MODEL for security scans (runs every error, keep cheap). UTILITY_MODEL for JSON formatting and thought compaction. TEXT_EMBEDDING_MODEL for brain vector embeddings.",
+    text: "Wolverine supports both OpenAI and Anthropic models. Provider auto-detected from model name: claude-* → Anthropic, gpt-*/o1-*/o3-* → OpenAI. Mix and match per role: e.g., Anthropic for reasoning (claude-sonnet-4), OpenAI for coding (gpt-5.3-codex). 10 model slots: REASONING_MODEL, CODING_MODEL, CHAT_MODEL, TOOL_MODEL, CLASSIFIER_MODEL, AUDIT_MODEL, COMPACTING_MODEL, RESEARCH_MODEL, TEXT_EMBEDDING_MODEL (always OpenAI — Anthropic has no embeddings). Configure in .env.local or settings.json. Tools work identically on both providers — ai-client.js normalizes all responses to same {content, toolCalls, usage} shape. Telemetry tracks usage byModel AND byProvider (openai/anthropic) automatically.",
     metadata: { topic: "model-config" },
   },
   {

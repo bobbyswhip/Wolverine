@@ -1,4 +1,4 @@
-const { getClient, aiCall } = require("../core/ai-client");
+const { getClient, aiCall, detectProvider } = require("../core/ai-client");
 const { getModel } = require("../core/models");
 
 /**
@@ -41,7 +41,8 @@ async function embed(text) {
   const cached = _cacheGet(text);
   if (cached) return cached;
 
-  const openai = getClient();
+  // Embeddings always use OpenAI (Anthropic doesn't have an embedding API)
+  const openai = getClient("openai");
   const model = getModel("embedding");
 
   const response = await openai.embeddings.create({
@@ -78,7 +79,8 @@ async function embedBatch(texts) {
 
   if (uncached.length === 0) return results;
 
-  const openai = getClient();
+  // Embeddings always use OpenAI (Anthropic doesn't have an embedding API)
+  const openai = getClient("openai");
   const model = getModel("embedding");
 
   const response = await openai.embeddings.create({

@@ -1,17 +1,13 @@
 const OpenAI = require("openai");
-const { getModel } = require("./models");
+const Anthropic = require("@anthropic-ai/sdk");
+const { getModel, detectProvider } = require("./models");
 
-let client = null;
+let _openaiClient = null;
+let _anthropicClient = null;
 let _tracker = null;
 
-/**
- * Set the global token tracker. Called once from runner on startup.
- */
 function setTokenTracker(tracker) { _tracker = tracker; }
 
-/**
- * Extract token counts from any OpenAI response usage object.
- */
 function _extractTokens(usage) {
   if (!usage) return { input: 0, output: 0 };
   return {
@@ -20,92 +16,254 @@ function _extractTokens(usage) {
   };
 }
 
-/**
- * Track a call if tracker is set.
- */
 function _track(model, category, usage, tool) {
   if (!_tracker) return;
   const { input, output } = _extractTokens(usage);
   _tracker.record(model, category, input, output, tool);
 }
 
-function getClient() {
-  if (!client) {
+// ── Client Management ──
+
+function getClient(provider) {
+  if (provider === "anthropic") return _getAnthropicClient();
+  return _getOpenAIClient();
+}
+
+function _getOpenAIClient() {
+  if (!_openaiClient) {
     const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      throw new Error(
-        "OPENAI_API_KEY is not set. Add it to .env.local or set it as an environment variable."
-      );
-    }
-    client = new OpenAI({ apiKey });
+    if (!apiKey) throw new Error("OPENAI_API_KEY is not set. Add it to .env.local");
+    _openaiClient = new OpenAI({ apiKey });
   }
-  return client;
+  return _openaiClient;
 }
 
-/**
- * Detect if a model uses the Responses API vs Chat Completions.
- * Codex models and some newer models use /v1/responses.
- */
-function isResponsesModel(model) {
-  return /codex/i.test(model);
+function _getAnthropicClient() {
+  if (!_anthropicClient) {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set. Add it to .env.local");
+    _anthropicClient = new Anthropic({ apiKey });
+  }
+  return _anthropicClient;
 }
 
-/**
- * Detect if a model uses internal reasoning tokens (o-series, gpt-5-nano, etc.)
- * These models need higher token limits because reasoning consumes most of the budget.
- */
+// ── Model Detection Helpers ──
+
+function isResponsesModel(model) { return /codex/i.test(model); }
+
 function isReasoningModel(model) {
   return /^o[1-9]|^gpt-5-nano|^gpt-5\.4-nano/.test(model);
 }
 
-/**
- * Build the token limit param for Chat Completions API.
- * Reasoning models get 4x the limit to accommodate thinking tokens.
- */
-function tokenParam(model, limit) {
-  // Reasoning models need headroom for chain-of-thought
-  const effectiveLimit = isReasoningModel(model) ? Math.max(limit * 4, 4096) : limit;
+function isAnthropicModel(model) { return detectProvider(model) === "anthropic"; }
 
-  if (isResponsesModel(model)) {
-    return { max_output_tokens: effectiveLimit };
-  }
+function tokenParam(model, limit) {
+  const effectiveLimit = isReasoningModel(model) ? Math.max(limit * 4, 4096) : limit;
+  if (isResponsesModel(model)) return { max_output_tokens: effectiveLimit };
   const usesNewParam = /^(o[1-9]|gpt-5|gpt-4o)/.test(model) || model.includes("nano");
-  if (usesNewParam) {
-    return { max_completion_tokens: effectiveLimit };
-  }
+  if (usesNewParam) return { max_completion_tokens: effectiveLimit };
   return { max_tokens: limit };
 }
 
-/**
- * Unified AI call — automatically routes to Responses API or Chat Completions
- * based on the model name.
- *
- * @param {object} params
- * @param {string} params.model - Model name
- * @param {string} params.systemPrompt - System/instructions prompt
- * @param {string} params.userPrompt - User message
- * @param {number} params.maxTokens - Max response tokens
- * @param {Array}  params.tools - Tool definitions (optional)
- * @param {string} params.toolChoice - Tool choice strategy (optional)
- * @returns {{ content: string, toolCalls: Array|null, usage: object }}
- */
-async function aiCall({ model, systemPrompt, userPrompt, maxTokens = 2048, tools, toolChoice, category = "chat", tool }) {
-  const openai = getClient();
+// ── Unified AI Call ──
+// Routes to OpenAI or Anthropic based on model name. Returns same shape regardless.
 
+async function aiCall({ model, systemPrompt, userPrompt, maxTokens = 2048, tools, toolChoice, category = "chat", tool }) {
+  const provider = detectProvider(model);
   let result;
-  if (isResponsesModel(model)) {
-    result = await _responsesCall(openai, { model, systemPrompt, userPrompt, maxTokens, tools });
+
+  if (provider === "anthropic") {
+    result = await _anthropicCall({ model, systemPrompt, userPrompt, maxTokens, tools, toolChoice });
+  } else if (isResponsesModel(model)) {
+    result = await _responsesCall(_getOpenAIClient(), { model, systemPrompt, userPrompt, maxTokens, tools });
   } else {
-    result = await _chatCall(openai, { model, systemPrompt, userPrompt, maxTokens, tools, toolChoice });
+    result = await _chatCall(_getOpenAIClient(), { model, systemPrompt, userPrompt, maxTokens, tools, toolChoice });
   }
 
   _track(model, category, result.usage, tool);
   return result;
 }
 
+async function aiCallWithHistory({ model, messages, tools, maxTokens = 4096, category = "chat", tool }) {
+  const provider = detectProvider(model);
+  let result;
+
+  if (provider === "anthropic") {
+    result = await _anthropicCallWithHistory({ model, messages, tools, maxTokens });
+  } else if (isResponsesModel(model)) {
+    result = await _responsesCallWithHistory(_getOpenAIClient(), { model, messages, tools, maxTokens });
+  } else {
+    result = await _chatCallWithHistory(_getOpenAIClient(), { model, messages, tools, maxTokens });
+  }
+
+  _track(model, category, result.usage, tool);
+  return result;
+}
+
+// ── Anthropic Implementation ──
+// Normalizes Anthropic's response format to match our {content, toolCalls, usage} interface.
+
+async function _anthropicCall({ model, systemPrompt, userPrompt, maxTokens, tools, toolChoice }) {
+  const client = _getAnthropicClient();
+
+  const params = {
+    model,
+    max_tokens: maxTokens,
+    messages: [{ role: "user", content: userPrompt }],
+  };
+
+  if (systemPrompt) params.system = systemPrompt;
+
+  // Convert OpenAI-style tools to Anthropic format
+  if (tools && tools.length > 0) {
+    params.tools = tools.map(_toAnthropicTool).filter(Boolean);
+    if (toolChoice === "required") params.tool_choice = { type: "any" };
+    else if (toolChoice && toolChoice !== "auto") params.tool_choice = { type: "auto" };
+  }
+
+  const response = await client.messages.create(params);
+  return _normalizeAnthropicResponse(response);
+}
+
+async function _anthropicCallWithHistory({ model, messages, tools, maxTokens }) {
+  const client = _getAnthropicClient();
+
+  // Extract system message and convert rest to Anthropic format
+  let systemPrompt = "";
+  const anthropicMessages = [];
+
+  for (const msg of messages) {
+    if (msg.role === "system") {
+      systemPrompt += (systemPrompt ? "\n" : "") + msg.content;
+      continue;
+    }
+    if (msg.role === "user") {
+      anthropicMessages.push({ role: "user", content: msg.content });
+    } else if (msg.role === "assistant") {
+      if (msg.tool_calls && msg.tool_calls.length > 0) {
+        // Assistant message with tool calls
+        const content = [];
+        if (msg.content) content.push({ type: "text", text: msg.content });
+        for (const tc of msg.tool_calls) {
+          content.push({
+            type: "tool_use",
+            id: tc.id,
+            name: tc.function.name,
+            input: JSON.parse(tc.function.arguments || "{}"),
+          });
+        }
+        anthropicMessages.push({ role: "assistant", content });
+      } else {
+        anthropicMessages.push({ role: "assistant", content: msg.content || "" });
+      }
+    } else if (msg.role === "tool") {
+      // Tool result → Anthropic tool_result block
+      anthropicMessages.push({
+        role: "user",
+        content: [{
+          type: "tool_result",
+          tool_use_id: msg.tool_call_id,
+          content: msg.content,
+        }],
+      });
+    }
+  }
+
+  // Merge consecutive same-role messages (Anthropic requires alternating roles)
+  const merged = [];
+  for (const msg of anthropicMessages) {
+    if (merged.length > 0 && merged[merged.length - 1].role === msg.role) {
+      const prev = merged[merged.length - 1];
+      if (typeof prev.content === "string" && typeof msg.content === "string") {
+        prev.content += "\n" + msg.content;
+      } else {
+        // Convert to array format and merge
+        const prevArr = Array.isArray(prev.content) ? prev.content : [{ type: "text", text: prev.content }];
+        const msgArr = Array.isArray(msg.content) ? msg.content : [{ type: "text", text: msg.content }];
+        prev.content = [...prevArr, ...msgArr];
+      }
+    } else {
+      merged.push({ ...msg });
+    }
+  }
+
+  const params = {
+    model,
+    max_tokens: maxTokens,
+    messages: merged,
+  };
+
+  if (systemPrompt) params.system = systemPrompt;
+
+  if (tools && tools.length > 0) {
+    params.tools = tools.map(_toAnthropicTool).filter(Boolean);
+  }
+
+  const response = await client.messages.create(params);
+
+  // Return in chat-compatible format
+  const normalized = _normalizeAnthropicResponse(response);
+  const message = { role: "assistant", content: normalized.content || null };
+  if (normalized.toolCalls) message.tool_calls = normalized.toolCalls;
+
+  return {
+    choices: [{ message }],
+    usage: normalized.usage,
+  };
+}
+
 /**
- * Responses API call — for codex and responses-only models.
+ * Convert OpenAI tool definition to Anthropic format.
  */
+function _toAnthropicTool(tool) {
+  if (tool.type === "function" && tool.function) {
+    return {
+      name: tool.function.name,
+      description: tool.function.description || "",
+      input_schema: tool.function.parameters || { type: "object", properties: {} },
+    };
+  }
+  return null;
+}
+
+/**
+ * Normalize Anthropic response to our standard {content, toolCalls, usage} shape.
+ */
+function _normalizeAnthropicResponse(response) {
+  let content = "";
+  let toolCalls = null;
+
+  for (const block of (response.content || [])) {
+    if (block.type === "text") {
+      content += block.text;
+    } else if (block.type === "tool_use") {
+      if (!toolCalls) toolCalls = [];
+      toolCalls.push({
+        id: block.id,
+        type: "function",
+        function: {
+          name: block.name,
+          arguments: JSON.stringify(block.input || {}),
+        },
+      });
+    }
+  }
+
+  return {
+    content: content.trim(),
+    toolCalls,
+    usage: {
+      input_tokens: response.usage?.input_tokens || 0,
+      output_tokens: response.usage?.output_tokens || 0,
+      prompt_tokens: response.usage?.input_tokens || 0,
+      completion_tokens: response.usage?.output_tokens || 0,
+    },
+    _raw: response,
+  };
+}
+
+// ── OpenAI: Responses API ──
+
 async function _responsesCall(openai, { model, systemPrompt, userPrompt, maxTokens, tools }) {
   const params = {
     model,
@@ -116,228 +274,101 @@ async function _responsesCall(openai, { model, systemPrompt, userPrompt, maxToke
     max_output_tokens: maxTokens,
   };
 
-  // Convert chat-style tools to responses-style tools
   if (tools && tools.length > 0) {
     params.tools = tools.map(t => {
       if (t.type === "function" && t.function) {
-        // Chat Completions style → Responses style
-        return {
-          type: "function",
-          name: t.function.name,
-          description: t.function.description,
-          parameters: t.function.parameters,
-          strict: true,
-        };
+        return { type: "function", name: t.function.name, description: t.function.description, parameters: t.function.parameters, strict: true };
       }
       return t;
     });
   }
 
   const response = await openai.responses.create(params);
-
-  // Extract text content and tool calls from response output
   let content = "";
   let toolCalls = null;
 
   if (response.output) {
     for (const item of response.output) {
       if (item.type === "message" && item.content) {
-        for (const block of item.content) {
-          if (block.type === "output_text") {
-            content += block.text;
-          }
-        }
+        for (const block of item.content) { if (block.type === "output_text") content += block.text; }
       } else if (item.type === "function_call") {
         if (!toolCalls) toolCalls = [];
-        toolCalls.push({
-          id: item.call_id || item.id,
-          type: "function",
-          function: {
-            name: item.name,
-            arguments: item.arguments,
-          },
-        });
+        toolCalls.push({ id: item.call_id || item.id, type: "function", function: { name: item.name, arguments: item.arguments } });
       }
     }
   }
+  if (!content && response.output_text) content = response.output_text;
 
-  // Fallback: some responses have output_text directly
-  if (!content && response.output_text) {
-    content = response.output_text;
-  }
-
-  return {
-    content: content.trim(),
-    toolCalls,
-    usage: response.usage || {},
-    _raw: response,
-  };
+  return { content: content.trim(), toolCalls, usage: response.usage || {}, _raw: response };
 }
 
-/**
- * Chat Completions API call — for standard chat models.
- */
+// ── OpenAI: Chat Completions ──
+
 async function _chatCall(openai, { model, systemPrompt, userPrompt, maxTokens, tools, toolChoice }) {
   const messages = [];
   if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
   messages.push({ role: "user", content: userPrompt });
 
-  // Some models (gpt-5-nano, o-series) don't support temperature
   const noTemp = /^(o[1-9]|gpt-5)/.test(model);
-
-  const params = {
-    model,
-    messages,
-    ...(!noTemp ? { temperature: 0 } : {}),
-    ...tokenParam(model, maxTokens),
-  };
-
-  if (tools && tools.length > 0) {
-    params.tools = tools;
-    params.tool_choice = toolChoice || "auto";
-  }
+  const params = { model, messages, ...(!noTemp ? { temperature: 0 } : {}), ...tokenParam(model, maxTokens) };
+  if (tools && tools.length > 0) { params.tools = tools; params.tool_choice = toolChoice || "auto"; }
 
   const response = await openai.chat.completions.create(params);
   const choice = response.choices[0];
-
-  return {
-    content: (choice.message.content || "").trim(),
-    toolCalls: choice.message.tool_calls || null,
-    usage: response.usage || {},
-    _raw: response,
-    _message: choice.message,
-  };
+  return { content: (choice.message.content || "").trim(), toolCalls: choice.message.tool_calls || null, usage: response.usage || {}, _raw: response, _message: choice.message };
 }
 
-/**
- * Build a Responses API conversation continuation with tool results.
- * For multi-turn agent loops with codex models.
- */
-async function aiCallWithHistory({ model, messages, tools, maxTokens = 4096, category = "chat", tool }) {
-  const openai = getClient();
-
-  let result;
-  if (isResponsesModel(model)) {
-    result = await _responsesCallWithHistory(openai, { model, messages, tools, maxTokens });
-  } else {
-    result = await _chatCallWithHistory(openai, { model, messages, tools, maxTokens });
-  }
-
-  _track(model, category, result.usage, tool);
-  return result;
-}
+// ── OpenAI: Multi-turn (Responses + Chat) ──
 
 async function _responsesCallWithHistory(openai, { model, messages, tools, maxTokens }) {
-  // Convert chat-style messages to responses input format
   const input = messages.map(msg => {
-    if (msg.role === "system") {
-      return { role: "developer", content: msg.content };
-    }
-    if (msg.role === "tool") {
-      return {
-        type: "function_call_output",
-        call_id: msg.tool_call_id,
-        output: msg.content,
-      };
-    }
+    if (msg.role === "system") return { role: "developer", content: msg.content };
+    if (msg.role === "tool") return { type: "function_call_output", call_id: msg.tool_call_id, output: msg.content };
     if (msg.role === "assistant" && msg.tool_calls) {
-      // Emit function_call items for each tool call
-      return msg.tool_calls.map(tc => ({
-        type: "function_call",
-        call_id: tc.id,
-        name: tc.function.name,
-        arguments: tc.function.arguments,
-      }));
+      return msg.tool_calls.map(tc => ({ type: "function_call", call_id: tc.id, name: tc.function.name, arguments: tc.function.arguments }));
     }
-    if (msg.role === "assistant") {
-      return { role: "assistant", content: msg.content || "" };
-    }
+    if (msg.role === "assistant") return { role: "assistant", content: msg.content || "" };
     return { role: msg.role, content: msg.content };
   }).flat();
 
-  const params = {
-    model,
-    input,
-    max_output_tokens: maxTokens,
-  };
-
+  const params = { model, input, max_output_tokens: maxTokens };
   if (tools && tools.length > 0) {
     params.tools = tools.map(t => {
       if (t.type === "function" && t.function) {
-        return {
-          type: "function",
-          name: t.function.name,
-          description: t.function.description,
-          parameters: t.function.parameters,
-          strict: true,
-        };
+        return { type: "function", name: t.function.name, description: t.function.description, parameters: t.function.parameters, strict: true };
       }
       return t;
     });
   }
 
   const response = await openai.responses.create(params);
-
-  // Build a chat-compatible response
   let content = "";
   let toolCalls = null;
 
   if (response.output) {
     for (const item of response.output) {
-      if (item.type === "message" && item.content) {
-        for (const block of item.content) {
-          if (block.type === "output_text") content += block.text;
-        }
-      } else if (item.type === "function_call") {
-        if (!toolCalls) toolCalls = [];
-        toolCalls.push({
-          id: item.call_id || item.id,
-          type: "function",
-          function: {
-            name: item.name,
-            arguments: item.arguments,
-          },
-        });
-      }
+      if (item.type === "message" && item.content) { for (const block of item.content) { if (block.type === "output_text") content += block.text; } }
+      else if (item.type === "function_call") { if (!toolCalls) toolCalls = []; toolCalls.push({ id: item.call_id || item.id, type: "function", function: { name: item.name, arguments: item.arguments } }); }
     }
   }
-
   if (!content && response.output_text) content = response.output_text;
 
-  // Return in chat-compatible format so the agent engine doesn't need to change
   const message = { role: "assistant", content: content.trim() || null };
   if (toolCalls) message.tool_calls = toolCalls;
-
-  return {
-    choices: [{ message }],
-    usage: response.usage || {},
-  };
+  return { choices: [{ message }], usage: response.usage || {} };
 }
 
 async function _chatCallWithHistory(openai, { model, messages, tools, maxTokens }) {
   const noTemp = /^(o[1-9]|gpt-5)/.test(model);
-  const params = {
-    model,
-    messages,
-    ...(!noTemp ? { temperature: 0 } : {}),
-    ...tokenParam(model, maxTokens),
-  };
-
-  if (tools && tools.length > 0) {
-    params.tools = tools;
-    params.tool_choice = "auto";
-  }
-
+  const params = { model, messages, ...(!noTemp ? { temperature: 0 } : {}), ...tokenParam(model, maxTokens) };
+  if (tools && tools.length > 0) { params.tools = tools; params.tool_choice = "auto"; }
   return openai.chat.completions.create(params);
 }
 
-/**
- * Send an error context to OpenAI and get a repair patch back.
- * Uses CODING_MODEL — routes to correct API automatically.
- */
+// ── Fast Path Repair ──
+
 async function requestRepair({ filePath, sourceCode, backupSourceCode, errorMessage, stackTrace, extraContext }) {
   const model = getModel("coding");
-
   const systemPrompt = "You are a Node.js debugging expert. Respond with ONLY valid JSON, no markdown fences.";
   const userPrompt = `A server crashed with the following error. Analyze and produce a fix.
 
@@ -393,4 +424,4 @@ Include both if needed, or just one.`;
   }
 }
 
-module.exports = { requestRepair, getClient, tokenParam, aiCall, aiCallWithHistory, isResponsesModel, setTokenTracker };
+module.exports = { requestRepair, getClient, tokenParam, aiCall, aiCallWithHistory, isResponsesModel, isAnthropicModel, setTokenTracker, detectProvider };

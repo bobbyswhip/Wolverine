@@ -54,6 +54,7 @@ function collectHeartbeat(subsystems) {
       byCategory: usage?.byCategory || {},
       byModel: usage?.byModel || {},
       byTool: usage?.byTool || {},
+      byProvider: _aggregateByProvider(usage?.byModel || {}),
     },
 
     brain: { totalMemories: brain?.getStats()?.totalEntries || 0 },
@@ -75,6 +76,25 @@ function collectHeartbeat(subsystems) {
   // Pre-flight security: redact entire payload before it leaves the process
   const { redactObj } = require("../security/secret-redactor");
   return redactObj(payload);
+}
+
+/**
+ * Aggregate usage by provider (openai vs anthropic) from byModel data.
+ * Any new model/provider automatically flows through — no code changes needed.
+ */
+function _aggregateByProvider(byModel) {
+  const { detectProvider } = require("../core/models");
+  const byProvider = {};
+  for (const [model, stats] of Object.entries(byModel || {})) {
+    const provider = detectProvider(model);
+    if (!byProvider[provider]) byProvider[provider] = { input: 0, output: 0, total: 0, calls: 0, cost: 0 };
+    byProvider[provider].input += stats.input || 0;
+    byProvider[provider].output += stats.output || 0;
+    byProvider[provider].total += stats.total || 0;
+    byProvider[provider].calls += stats.calls || 0;
+    byProvider[provider].cost += stats.cost || 0;
+  }
+  return byProvider;
 }
 
 module.exports = { collectHeartbeat, INSTANCE_ID };

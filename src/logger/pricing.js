@@ -36,6 +36,16 @@ const DEFAULT_PRICING = {
   "text-embedding-3-small": { input: 0.02,  output: 0.00 },
   "text-embedding-3-large": { input: 0.13,  output: 0.00 },
 
+  // Anthropic Claude family
+  "claude-opus-4":          { input: 15.00, output: 75.00 },
+  "claude-sonnet-4":        { input: 3.00,  output: 15.00 },
+  "claude-haiku-4":         { input: 0.80,  output: 4.00 },
+  "claude-3-5-sonnet":      { input: 3.00,  output: 15.00 },
+  "claude-3-5-haiku":       { input: 0.80,  output: 4.00 },
+  "claude-3-opus":          { input: 15.00, output: 75.00 },
+  "claude-3-sonnet":        { input: 3.00,  output: 15.00 },
+  "claude-3-haiku":         { input: 0.25,  output: 1.25 },
+
   // Fallback for unknown models
   "_default":               { input: 1.00,  output: 4.00 },
 };

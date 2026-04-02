@@ -1,16 +1,23 @@
 /**
  * Model Configuration — centralized model selection for every AI task.
  *
- * Users configure models in .env.local to optimize spend:
+ * Supports both OpenAI and Anthropic models. Provider is auto-detected from model name:
+ *   claude-*  → Anthropic
+ *   gpt-*, o1-*, o3-*, text-embedding-* → OpenAI
  *
- *   REASONING_MODEL   — Deep analysis, complex debugging (most expensive, most capable)
- *   CODING_MODEL      — Code repair generation (important, needs strong coding ability)
- *   CHAT_MODEL        — Explanations, summaries (good but cheaper)
- *   AUDIT_MODEL       — Security scans, injection detection (runs on every error)
- *   UTILITY_MODEL     — JSON formatting, regex validation, simple classification (cheapest)
- *
- * Defaults use gpt-4o tiers. Users can swap in any OpenAI-compatible model.
+ * Users configure models in .env.local or server/config/settings.json.
+ * Mix and match providers per role (e.g., Anthropic for reasoning, OpenAI for coding).
  */
+
+/**
+ * Detect provider from model name.
+ * @returns {"anthropic"|"openai"}
+ */
+function detectProvider(model) {
+  if (!model) return "openai";
+  if (/^claude/i.test(model)) return "anthropic";
+  return "openai";
+}
 
 const MODEL_ROLES = {
   // Deep reasoning — used for multi-step debugging when a simple fix fails
@@ -129,4 +136,4 @@ function logModelConfig(chalk) {
   }
 }
 
-module.exports = { getModel, getModelConfig, logModelConfig, MODEL_ROLES };
+module.exports = { getModel, getModelConfig, logModelConfig, MODEL_ROLES, detectProvider };

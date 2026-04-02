@@ -288,23 +288,35 @@ Secured with `WOLVERINE_ADMIN_KEY` + IP allowlist (localhost + `WOLVERINE_ADMIN_
 
 ---
 
-## 10-Model Configuration
+## 10-Model Configuration (OpenAI + Anthropic)
 
-Every AI task has its own model slot. Customize in `.env.local`:
+Every AI task has its own model slot. **Mix and match providers** — set any slot to a `claude-*` model for Anthropic or `gpt-*` for OpenAI. Provider is auto-detected from the model name.
 
-| Env Variable | Role | Needs Tools? | Cost Impact |
+```bash
+# .env.local — use Anthropic for reasoning, OpenAI for coding
+REASONING_MODEL=claude-sonnet-4-20250514
+CODING_MODEL=gpt-5.3-codex
+CHAT_MODEL=claude-haiku-4-20250414
+AUDIT_MODEL=claude-haiku-4-20250414
+```
+
+| Env Variable | Role | Needs Tools? | Example Models |
 |---|---|---|---|
-| `REASONING_MODEL` | Multi-file agent | Yes | High (agent loop) |
-| `CODING_MODEL` | Code repair/generation | Responses API | Medium-high |
-| `CHAT_MODEL` | Simple text responses | No | Low |
-| `TOOL_MODEL` | Chat with function calling | **Yes** | Medium |
-| `CLASSIFIER_MODEL` | SIMPLE/TOOLS/AGENT routing | No | ~10 tokens |
-| `AUDIT_MODEL` | Injection detection (every error) | No | Low |
-| `COMPACTING_MODEL` | Text compression for brain | No | Low |
-| `RESEARCH_MODEL` | Deep research on failures | No | High (rare) |
-| `TEXT_EMBEDDING_MODEL` | Brain vector embeddings | No | Very low |
+| `REASONING_MODEL` | Multi-file agent | Yes | `claude-sonnet-4`, `gpt-5.4` |
+| `CODING_MODEL` | Code repair/generation | Yes | `claude-sonnet-4`, `gpt-5.3-codex` |
+| `CHAT_MODEL` | Simple text responses | No | `claude-haiku-4`, `gpt-5.4-mini` |
+| `TOOL_MODEL` | Chat with function calling | **Yes** | `claude-sonnet-4`, `gpt-4o-mini` |
+| `CLASSIFIER_MODEL` | SIMPLE/TOOLS/AGENT routing | No | `claude-haiku-4`, `gpt-4o-mini` |
+| `AUDIT_MODEL` | Injection detection (every error) | No | `claude-haiku-4`, `gpt-5.4-nano` |
+| `COMPACTING_MODEL` | Text compression for brain | No | `claude-haiku-4`, `gpt-5.4-nano` |
+| `RESEARCH_MODEL` | Deep research on failures | No | `claude-opus-4`, `gpt-4o` |
+| `TEXT_EMBEDDING_MODEL` | Brain vector embeddings | No | `text-embedding-3-small` (OpenAI only) |
 
-Reasoning models (`o-series`, `gpt-5-nano`) automatically get 4x token limits to accommodate chain-of-thought.
+**Notes:**
+- Embeddings always use OpenAI (Anthropic doesn't have an embedding API)
+- Tools (all 18) work identically on both providers — normalized at the client level
+- Telemetry tracks usage by model AND by provider (`openai` / `anthropic`)
+- Any future model from either provider works automatically — just set the model name
 
 ---
 

@@ -1,6 +1,6 @@
 {
   "name": "wolverine-ai",
-  "version": "1.8.0",
+  "version": "2.0.0",
   "description": "Self-healing Node.js server framework powered by AI. Catches crashes, diagnoses errors, generates fixes, verifies, and restarts — automatically.",
   "main": "src/index.js",
   "bin": {
@@ -55,6 +55,7 @@
     "README.md"
   ],
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.82.0",
     "chalk": "^4.1.2",
     "diff": "^7.0.0",
     "dotenv": "^16.4.7",
