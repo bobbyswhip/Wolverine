@@ -36,9 +36,9 @@
     "coding": "claude-opus-4-6",
     "chat": "claude-haiku-4-5",
     "tool": "claude-opus-4-6",
-    "classifier": "claude-haiku-4-5",
+    "classifier": "gpt-4o-mini",
     "audit": "gpt-4o-mini",
-    "compacting": "gpt-4o-mini",
+    "compacting": "claude-sonnet-4-6",
     "research": "claude-sonnet-4-6",
     "embedding": "text-embedding-3-small"
   },

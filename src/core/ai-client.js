@@ -16,10 +16,10 @@ function _extractTokens(usage) {
   };
 }
 
-function _track(model, category, usage, tool) {
+function _track(model, category, usage, tool, latencyMs, success) {
   if (!_tracker) return;
   const { input, output } = _extractTokens(usage);
-  _tracker.record(model, category, input, output, tool);
+  _tracker.record(model, category, input, output, tool, latencyMs, success);
 }
 
 // ── Client Management ──
@@ -70,34 +70,50 @@ function tokenParam(model, limit) {
 
 async function aiCall({ model, systemPrompt, userPrompt, maxTokens = 2048, tools, toolChoice, category = "chat", tool }) {
   const provider = detectProvider(model);
+  const startMs = Date.now();
   let result;
 
-  if (provider === "anthropic") {
-    result = await _anthropicCall({ model, systemPrompt, userPrompt, maxTokens, tools, toolChoice });
-  } else if (isResponsesModel(model)) {
-    result = await _responsesCall(_getOpenAIClient(), { model, systemPrompt, userPrompt, maxTokens, tools });
-  } else {
-    result = await _chatCall(_getOpenAIClient(), { model, systemPrompt, userPrompt, maxTokens, tools, toolChoice });
-  }
+  try {
+    if (provider === "anthropic") {
+      result = await _anthropicCall({ model, systemPrompt, userPrompt, maxTokens, tools, toolChoice });
+    } else if (isResponsesModel(model)) {
+      result = await _responsesCall(_getOpenAIClient(), { model, systemPrompt, userPrompt, maxTokens, tools });
+    } else {
+      result = await _chatCall(_getOpenAIClient(), { model, systemPrompt, userPrompt, maxTokens, tools, toolChoice });
+    }
 
-  _track(model, category, result.usage, tool);
-  return result;
+    const latencyMs = Date.now() - startMs;
+    _track(model, category, result.usage, tool, latencyMs, true);
+    return result;
+  } catch (err) {
+    const latencyMs = Date.now() - startMs;
+    _track(model, category, {}, tool, latencyMs, false);
+    throw err;
+  }
 }
 
 async function aiCallWithHistory({ model, messages, tools, maxTokens = 4096, category = "chat", tool }) {
   const provider = detectProvider(model);
+  const startMs = Date.now();
   let result;
 
-  if (provider === "anthropic") {
-    result = await _anthropicCallWithHistory({ model, messages, tools, maxTokens });
-  } else if (isResponsesModel(model)) {
-    result = await _responsesCallWithHistory(_getOpenAIClient(), { model, messages, tools, maxTokens });
-  } else {
-    result = await _chatCallWithHistory(_getOpenAIClient(), { model, messages, tools, maxTokens });
-  }
+  try {
+    if (provider === "anthropic") {
+      result = await _anthropicCallWithHistory({ model, messages, tools, maxTokens });
+    } else if (isResponsesModel(model)) {
+      result = await _responsesCallWithHistory(_getOpenAIClient(), { model, messages, tools, maxTokens });
+    } else {
+      result = await _chatCallWithHistory(_getOpenAIClient(), { model, messages, tools, maxTokens });
+    }
 
-  _track(model, category, result.usage, tool);
-  return result;
+    const latencyMs = Date.now() - startMs;
+    _track(model, category, result.usage, tool, latencyMs, true);
+    return result;
+  } catch (err) {
+    const latencyMs = Date.now() - startMs;
+    _track(model, category, {}, tool, latencyMs, false);
+    throw err;
+  }
 }
 
 // ── Anthropic Implementation ──

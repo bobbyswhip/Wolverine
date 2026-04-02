@@ -64,9 +64,8 @@ class TokenTracker {
    * @param {number} outputTokens - Completion/output tokens
    * @param {string} tool - Optional tool name (e.g. "call_endpoint /time")
    */
-  record(model, category, inputTokens, outputTokens, tool) {
+  record(model, category, inputTokens, outputTokens, tool, latencyMs, success) {
     const total = (inputTokens || 0) + (outputTokens || 0);
-    if (total === 0) return;
 
     // Calculate USD cost
     const cost = calculateCost(model, inputTokens || 0, outputTokens || 0);
@@ -78,17 +77,26 @@ class TokenTracker {
       input: inputTokens || 0,
       output: outputTokens || 0,
       total,
-      cost: Math.round(cost.total * 1000000) / 1000000, // 6 decimal places
+      cost: Math.round(cost.total * 1000000) / 1000000,
       tool: tool || null,
+      latencyMs: latencyMs || 0,
+      success: success !== false,
     };
 
     // Accumulate by model
-    if (!this._byModel[model]) this._byModel[model] = { input: 0, output: 0, total: 0, calls: 0, cost: 0 };
-    this._byModel[model].input += entry.input;
-    this._byModel[model].output += entry.output;
-    this._byModel[model].total += total;
-    this._byModel[model].calls++;
-    this._byModel[model].cost += cost.total;
+    if (!this._byModel[model]) this._byModel[model] = { input: 0, output: 0, total: 0, calls: 0, cost: 0, successes: 0, failures: 0, totalLatencyMs: 0, minLatencyMs: Infinity, maxLatencyMs: 0 };
+    const m = this._byModel[model];
+    m.input += entry.input;
+    m.output += entry.output;
+    m.total += total;
+    m.calls++;
+    m.cost += cost.total;
+    if (entry.success) m.successes++; else m.failures++;
+    if (latencyMs > 0) {
+      m.totalLatencyMs += latencyMs;
+      if (latencyMs < m.minLatencyMs) m.minLatencyMs = latencyMs;
+      if (latencyMs > m.maxLatencyMs) m.maxLatencyMs = latencyMs;
+    }
 
     // Accumulate by category
     if (!this._byCategory[category]) this._byCategory[category] = { input: 0, output: 0, total: 0, calls: 0, cost: 0 };
@@ -142,7 +150,7 @@ class TokenTracker {
         duration: sessionDuration,
         tokensPerMinute,
       },
-      byModel: this._byModel,
+      byModel: this._formatModelStats(),
       byCategory: this._byCategory,
       byTool: this._byTool,
       // Recent in-memory timeline
@@ -153,8 +161,35 @@ class TokenTracker {
         output: e.output,
         cat: e.category,
         model: e.model,
+        latencyMs: e.latencyMs || 0,
+        success: e.success !== false,
       })),
     };
+  }
+
+  /**
+   * Format model stats with computed performance metrics.
+   */
+  _formatModelStats() {
+    const result = {};
+    for (const [model, m] of Object.entries(this._byModel)) {
+      result[model] = {
+        input: m.input,
+        output: m.output,
+        total: m.total,
+        calls: m.calls,
+        cost: m.cost,
+        successes: m.successes || m.calls, // backwards compat
+        failures: m.failures || 0,
+        successRate: m.calls > 0 ? Math.round(((m.successes || m.calls) / m.calls) * 100) : 0,
+        avgLatencyMs: m.calls > 0 && m.totalLatencyMs ? Math.round(m.totalLatencyMs / m.calls) : 0,
+        minLatencyMs: m.minLatencyMs === Infinity ? 0 : (m.minLatencyMs || 0),
+        maxLatencyMs: m.maxLatencyMs || 0,
+        tokensPerSecond: m.totalLatencyMs > 0 ? Math.round((m.total / (m.totalLatencyMs / 1000)) * 10) / 10 : 0,
+        costPerCall: m.calls > 0 ? Math.round((m.cost / m.calls) * 1000000) / 1000000 : 0,
+      };
+    }
+    return result;
   }
 
   /**
