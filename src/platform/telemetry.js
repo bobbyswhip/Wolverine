@@ -1,8 +1,20 @@
 const crypto = require("crypto");
 const path = require("path");
 
-const INSTANCE_ID = process.env.WOLVERINE_INSTANCE_ID ||
-  "wlv_" + crypto.createHash("sha256").update(process.cwd() + (process.env.PORT || "3000")).digest("hex").slice(0, 12);
+// Stable instance ID — based on cwd ONLY (not port, which can change during restarts).
+// Persisted to .wolverine/instance-id so it survives even if cwd hash changes.
+const INSTANCE_ID = (() => {
+  if (process.env.WOLVERINE_INSTANCE_ID) return process.env.WOLVERINE_INSTANCE_ID;
+  const fs = require("fs");
+  const idPath = require("path").join(process.cwd(), ".wolverine", "instance-id");
+  try {
+    const saved = fs.readFileSync(idPath, "utf-8").trim();
+    if (saved) return saved;
+  } catch {}
+  const id = "wlv_" + crypto.createHash("sha256").update(process.cwd()).digest("hex").slice(0, 12);
+  try { fs.mkdirSync(require("path").dirname(idPath), { recursive: true }); fs.writeFileSync(idPath, id, "utf-8"); } catch {}
+  return id;
+})();
 
 let _v = null;
 
@@ -47,10 +59,11 @@ function collectHeartbeat(subsystems) {
       totalCost: repairs?.totalCost || 0,
     },
 
+    // Usage: cumulative totals from disk (not session-only) so restarts don't reset
     usage: {
-      totalTokens: usage?.session?.totalTokens || 0,
-      totalCost: usage?.session?.totalCostUsd || 0,
-      totalCalls: usage?.session?.totalCalls || 0,
+      totalTokens: tokenTracker?._totalTokens || usage?.session?.totalTokens || 0,
+      totalCost: tokenTracker?._totalCostUsd || usage?.session?.totalCostUsd || 0,
+      totalCalls: tokenTracker?._totalCalls || usage?.session?.totalCalls || 0,
       byCategory: usage?.byCategory || {},
       byModel: usage?.byModel || {},
       byTool: usage?.byTool || {},
