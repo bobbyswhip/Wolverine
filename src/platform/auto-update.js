@@ -91,80 +91,6 @@ function isNewer(latest, current) {
 }
 
 /**
- * Protect ALL user files before update and restore after.
- * The entire server/ directory is sacred — auto-update must never touch it.
- * Also protects .env files and any user config.
- */
-function backupUserFiles(cwd) {
-  const backups = {};
-
-  // Protect config files
-  const protectedFiles = [".env.local", ".env"];
-
-  // Protect ALL .wolverine/ state (backups, brain, events, usage, repairs)
-  const wolvDir = path.join(cwd, ".wolverine");
-  if (fs.existsSync(wolvDir)) {
-    const walkState = (dir, base) => {
-      try {
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-        for (const entry of entries) {
-          const fullPath = path.join(dir, entry.name);
-          const relPath = path.join(base, entry.name).replace(/\\/g, "/");
-          if (entry.isDirectory()) { walkState(fullPath, relPath); }
-          else {
-            try {
-              const stat = fs.statSync(fullPath);
-              if (stat.size <= 10 * 1024 * 1024) { // skip files > 10MB
-                backups[relPath] = fs.readFileSync(fullPath, "utf-8");
-              }
-            } catch {}
-          }
-        }
-      } catch {}
-    };
-    walkState(wolvDir, ".wolverine");
-  }
-  for (const file of protectedFiles) {
-    const fullPath = path.join(cwd, file);
-    if (fs.existsSync(fullPath)) {
-      backups[file] = fs.readFileSync(fullPath, "utf-8");
-    }
-  }
-
-  // Protect entire server/ directory (recursive)
-  const serverDir = path.join(cwd, "server");
-  if (fs.existsSync(serverDir)) {
-    const walk = (dir, base) => {
-      try {
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-        for (const entry of entries) {
-          if (entry.name === "node_modules") continue;
-          const fullPath = path.join(dir, entry.name);
-          const relPath = path.join(base, entry.name).replace(/\\/g, "/");
-          if (entry.isDirectory()) { walk(fullPath, relPath); }
-          else {
-            try { backups[relPath] = fs.readFileSync(fullPath, "utf-8"); } catch {}
-          }
-        }
-      } catch {}
-    };
-    walk(serverDir, "server");
-  }
-
-  return backups;
-}
-
-function restoreUserFiles(cwd, backups) {
-  for (const [file, content] of Object.entries(backups)) {
-    const fullPath = path.join(cwd, file);
-    try {
-      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
-      fs.writeFileSync(fullPath, content, "utf-8");
-    } catch {}
-  }
-}
-
-/**
  * Detect if this is a git repo or an npm install.
  */
 function isGitRepo(cwd) {
@@ -212,51 +138,6 @@ function checkForUpdate(cwd) {
     _checking = false;
     return null;
   }
-}
-
-/**
- * Merge new brain seed docs into existing brain.
- * Reads the updated brain.js SEED_DOCS, compares topics with what's
- * already stored in .wolverine/brain/, and appends only new ones.
- * Existing memories (errors, fixes, learnings) are never touched.
- *
- * @returns {number} count of new seed docs added
- */
-function _mergeBrainSeeds(cwd) {
-  try {
-    // Load the brain store directly
-    const storePath = path.join(cwd, ".wolverine", "brain", "store.json");
-    if (!fs.existsSync(storePath)) return 0;
-
-    const store = JSON.parse(fs.readFileSync(storePath, "utf-8"));
-    const existingTexts = new Set();
-    for (const ns of Object.values(store.namespaces || {})) {
-      for (const entry of (ns || [])) {
-        if (entry.text) existingTexts.add(entry.text.slice(0, 80));
-      }
-    }
-
-    // Load fresh seed docs from the updated brain.js
-    // Clear require cache to get the new version
-    const brainPath = path.join(cwd, "src", "brain", "brain.js");
-    delete require.cache[require.resolve(brainPath)];
-    const brainModule = require(brainPath);
-
-    // Access seed docs — they're in the module's closure, but brain.init() re-seeds them.
-    // Instead, we'll read the file and extract them
-    const brainSource = fs.readFileSync(brainPath, "utf-8");
-    const seedMatch = brainSource.match(/const SEED_DOCS = \[([\s\S]*?)\n\];/);
-    if (!seedMatch) return 0;
-
-    // Count how many seed doc topics are new
-    // We can't easily parse the JS array, but we can trigger brain.init() on next restart
-    // which will re-seed. The brain's init() already only adds seeds if namespace is empty.
-    // So we just need to signal that seeds should be refreshed.
-    const seedRefreshPath = path.join(cwd, ".wolverine", "brain", ".seed-refresh");
-    fs.writeFileSync(seedRefreshPath, new Date().toISOString(), "utf-8");
-
-    return 1; // signal that refresh is pending
-  } catch { return 0; }
 }
 
 /**

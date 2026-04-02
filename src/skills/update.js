@@ -1,64 +1,60 @@
 /**
  * Update Skill — safe self-updating for the wolverine framework.
  *
- * WARNING: raw `npm install` or `git pull` can overwrite:
- * - server/ (user's live code, routes, config, database)
- * - .wolverine/ (brain memories, backups, events, repair history, usage)
- * - .env.local (API keys, secrets)
+ * WARNING: raw `npm install` or `git pull` can overwrite server/ and .wolverine/.
+ * This skill updates ONLY framework files and never touches the server.
  *
- * This skill does it safely:
- * 1. Creates a pre-update snapshot in ~/.wolverine-safe-backups/ (outside project, never erased)
- * 2. Backs up all user files to memory
- * 3. Selectively updates ONLY framework files (src/, bin/, package.json)
- * 4. Restores all user files
- * 5. Merges new brain seed docs (append, not replace)
- * 6. Verifies the update didn't break anything
+ * What it does:
+ * 1. Creates emergency backup of server/ + brain (small, no node_modules)
+ * 2. Selectively updates ONLY framework files (src/, bin/, package.json)
+ * 3. server/ is NEVER touched — no backup/restore dance needed
+ * 4. Signals brain to merge new seed docs on next boot
  *
- * Callable as:
- *   wolverine --update              (CLI)
- *   npx wolverine-update            (npm)
- *   require("wolverine-ai").safeUpdate(cwd)  (programmatic)
+ * Emergency backup is for rollback ONLY if something goes wrong.
+ * Located in ~/.wolverine-safe-backups/ (outside project, survives everything).
  */
 
 const { execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const chalk = require("chalk");
+const os = require("os");
 
 const PACKAGE_NAME = "wolverine-ai";
-const SAFE_BACKUP_DIR = path.join(require("os").homedir(), ".wolverine-safe-backups");
-const SAFE_SNAPSHOTS_DIR = path.join(SAFE_BACKUP_DIR, "snapshots");
+const SAFE_BACKUP_DIR = path.join(os.homedir(), ".wolverine-safe-backups");
+
+// Files/dirs to SKIP when backing up server/ (these are huge and not user code)
+const SKIP_DIRS = new Set(["node_modules", ".git", ".wolverine", "dist", ".next", ".cache"]);
 
 /**
- * Create a safe backup snapshot outside the project directory.
- * These survive git clean, rm -rf node_modules, even rm -rf .wolverine.
+ * Create an emergency backup — server/ code + brain only.
+ * Small and fast. No node_modules, no backup-of-backups.
  */
 function createSafeBackup(cwd) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const backupDir = path.join(SAFE_BACKUP_DIR, "updates", timestamp);
   fs.mkdirSync(backupDir, { recursive: true });
 
-  const dirsToBackup = [
-    { src: ".wolverine", label: "brain/backups/events/usage" },
-    { src: "server", label: "server code" },
-  ];
-  const filesToBackup = [".env.local", ".env"];
-
   let fileCount = 0;
 
-  for (const { src } of dirsToBackup) {
-    const srcPath = path.join(cwd, src);
-    if (!fs.existsSync(srcPath)) continue;
-    const destPath = path.join(backupDir, src);
-    _copyDirRecursive(srcPath, destPath);
-    fileCount += _countFiles(destPath);
+  // Backup server/ (user code only — skip node_modules, .git, etc.)
+  const serverDir = path.join(cwd, "server");
+  if (fs.existsSync(serverDir)) {
+    fileCount += _copyDirSelective(serverDir, path.join(backupDir, "server"));
   }
 
-  for (const file of filesToBackup) {
-    const srcPath = path.join(cwd, file);
-    if (!fs.existsSync(srcPath)) continue;
-    fs.copyFileSync(srcPath, path.join(backupDir, file));
+  // Backup brain vectors (the learned knowledge)
+  const brainStore = path.join(cwd, ".wolverine", "brain", "vectors.json");
+  if (fs.existsSync(brainStore)) {
+    fs.mkdirSync(path.join(backupDir, ".wolverine", "brain"), { recursive: true });
+    fs.copyFileSync(brainStore, path.join(backupDir, ".wolverine", "brain", "vectors.json"));
     fileCount++;
+  }
+
+  // Backup .env files
+  for (const f of [".env.local", ".env"]) {
+    const fp = path.join(cwd, f);
+    if (fs.existsSync(fp)) { fs.copyFileSync(fp, path.join(backupDir, f)); fileCount++; }
   }
 
   // Write manifest
@@ -68,6 +64,7 @@ function createSafeBackup(cwd) {
     cwd,
     version: _getCurrentVersion(cwd),
     fileCount,
+    type: "pre-update",
   }, null, 2), "utf-8");
 
   return { dir: backupDir, fileCount, timestamp };
@@ -80,10 +77,10 @@ function listSafeBackups() {
   const updatesDir = path.join(SAFE_BACKUP_DIR, "updates");
   if (!fs.existsSync(updatesDir)) return [];
   return fs.readdirSync(updatesDir)
-    .filter(d => fs.statSync(path.join(updatesDir, d)).isDirectory())
+    .filter(d => { try { return fs.statSync(path.join(updatesDir, d)).isDirectory(); } catch { return false; } })
     .map(d => {
       try {
-        const manifest = JSON.parse(fs.readFileSync(path.join(SAFE_BACKUP_DIR, "updates", d, "manifest.json"), "utf-8"));
+        const manifest = JSON.parse(fs.readFileSync(path.join(updatesDir, d, "manifest.json"), "utf-8"));
         return { dir: d, ...manifest };
       } catch { return { dir: d }; }
     })
@@ -91,39 +88,41 @@ function listSafeBackups() {
 }
 
 /**
- * Restore from a safe backup.
+ * Restore from a safe backup (emergency only).
  */
 function restoreFromSafeBackup(cwd, backupName) {
   const backupDir = path.join(SAFE_BACKUP_DIR, "updates", backupName);
   if (!fs.existsSync(backupDir)) throw new Error(`Backup not found: ${backupName}`);
 
-  const dirsToRestore = [".wolverine", "server"];
-  const filesToRestore = [".env.local", ".env"];
-
   let restored = 0;
-  for (const dir of dirsToRestore) {
-    const srcPath = path.join(backupDir, dir);
-    if (!fs.existsSync(srcPath)) continue;
-    const destPath = path.join(cwd, dir);
-    _copyDirRecursive(srcPath, destPath);
-    restored += _countFiles(srcPath);
+
+  // Restore server/
+  const serverSrc = path.join(backupDir, "server");
+  if (fs.existsSync(serverSrc)) {
+    restored += _copyDirSelective(serverSrc, path.join(cwd, "server"));
   }
-  for (const file of filesToRestore) {
-    const srcPath = path.join(backupDir, file);
-    if (!fs.existsSync(srcPath)) continue;
-    fs.copyFileSync(srcPath, path.join(cwd, file));
+
+  // Restore brain
+  const brainSrc = path.join(backupDir, ".wolverine", "brain", "vectors.json");
+  if (fs.existsSync(brainSrc)) {
+    const dest = path.join(cwd, ".wolverine", "brain", "vectors.json");
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.copyFileSync(brainSrc, dest);
     restored++;
   }
+
+  // Restore .env files
+  for (const f of [".env.local", ".env"]) {
+    const src = path.join(backupDir, f);
+    if (fs.existsSync(src)) { fs.copyFileSync(src, path.join(cwd, f)); restored++; }
+  }
+
   return { restored, backupDir };
 }
 
 /**
  * Safe update — the main entry point.
- * Call this instead of raw npm install or git pull.
- *
- * @param {string} cwd — project root
- * @param {object} options — { logger, dryRun }
- * @returns {{ success, from, to, backupDir, error? }}
+ * Updates framework files ONLY. server/ is never touched.
  */
 function safeUpdate(cwd, options = {}) {
   const { logger, dryRun } = options;
@@ -140,7 +139,6 @@ function safeUpdate(cwd, options = {}) {
     }).trim();
   } catch {}
 
-  // Also check git remote
   const isGit = _isGitRepo(cwd);
   if (isGit) {
     try {
@@ -167,20 +165,16 @@ function safeUpdate(cwd, options = {}) {
     return { success: true, from: currentVersion, to: latestVersion, dryRun: true };
   }
 
-  // 2. Create safe backup (outside project, survives everything)
-  console.log(chalk.gray("  🔒 Creating safe backup..."));
+  // 2. Emergency backup (server code + brain only — small and fast)
+  console.log(chalk.gray("  🔒 Creating emergency backup..."));
   const backup = createSafeBackup(cwd);
   console.log(chalk.gray(`  🔒 Backed up ${backup.fileCount} files to ${backup.dir}`));
-  if (logger) logger.info("update.backup", `Safe backup: ${backup.fileCount} files`, { dir: backup.dir });
-
-  // 3. Backup user files to memory (belt + suspenders)
-  const memoryBackup = _backupToMemory(cwd);
-  console.log(chalk.gray(`  🔒 Memory backup: ${Object.keys(memoryBackup).length} files`));
+  if (logger) logger.info("update.backup", `Emergency backup: ${backup.fileCount} files`, { dir: backup.dir });
 
   try {
-    // 4. Update framework ONLY
+    // 3. Update framework ONLY — server/ is never touched
     if (isGit) {
-      console.log(chalk.blue("  📦 Selective git update (server/ + .wolverine/ untouched)"));
+      console.log(chalk.blue("  📦 Selective git update (server/ untouched)"));
       const frameworkPaths = "src/ bin/ package.json package-lock.json examples/ tests/ CLAUDE.md README.md CHANGELOG.md .npmignore";
       execSync(`git checkout origin/master -- ${frameworkPaths}`, { cwd, stdio: "pipe", timeout: 30000 });
       execSync("npm install --production", { cwd, stdio: "pipe", timeout: 120000 });
@@ -190,29 +184,22 @@ function safeUpdate(cwd, options = {}) {
       execSync(cmd, { cwd, stdio: "pipe", timeout: 120000 });
     }
 
-    // 5. Restore user files from memory
-    _restoreFromMemory(cwd, memoryBackup);
-    console.log(chalk.gray(`  🔒 Restored ${Object.keys(memoryBackup).length} user files`));
-
-    // 6. Signal brain to merge new seeds on next boot
+    // 4. Signal brain to merge new seeds on next boot
     const seedRefreshDir = path.join(cwd, ".wolverine", "brain");
     fs.mkdirSync(seedRefreshDir, { recursive: true });
     fs.writeFileSync(path.join(seedRefreshDir, ".seed-refresh"), new Date().toISOString(), "utf-8");
     console.log(chalk.gray("  🧠 Brain seed merge scheduled for next boot"));
 
-    // 7. Verify
     const newVersion = _getCurrentVersion(cwd);
     console.log(chalk.green(`  ✅ Updated: ${currentVersion} → ${newVersion}`));
-    console.log(chalk.gray(`  🔒 Safe backup at: ${backup.dir}`));
+    console.log(chalk.gray(`  🔒 Emergency backup at: ${backup.dir}`));
     if (logger) logger.info("update.success", `Updated ${currentVersion} → ${newVersion}`, { from: currentVersion, to: newVersion });
 
     return { success: true, from: currentVersion, to: newVersion, backupDir: backup.dir };
   } catch (err) {
-    // Restore from memory on failure
-    _restoreFromMemory(cwd, memoryBackup);
     const errMsg = (err.message || "").slice(0, 100);
     console.log(chalk.red(`  ❌ Update failed: ${errMsg}`));
-    console.log(chalk.yellow(`  🔒 Restore from safe backup: wolverine --restore ${backup.timestamp}`));
+    console.log(chalk.yellow(`  🔒 Restore with: wolverine --restore ${backup.timestamp}`));
     if (logger) logger.warn("update.failed", `Update failed: ${errMsg}`, { from: currentVersion });
     return { success: false, from: currentVersion, to: latestVersion, error: errMsg, backupDir: backup.dir };
   }
@@ -235,82 +222,41 @@ function _isNewer(a, b) {
   return false;
 }
 
-function _copyDirRecursive(src, dest) {
+/**
+ * Copy directory recursively, skipping node_modules/.git/.wolverine/dist etc.
+ * Returns file count.
+ */
+function _copyDirSelective(src, dest) {
   fs.mkdirSync(dest, { recursive: true });
-  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-    if (entry.name === "node_modules") continue;
-    const s = path.join(src, entry.name), d = path.join(dest, entry.name);
-    if (entry.isDirectory()) _copyDirRecursive(s, d);
-    else { try { fs.copyFileSync(s, d); } catch {} }
-  }
-}
-
-function _countFiles(dir) {
   let count = 0;
-  try {
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isDirectory()) count += _countFiles(path.join(dir, entry.name));
-      else count++;
-    }
-  } catch {}
-  return count;
-}
-
-function _backupToMemory(cwd) {
-  const backups = {};
-  const protect = ["server", ".wolverine"];
-  const protectFiles = [".env.local", ".env"];
-
-  for (const dir of protect) {
-    const dirPath = path.join(cwd, dir);
-    if (!fs.existsSync(dirPath)) continue;
-    const walk = (d, base) => {
+  for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
+    if (SKIP_DIRS.has(entry.name)) continue;
+    const s = path.join(src, entry.name), d = path.join(dest, entry.name);
+    if (entry.isDirectory()) { count += _copyDirSelective(s, d); }
+    else {
       try {
-        for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
-          if (entry.name === "node_modules") continue;
-          const full = path.join(d, entry.name), rel = path.join(base, entry.name).replace(/\\/g, "/");
-          if (entry.isDirectory()) walk(full, rel);
-          else { try { const s = fs.statSync(full); if (s.size <= 10*1024*1024) backups[rel] = fs.readFileSync(full); } catch {} }
-        }
+        const stat = fs.statSync(s);
+        if (stat.size <= 5 * 1024 * 1024) { fs.copyFileSync(s, d); count++; } // skip >5MB
       } catch {}
-    };
-    walk(dirPath, dir);
+    }
   }
-  for (const f of protectFiles) {
-    const fp = path.join(cwd, f);
-    if (fs.existsSync(fp)) backups[f] = fs.readFileSync(fp);
-  }
-  return backups;
-}
-
-function _restoreFromMemory(cwd, backups) {
-  for (const [rel, content] of Object.entries(backups)) {
-    const fp = path.join(cwd, rel);
-    try { fs.mkdirSync(path.dirname(fp), { recursive: true }); fs.writeFileSync(fp, content); } catch {}
-  }
+  return count;
 }
 
 // ── Skill Metadata ──
 
 const SKILL_NAME = "update";
-const SKILL_DESCRIPTION = "Safe self-updating for wolverine framework. Creates safe backup outside project (~/. wolverine-safe-backups/), selectively updates only framework files (src/, bin/, package.json), restores all user files (server/, .wolverine/, .env), merges new brain seeds. Never use raw npm install or git pull — they overwrite server code and brain memories.";
+const SKILL_DESCRIPTION = "Safe self-updating for wolverine framework. Creates emergency backup of server code + brain (no node_modules), selectively updates only framework files (src/, bin/, package.json), never touches server/. Never use raw npm install or git pull.";
 const SKILL_KEYWORDS = ["update", "upgrade", "version", "install", "pull", "self-update", "auto-update", "framework", "safe"];
 const SKILL_USAGE = `// Safe update (programmatic)
 const { safeUpdate } = require("wolverine-ai");
-const result = await safeUpdate(process.cwd());
-// { success: true, from: "2.5.3", to: "2.6.0", backupDir: "~/.wolverine-safe-backups/..." }
+const result = safeUpdate(process.cwd());
 
-// List safe backups
-const { listSafeBackups } = require("wolverine-ai");
-const backups = listSafeBackups();
-
-// Restore from safe backup
-const { restoreFromSafeBackup } = require("wolverine-ai");
-restoreFromSafeBackup(process.cwd(), "2026-04-02T21-15-00");
-
-// CLI: wolverine --update
-// CLI: wolverine --update --dry-run
-// CLI: wolverine --restore 2026-04-02T21-15-00`;
+// CLI
+// wolverine --update
+// wolverine --update --dry-run
+// wolverine --backups
+// wolverine --restore 2026-04-02T21-15-00`;
 
 module.exports = {
   SKILL_NAME, SKILL_DESCRIPTION, SKILL_KEYWORDS, SKILL_USAGE,
