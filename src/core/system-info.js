@@ -116,13 +116,15 @@ function detectEnvironment() {
 }
 
 function recommendWorkers(cores, memGB) {
-  // Small machine (1-2 cores, <2GB): single worker
-  if (cores <= 2 || memGB < 2) return 1;
-  // Medium (3-4 cores, 2-8GB): cores - 1
+  // 1 core or <1GB: can't cluster
+  if (cores <= 1 || memGB < 1) return 1;
+  // 2 cores: 2 workers (master is lightweight, both cores serve requests)
+  if (cores === 2) return 2;
+  // 3-4 cores: cores - 1
   if (cores <= 4) return cores - 1;
-  // Large (5-8 cores): cores - 1 but cap at 6
+  // 5-8 cores: cores - 1 but cap at 6
   if (cores <= 8) return Math.min(cores - 1, 6);
-  // Very large (9+ cores): half the cores (diminishing returns)
+  // 9+ cores: half the cores (diminishing returns per worker)
   return Math.min(Math.floor(cores / 2), 16);
 }
 
