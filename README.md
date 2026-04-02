@@ -13,7 +13,6 @@ Built on patterns from [claw-code](https://github.com/instructkr/claw-code) — 
 ```bash
 # Install from npm
 npm i wolverine-ai
-# or: npm i wolverine-node
 
 # Or clone from GitHub
 git clone https://github.com/bobbyswhip/Wolverine.git

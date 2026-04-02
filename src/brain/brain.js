@@ -144,7 +144,7 @@ const SEED_DOCS = [
     metadata: { topic: "fastify" },
   },
   {
-    text: "npm package: published as wolverine-node and wolverine-ai on npmjs.com. Install with: npm i wolverine-node or npm i wolverine-ai. Both are the same package. v1.0.0, 79 files, 125KB compressed. Includes src/, bin/, server/, examples/. GitHub: https://github.com/bobbyswhip/Wolverine",
+    text: "npm package: wolverine-ai on npmjs.com. Install: npm i wolverine-ai. CLI: npx wolverine server/index.js. v1.0.0, 79 files, 125KB compressed. Includes src/, bin/, server/, examples/. GitHub: https://github.com/bobbyswhip/Wolverine",
     metadata: { topic: "npm-package" },
   },
   {

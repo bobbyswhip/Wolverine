@@ -1,5 +1,5 @@
 {
-  "name": "wolverine-node",
+  "name": "wolverine-ai",
   "version": "1.0.0",
   "description": "Self-healing Node.js server framework powered by AI. Catches crashes, diagnoses errors, generates fixes, verifies, and restarts — automatically.",
   "main": "src/index.js",
