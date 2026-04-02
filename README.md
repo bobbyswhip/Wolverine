@@ -535,14 +535,22 @@ All demos use the `server/` directory pattern. Each demo:
 
 ## Backup System
 
-Full `server/` directory snapshots with lifecycle management:
+All backups stored in **`~/.wolverine-safe-backups/`** — outside the project directory. Survives `git pull`, `npm install`, `rm -rf .wolverine`, even deleting the project entirely.
 
-- Created before every repair attempt and every smart edit (with reason string)
+```
+~/.wolverine-safe-backups/
+  manifest.json        ← backup registry
+  snapshots/           ← heal snapshots (per fix attempt)
+  updates/             ← pre-update snapshots (before framework upgrades)
+```
+
+- Created before every repair attempt and every framework update (with reason string)
 - Created on graceful shutdown (`createShutdownBackup()`)
 - Includes all files: `.js`, `.json`, `.sql`, `.db`, `.yaml`, configs
+- Old `.wolverine/backups/` auto-migrated to safe location on first run
 - **Status lifecycle**: UNSTABLE → VERIFIED (fix passed) → STABLE (30min+ uptime)
 - **Retention**: unstable/verified pruned after 7 days, stable keeps 1/day after 7 days
-- Atomic writes prevent corruption on kill
+- Protected files never overwritten during rollback: `settings.json`, `db.js`, `.env.local`
 
 **Rollback & Recovery:**
 
