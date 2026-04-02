@@ -22,9 +22,21 @@ const LOCALHOST_IPS = new Set([
 class AdminAuth {
   constructor() {
     this.adminKey = process.env.WOLVERINE_ADMIN_KEY || null;
-    this._failedAttempts = new Map(); // ip → { count, lastAttempt }
+    // Allowed IPs: localhost always + any IPs in WOLVERINE_ADMIN_IPS (comma-separated)
+    this._allowedIps = new Set(LOCALHOST_IPS);
+    if (process.env.WOLVERINE_ADMIN_IPS) {
+      for (const ip of process.env.WOLVERINE_ADMIN_IPS.split(",")) {
+        this._allowedIps.add(ip.trim());
+      }
+    }
+    this._failedAttempts = new Map();
     this._maxFailedAttempts = 10;
-    this._lockoutMs = 300000; // 5 min lockout after max failures
+    this._lockoutMs = 300000;
+
+    if (!this.adminKey) {
+      console.log("\x1b[33m  ⚠️  No WOLVERINE_ADMIN_KEY set — generate one:\x1b[0m");
+      console.log("\x1b[90m     node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"\x1b[0m");
+    }
   }
 
   /**
@@ -91,9 +103,16 @@ class AdminAuth {
   }
 
   _isLocalhost(ip) {
-    // Normalize IPv6-mapped IPv4
     const normalized = ip.replace(/^::ffff:/, "");
-    return LOCALHOST_IPS.has(ip) || LOCALHOST_IPS.has(normalized) || normalized === "127.0.0.1";
+    return this._allowedIps.has(ip) || this._allowedIps.has(normalized);
+  }
+
+  /**
+   * Add an IP to the allowlist at runtime (from dashboard).
+   */
+  addAllowedIp(ip) {
+    this._allowedIps.add(ip.trim());
+    this._allowedIps.add("::ffff:" + ip.trim());
   }
 
   _extractKey(req) {

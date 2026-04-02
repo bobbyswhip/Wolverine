@@ -235,8 +235,23 @@ class WolverineRunner {
     }
   }
 
+  /**
+   * Graceful shutdown — backup, stop subsystems, kill child cleanly.
+   * Prevents wolverine from treating shutdown as a crash.
+   */
   stop() {
+    if (!this.running) return; // prevent double-stop
     this.running = false;
+    this._shuttingDown = true;
+
+    console.log(chalk.yellow("\n  🔒 Graceful shutdown..."));
+
+    // Create shutdown backup
+    try {
+      this.backupManager.createShutdownBackup();
+    } catch {}
+
+    // Stop all monitors (prevents restart triggers during shutdown)
     this._clearStabilityTimer();
     this.healthMonitor.stop();
     this.perfMonitor.stop();
@@ -247,10 +262,16 @@ class WolverineRunner {
     this.tokenTracker.save();
     this.dashboard.stop();
 
-    this.logger.info(EVENT_TYPES.PROCESS_STOP, "Wolverine stopped");
+    this.logger.info(EVENT_TYPES.PROCESS_STOP, "Wolverine stopped (graceful shutdown)");
 
+    // Kill child — remove exit listener first so it doesn't trigger heal
     if (this.child) {
+      this.child.removeAllListeners("exit");
       this.child.kill("SIGTERM");
+      // Force kill after 3s if it doesn't respond
+      setTimeout(() => {
+        try { if (this.child) this.child.kill("SIGKILL"); } catch {}
+      }, 3000);
       this.child = null;
     }
   }

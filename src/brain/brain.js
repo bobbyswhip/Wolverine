@@ -36,7 +36,7 @@ const SEED_DOCS = [
     metadata: { topic: "heal-pipeline" },
   },
   {
-    text: "Wolverine backup system: every fix creates a backup before patching. Status lifecycle: UNSTABLE (just created) → VERIFIED (fix passed boot probe) → STABLE (server ran 30min+ without crash). Retention: unstable backups pruned after 7 days. Stable backups older than 7 days keep 1 per day.",
+    text: "Wolverine backup system: full server/ directory snapshots with lifecycle management. Every fix creates a backup with a reason string before patching. Status lifecycle: UNSTABLE (just created) → VERIFIED (fix passed boot probe) → STABLE (server ran 30min+ without crash). Features: rollbackTo(backupId) creates pre-rollback backup then restores files and restarts server. undoRollback() restores pre-rollback state. Hot-load: admin can load any backup as current server state from dashboard. Shutdown backup on graceful exit. Retention: unstable/verified pruned after 7 days. Stable backups older than 7 days keep 1 per day. Rollback log tracks all rollback/undo operations with timestamps and success status. Dashboard endpoints: POST /api/backups/:id/rollback, POST /api/backups/undo, POST /api/backups/:id/hotload (all require admin auth).",
     metadata: { topic: "backup-system" },
   },
   {
@@ -148,7 +148,7 @@ const SEED_DOCS = [
     metadata: { topic: "npm-package" },
   },
   {
-    text: "Dashboard has 9 panels: Overview (stats cards + recent events), Events (live SSE stream), Performance (endpoint metrics), Analytics (memory/CPU charts, route health, response times), Command (admin chat with 3-route classifier), Backups (server/ snapshots with status badges), Brain (vector store stats + function map), Repairs (error/resolution audit trail with tokens and cost), Tools (agent tool harness listing), Usage (token analytics by model/category/tool with USD costs).",
+    text: "Dashboard has 9 panels: Overview (stats cards + recent events), Events (live SSE stream), Performance (endpoint metrics), Analytics (memory/CPU charts, route health, response times), Command (admin chat with 3-route classifier), Backups (full backup management: stats cards, backup list with rollback/hot-load buttons per entry, reason display, status badges, undo last rollback button, rollback log, admin IP allowlist management), Brain (vector store stats + function map), Repairs (error/resolution audit trail with tokens and cost), Tools (agent tool harness listing), Usage (token analytics by model/category/tool with USD costs).",
     metadata: { topic: "dashboard-panels" },
   },
   {
@@ -194,6 +194,10 @@ const SEED_DOCS = [
   {
     text: "Secret redaction is a singleton: initRedactor(projectRoot) called once on startup, then redact(text), redactObj(obj), hasSecrets(text) available everywhere via require('../security/secret-redactor'). No need to pass redactor instances. Every outbound path auto-redacts: event logger, repair history, telemetry heartbeats, brain memories, AI calls, dashboard output. Env variable values replaced with process.env.KEY_NAME.",
     metadata: { topic: "redaction-singleton" },
+  },
+  {
+    text: "Admin auth: two-factor gate — WOLVERINE_ADMIN_KEY (header/cookie/query) + IP allowlist. Localhost always allowed (127.0.0.1, ::1, ::ffff:127.0.0.1). Remote IPs added via WOLVERINE_ADMIN_IPS env var (comma-separated) or POST /api/admin/add-ip at runtime from dashboard. addAllowedIp(ip) adds both IPv4 and IPv4-mapped IPv6. 10 failed attempts = 5min lockout. Timing-safe key comparison. Dashboard stores key as cookie after first auth.",
+    metadata: { topic: "admin-auth" },
   },
 ];
 

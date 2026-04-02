@@ -68,6 +68,10 @@ class DashboardServer {
       if (req.url === "/api/usage/history") return this._handleUsageHistory(req, res);
       if (req.url === "/api/auth/verify" && req.method === "POST") return this._handleAuthVerify(req, res);
       if (req.url === "/api/command" && req.method === "POST") return this._handleCommand(req, res);
+      if (req.url.startsWith("/api/backups/") && req.url.endsWith("/rollback") && req.method === "POST") return this._handleRollback(req, res);
+      if (req.url === "/api/backups/undo" && req.method === "POST") return this._handleUndoRollback(req, res);
+      if (req.url.startsWith("/api/backups/") && req.url.endsWith("/hotload") && req.method === "POST") return this._handleHotload(req, res);
+      if (req.url === "/api/admin/add-ip" && req.method === "POST") return this._handleAddIp(req, res);
       if (req.url === "/api/chat/clear" && req.method === "POST") {
         this._chatHistory = [];
         res.writeHead(200, { "Content-Type": "application/json" });
@@ -432,7 +436,7 @@ ${existingRoutes || "(none)"}`,
 
     // Backup entire server/ before making changes
     if (this.runner && this.runner.backupManager) {
-      const bid = this.runner.backupManager.createBackup(null);
+      const bid = this.runner.backupManager.createBackup("pre-edit: " + safeCommand.slice(0, 80));
       this.runner.backupManager.markVerified(bid);
       console.log(chalk.gray(`  💾 Backup created: ${bid}`));
     }
@@ -875,7 +879,132 @@ ${context ? "\nBrain:\n" + context : ""}`,
 
   _handleBackups(req, res) {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(this.backupManager ? this.backupManager.manifest.backups : []));
+    if (this.backupManager) {
+      res.end(JSON.stringify({
+        backups: this.backupManager.getAll(),
+        rollbackLog: this.backupManager.getRollbackLog(),
+        stats: this.backupManager.getStats(),
+      }));
+    } else {
+      res.end(JSON.stringify({ backups: [], rollbackLog: [], stats: {} }));
+    }
+  }
+
+  // ── Backup Management Endpoints ──
+
+  _handleRollback(req, res) {
+    const authResult = this.auth.validate(req);
+    if (!authResult.authorized) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Forbidden", reason: authResult.reason }));
+      return;
+    }
+
+    const backupId = req.url.replace("/api/backups/", "").replace("/rollback", "");
+    if (!this.backupManager) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Backup manager not available" }));
+      return;
+    }
+
+    const result = this.backupManager.rollbackTo(backupId);
+    if (result.success && this.runner) {
+      console.log(chalk.blue("  🔄 Restarting server after rollback..."));
+      this.runner.restart();
+    }
+    if (this.logger) {
+      this.logger.info("backup.rollback", `Rolled back to ${backupId}`, { backupId, preRollbackId: result.preRollbackId, success: result.success });
+    }
+    this._broadcast({ type: "backup.rollback", timestamp: Date.now(), message: `Rolled back to ${backupId}`, severity: "warn" });
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(result));
+  }
+
+  _handleUndoRollback(req, res) {
+    const authResult = this.auth.validate(req);
+    if (!authResult.authorized) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Forbidden", reason: authResult.reason }));
+      return;
+    }
+
+    if (!this.backupManager) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Backup manager not available" }));
+      return;
+    }
+
+    const result = this.backupManager.undoRollback();
+    if (result.success && this.runner) {
+      console.log(chalk.blue("  🔄 Restarting server after undo rollback..."));
+      this.runner.restart();
+    }
+    if (this.logger) {
+      this.logger.info("backup.undo", "Undo rollback", { success: result.success });
+    }
+    this._broadcast({ type: "backup.undo", timestamp: Date.now(), message: "Undo rollback executed", severity: "warn" });
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify(result));
+  }
+
+  _handleHotload(req, res) {
+    const authResult = this.auth.validate(req);
+    if (!authResult.authorized) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Forbidden", reason: authResult.reason }));
+      return;
+    }
+
+    const backupId = req.url.replace("/api/backups/", "").replace("/hotload", "");
+    if (!this.backupManager) {
+      res.writeHead(500, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Backup manager not available" }));
+      return;
+    }
+
+    // Hot-load: rollback to the backup state and restart immediately
+    const entry = this.backupManager.manifest.backups.find(b => b.id === backupId);
+    if (!entry) {
+      res.writeHead(404, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Backup not found" }));
+      return;
+    }
+
+    const result = this.backupManager.rollbackTo(backupId);
+    if (result.success && this.runner) {
+      console.log(chalk.blue(`  ⚡ Hot-loading backup ${backupId}...`));
+      this.runner.restart();
+    }
+    if (this.logger) {
+      this.logger.info("backup.hotload", `Hot-loaded backup ${backupId}`, { backupId, success: result.success });
+    }
+    this._broadcast({ type: "backup.hotload", timestamp: Date.now(), message: `Hot-loaded backup ${backupId}`, severity: "info" });
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ ...result, hotloaded: true }));
+  }
+
+  _handleAddIp(req, res) {
+    const authResult = this.auth.validate(req);
+    if (!authResult.authorized) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Forbidden", reason: authResult.reason }));
+      return;
+    }
+
+    this._readBody(req, (body) => {
+      const ip = (body.ip || "").trim();
+      if (!ip || !/^[\d.:a-fA-F]+$/.test(ip)) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Invalid IP address" }));
+        return;
+      }
+      this.auth.addAllowedIp(ip);
+      if (this.logger) {
+        this.logger.info("admin.add_ip", `Added allowed IP: ${ip}`, { ip });
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ success: true, ip, allowedIps: [...this.auth._allowedIps] }));
+    });
   }
 
   _handleUsage(req, res) {
@@ -1119,7 +1248,30 @@ main{overflow-y:auto;padding:24px}
     </div>
   </div>
 </div>
-<div class="panel" id="p-backups"><div class="card"><h3>Backup History</h3><div id="bk-list"><div class="empty">No backups</div></div></div></div>
+<div class="panel" id="p-backups">
+  <div class="stats" style="grid-template-columns:repeat(4,1fr)">
+    <div class="stat-card up"><div class="stat-val" id="bk-total">0</div><div class="stat-lbl">Total Backups</div></div>
+    <div class="stat-card heal"><div class="stat-val" id="bk-stable">0</div><div class="stat-lbl">Stable</div></div>
+    <div class="stat-card brain"><div class="stat-val" id="bk-verified">0</div><div class="stat-lbl">Verified</div></div>
+    <div class="stat-card roll"><div class="stat-val" id="bk-rollbacks">0</div><div class="stat-lbl">Rollbacks</div></div>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <h3 style="display:flex;justify-content:space-between;align-items:center">Backup Management <button onclick="undoRollback()" id="undo-btn" style="display:none;background:var(--yellow);color:#000;border:none;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:.75rem">↩ Undo Last Rollback</button></h3>
+    <div id="bk-list"><div class="empty">No backups</div></div>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <h3>Rollback Log</h3>
+    <div id="bk-rlog"><div class="empty">No rollbacks performed</div></div>
+  </div>
+  <div class="card" style="margin-top:16px">
+    <h3>Admin IP Allowlist</h3>
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <input type="text" id="ip-input" placeholder="e.g. 203.0.113.42" style="flex:1;padding:10px 14px;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:.85rem">
+      <button onclick="addAdminIp()" style="background:var(--accent);color:#fff;border:none;border-radius:8px;padding:10px 18px;cursor:pointer;font-size:.85rem">Add IP</button>
+    </div>
+    <div id="ip-list"><div class="empty">Only localhost by default</div></div>
+  </div>
+</div>
 <div class="panel" id="p-brain">
   <div class="card"><h3>Brain Statistics</h3><div class="ns-grid" id="br-ns"></div></div>
   <div class="card" style="margin-top:16px"><h3>Function Map</h3><div id="br-fmap"><div class="empty">Loading...</div></div></div>
@@ -1252,8 +1404,24 @@ async function refresh(){
     if(brn.functionMap){const fm=brn.functionMap;$('br-fmap').innerHTML=['Routes:'+fm.routes,'Functions:'+fm.functions,'Classes:'+fm.classes,'Files:'+fm.files].map(x=>'<div class="mrow"><span>'+x.split(':')[0]+'</span><span class="vals"><b>'+x.split(':')[1]+'</b></span></div>').join('');}
     const eps=Object.entries(mr);const mh=eps.length?eps.map(([p,m])=>'<div class="mrow"><span class="ep">'+esc(p)+'</span><span class="vals"><b>'+m.avgResponseMs+'ms</b> avg &middot; '+m.requestsPerMin+' req/min &middot; '+m.errorRate+'% err</span></div>').join(''):'<div class="empty">No traffic yet</div>';
     $('ov-metrics').innerHTML=mh;$('perf-list').innerHTML=mh;
-    const bh=br2.length?br2.slice(-15).reverse().map(b=>'<div class="mrow"><span>'+new Date(b.timestamp).toLocaleString()+'</span><span><span class="badge badge-'+b.status+'">'+b.status+'</span> '+b.files.length+' file(s)</span></div>').join(''):'<div class="empty">No backups</div>';
-    $('ov-backups').innerHTML=bh;$('bk-list').innerHTML=bh;
+    const bkData=br2;const bkList=bkData.backups||[];const bkRlog=bkData.rollbackLog||[];const bkStats=bkData.stats||{};
+    $('bk-total').textContent=bkStats.total||0;$('bk-stable').textContent=bkStats.stable||0;$('bk-verified').textContent=bkStats.verified||0;$('bk-rollbacks').textContent=bkRlog.length;
+    if(bkRlog.length>0)$('undo-btn').style.display='inline-block';else $('undo-btn').style.display='none';
+    const ovBh=bkList.length?bkList.slice(-10).reverse().map(b=>'<div class="mrow"><span>'+new Date(b.timestamp).toLocaleString()+'</span><span><span class="badge badge-'+b.status+'">'+b.status+'</span> '+b.fileCount+' file(s)</span></div>').join(''):'<div class="empty">No backups</div>';
+    $('ov-backups').innerHTML=ovBh;
+    const bkFull=bkList.length?bkList.slice(-20).reverse().map(b=>{
+      const age=Math.round((Date.now()-b.timestamp)/60000);const ageStr=age<60?age+'m ago':Math.round(age/60)+'h ago';
+      const reason=b.reason?esc(b.reason):'<i>no reason</i>';
+      const btns=adminKey?'<span style="margin-left:auto;display:flex;gap:4px"><button onclick="rollbackTo(\''+b.id+'\')" style="background:var(--yellow);color:#000;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;font-size:.7rem" title="Rollback to this state">↩ Rollback</button><button onclick="hotload(\''+b.id+'\')" style="background:var(--accent);color:#fff;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;font-size:.7rem" title="Hot-load this backup as current server">⚡ Hot-load</button></span>':'';
+      return '<div class="mrow" style="flex-wrap:wrap;gap:6px"><span style="min-width:140px">'+new Date(b.timestamp).toLocaleString()+'</span><span class="badge badge-'+b.status+'">'+b.status+'</span><span style="color:var(--text2);font-size:.75rem">'+reason+'</span><span style="color:var(--text2);font-size:.7rem">'+b.fileCount+' files &middot; '+ageStr+'</span>'+btns+'</div>';
+    }).join(''):'<div class="empty">No backups</div>';
+    $('bk-list').innerHTML=bkFull;
+    const rlogHtml=bkRlog.length?bkRlog.slice(-10).reverse().map(r=>{
+      const action=r.action==='undo'?'<span style="color:var(--yellow)">UNDO</span>':'<span style="color:var(--accent)">ROLLBACK</span>';
+      const status=r.success?'<span style="color:var(--green)">OK</span>':'<span style="color:var(--red)">FAIL</span>';
+      return '<div class="mrow"><span>'+new Date(r.timestamp).toLocaleString()+'</span><span>'+action+' &rarr; '+esc(r.restoredBackupId||'')+'</span><span>'+status+'</span></div>';
+    }).join(''):'<div class="empty">No rollbacks performed</div>';
+    $('bk-rlog').innerHTML=rlogHtml;
     // Usage analytics
     if(usage&&usage.session){
       $('u-total').textContent=(usage.session.totalTokens||0).toLocaleString();
@@ -1405,6 +1573,57 @@ async function refresh(){
 const tools=[{n:'read_file',d:'Read file with offset/limit',c:'file'},{n:'write_file',d:'Write complete file',c:'file'},{n:'edit_file',d:'Find-and-replace edit',c:'file'},{n:'glob_files',d:'Pattern file discovery',c:'file'},{n:'grep_code',d:'Regex search with context',c:'file'},{n:'bash_exec',d:'Sandboxed shell',c:'shell'},{n:'git_log',d:'Recent commits',c:'shell'},{n:'git_diff',d:'Uncommitted changes',c:'shell'},{n:'web_fetch',d:'Fetch URL',c:'web'},{n:'done',d:'Signal completion',c:'ctrl'}];
 const cc={file:'var(--blue)',shell:'var(--yellow)',web:'var(--purple)',ctrl:'var(--green)'};
 $('tool-list').innerHTML=tools.map(t=>'<div class="mrow"><span class="ep" style="color:'+cc[t.c]+'">'+t.n+'</span><span class="vals">'+esc(t.d)+'</span></div>').join('');
+
+async function rollbackTo(id){
+  if(!adminKey){alert('Authenticate first');return;}
+  if(!confirm('Rollback to backup '+id+'? This will restore all server files to that state and restart.'))return;
+  try{
+    const r=await fetch(B+'/api/backups/'+id+'/rollback',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Key':adminKey}});
+    const d=await r.json();
+    if(d.success){alert('Rolled back to '+id+'. Server restarting... Pre-rollback backup: '+d.preRollbackId);}
+    else{alert('Rollback failed: '+(d.error||'unknown'));}
+    refresh();
+  }catch(e){alert('Error: '+e.message);}
+}
+
+async function hotload(id){
+  if(!adminKey){alert('Authenticate first');return;}
+  if(!confirm('Hot-load backup '+id+' as current server state? This will replace all server files and restart.'))return;
+  try{
+    const r=await fetch(B+'/api/backups/'+id+'/hotload',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Key':adminKey}});
+    const d=await r.json();
+    if(d.success){alert('Hot-loaded '+id+'. Server restarting...');}
+    else{alert('Hot-load failed: '+(d.error||'unknown'));}
+    refresh();
+  }catch(e){alert('Error: '+e.message);}
+}
+
+async function undoRollback(){
+  if(!adminKey){alert('Authenticate first');return;}
+  if(!confirm('Undo the last rollback? This will restore the pre-rollback state and restart.'))return;
+  try{
+    const r=await fetch(B+'/api/backups/undo',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Key':adminKey}});
+    const d=await r.json();
+    if(d.success){alert('Rollback undone. Server restarting...');}
+    else{alert('Undo failed: '+(d.error||'unknown'));}
+    refresh();
+  }catch(e){alert('Error: '+e.message);}
+}
+
+async function addAdminIp(){
+  if(!adminKey){alert('Authenticate first');return;}
+  const ip=$('ip-input').value.trim();
+  if(!ip){alert('Enter an IP address');return;}
+  try{
+    const r=await fetch(B+'/api/admin/add-ip',{method:'POST',headers:{'Content-Type':'application/json','X-Admin-Key':adminKey},body:JSON.stringify({ip})});
+    const d=await r.json();
+    if(d.success){
+      $('ip-input').value='';
+      $('ip-list').innerHTML=(d.allowedIps||[]).map(x=>'<div class="mrow"><span>'+esc(x)+'</span></div>').join('');
+      alert('IP '+ip+' added to allowlist');
+    }else{alert('Failed: '+(d.error||'unknown'));}
+  }catch(e){alert('Error: '+e.message);}
+}
 
 refresh();setInterval(refresh,5000);
 fetch(B+'/api/events').then(r=>r.json()).then(evs=>evs.forEach(addEvent)).catch(()=>{});
