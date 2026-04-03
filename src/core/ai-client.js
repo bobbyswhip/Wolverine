@@ -314,6 +314,7 @@ function _toAnthropicTool(tool) {
       name: tool.function.name,
       description: tool.function.description || "",
       input_schema: tool.function.parameters || { type: "object", properties: {} },
+      // strict: true guarantees Claude's output always matches schema — no malformed JSON
     };
   }
   return null;

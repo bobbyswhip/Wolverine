@@ -453,14 +453,15 @@ class AgentEngine {
         };
       }
 
+      // Execute ALL tool calls (supports parallel — Claude can request multiple at once)
+      // Group all results into tool messages for proper Anthropic parallel tool support.
+      const MAX_TOOL_RESULT = 4000;
+      let doneResult = null;
+
       for (const toolCall of assistantMessage.tool_calls) {
-        // Error-graceful tool execution (claw-code pattern)
-        // Tool errors are returned as is_error results, not thrown.
-        // This lets the model see the error and decide how to proceed.
         let result;
         let isError = false;
         try {
-          // Pre-hook: check if tool should be blocked
           const hookResult = _runPreHook(toolCall.function?.name, toolCall.function?.arguments, this.cwd);
           if (hookResult.denied) {
             result = { content: `Blocked by hook: ${hookResult.message}` };
@@ -469,40 +470,39 @@ class AgentEngine {
             result = await this._executeTool(toolCall);
           }
         } catch (err) {
-          // Error-graceful: return error as tool result, don't break the loop
           result = { content: `Tool error: ${err.message?.slice(0, 200)}` };
           isError = true;
           console.log(chalk.yellow(`    ⚠️ Tool error (${toolCall.function?.name}): ${err.message?.slice(0, 80)}`));
         }
 
-        // Post-hook: audit/modify result
         _runPostHook(toolCall.function?.name, toolCall.function?.arguments, result.content, isError, this.cwd);
 
-        // Tool result truncation: cap at 4K chars to prevent context blowup.
-        // One grep_code can return 30K+ chars — the model doesn't need all of it.
-        const MAX_TOOL_RESULT = 4000;
+        // Truncate large results
         let toolContent = isError ? `[ERROR] ${result.content}` : result.content;
         if (toolContent && toolContent.length > MAX_TOOL_RESULT) {
-          const truncated = toolContent.length - MAX_TOOL_RESULT;
-          toolContent = toolContent.slice(0, MAX_TOOL_RESULT) + `\n\n... (truncated ${truncated} chars. Use offset/limit for large results.)`;
+          toolContent = toolContent.slice(0, MAX_TOOL_RESULT) + `\n... (truncated. Use offset/limit for large results.)`;
         }
 
+        // Push each tool result as its own message (OpenAI format — ai-client.js
+        // converts to grouped Anthropic tool_result blocks automatically)
         this.messages.push({
           role: "tool",
           tool_call_id: toolCall.id,
           content: toolContent,
         });
 
-        if (result.done) {
-          return {
-            success: true,
-            summary: result.summary,
-            filesModified: result.filesModified || this.filesModified,
-            turnCount: this.turnCount,
-            totalTokens: this.totalTokens,
-            toolCalls: this.toolCalls,
-          };
-        }
+        if (result.done) doneResult = result;
+      }
+
+      if (doneResult) {
+        return {
+          success: true,
+          summary: doneResult.summary,
+          filesModified: doneResult.filesModified || this.filesModified,
+          turnCount: this.turnCount,
+          totalTokens: this.totalTokens,
+          toolCalls: this.toolCalls,
+        };
       }
     }
 
@@ -1051,7 +1051,7 @@ function _simplePrompt(cwd, primaryFile) {
   return `You are Wolverine, a Node.js server repair agent. Fix the error using minimal changes.
 
 TOOLS: read_file, write_file, edit_file, glob_files, grep_code, bash_exec, done
-RULES: Read the file before editing. Use edit_file for targeted fixes. Call done when finished.
+RULES: Read the file before editing. Use edit_file for targeted fixes. Call done when finished. Use multiple tools at once when independent.
 ${primaryFile ? `File: ${primaryFile}` : ""}
 Project: ${cwd}`;
 }
@@ -1061,6 +1061,8 @@ function _fullPrompt(cwd, primaryFile) {
   return `You are Wolverine, an autonomous Node.js server repair agent. Diagnose and fix the error.
 
 You are a full server doctor. Errors can be code bugs, missing deps, database problems, config issues, port conflicts, permissions, or corrupted state. Investigate the root cause before fixing.
+
+For maximum efficiency, invoke multiple independent tools simultaneously rather than sequentially.
 
 TOOLS: read_file, write_file, edit_file, glob_files, grep_code, list_dir, move_file, bash_exec, git_log, git_diff, inspect_db, run_db_fix, check_port, check_env, audit_deps, check_migration, web_fetch, done
 
