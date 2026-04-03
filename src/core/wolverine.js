@@ -43,6 +43,9 @@ async function heal(opts) {
 
 async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager, logger, brain, mcp, skills, repairHistory, routeContext }) {
   const healStartTime = Date.now();
+  // Snapshot token tracker at heal start — diff at end = FULL pipeline cost
+  const { getTrackerSnapshot } = require("./ai-client");
+  const _snapshot = getTrackerSnapshot();
   const { redact, hasSecrets } = require("../security/secret-redactor");
 
   // Guard: don't burn tokens on empty stderr (signal kills, clean shutdowns, etc.)
@@ -155,11 +158,15 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
   if (opsFix.fixed) {
     console.log(chalk.green(`  ⚡ Operational fix applied: ${opsFix.action}`));
     if (logger) logger.info(EVENT_TYPES.HEAL_SUCCESS, `Operational fix: ${opsFix.action}`, { action: opsFix.action });
+    // Record with FULL pipeline cost (includes injection scan, brain lookup, etc.)
+    const _endSnap = getTrackerSnapshot();
+    const pipelineTokens = _endSnap.tokens - _snapshot.tokens;
+    const pipelineCost = _endSnap.cost - _snapshot.cost;
     if (repairHistory) {
       repairHistory.record({
         error: parsed.errorMessage, file: parsed.filePath, line: parsed.line,
         resolution: opsFix.action, success: true, mode: "operational",
-        model: "none", tokens: 0, cost: 0, iteration: 0,
+        model: getModel("audit"), tokens: pipelineTokens, cost: pipelineCost, iteration: 0,
         duration: Date.now() - healStartTime, filesModified: [],
       });
     }
@@ -396,13 +403,13 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
 
   backupManager.prune();
 
-  // Record to repair history
+  // Record to repair history — use FULL pipeline cost (injection scan + brain + fix)
   if (repairHistory) {
     const duration = Date.now() - healStartTime;
-    const tokenUsage = goalResult.agentStats?.totalTokens || 0;
-    const { calculateCost } = require("../logger/pricing");
+    const _endSnap = getTrackerSnapshot();
+    const pipelineTokens = _endSnap.tokens - _snapshot.tokens;
+    const pipelineCost = _endSnap.cost - _snapshot.cost;
     const model = goalResult.mode === "fast" ? getModel("coding") : getModel("reasoning");
-    const cost = calculateCost(model, tokenUsage * 0.7, tokenUsage * 0.3); // estimate in/out split
 
     repairHistory.record({
       error: parsed.errorMessage,
@@ -412,8 +419,8 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
       success: goalResult.success,
       mode: goalResult.mode || "unknown",
       model,
-      tokens: tokenUsage,
-      cost: cost.total,
+      tokens: pipelineTokens,
+      cost: pipelineCost,
       iteration: goalResult.iteration,
       duration,
       filesModified: goalResult.agentStats?.filesModified || [],

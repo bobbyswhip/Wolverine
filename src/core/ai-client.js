@@ -8,6 +8,10 @@ let _anthropicClient = null;
 let _tracker = null;
 
 function setTokenTracker(tracker) { _tracker = tracker; }
+function getTrackerSnapshot() {
+  if (!_tracker) return { tokens: 0, cost: 0, calls: 0 };
+  return { tokens: _tracker._totalTokens || 0, cost: _tracker._totalCostUsd || 0, calls: _tracker._totalCalls || 0 };
+}
 
 function _extractTokens(usage) {
   if (!usage) return { input: 0, output: 0, cacheCreation: 0, cacheRead: 0 };
@@ -580,4 +584,4 @@ Include both if needed, or just one.`;
   }
 }
 
-module.exports = { requestRepair, getClient, tokenParam, aiCall, aiCallWithHistory, isResponsesModel, isAnthropicModel, setTokenTracker, detectProvider };
+module.exports = { requestRepair, getClient, tokenParam, aiCall, aiCallWithHistory, isResponsesModel, isAnthropicModel, setTokenTracker, getTrackerSnapshot, detectProvider };
