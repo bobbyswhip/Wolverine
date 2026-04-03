@@ -450,6 +450,8 @@ Three layers prevent token waste:
 
 | Technique | What it does | Cost |
 |-----------|-------------|------|
+| **Dynamic system prompt** | Simple errors get 400-token prompt with 7 tools. Complex get 1200 with 18 + strategy | 50% on 70% of heals |
+| **Brain namespace isolation** | Seed docs (20K tokens) excluded from error heals — only searched for wolverine queries | 50% context reduction |
 | **Prompt caching** | Anthropic system prompt cached server-side — 90% cheaper on repeat calls | 12-16K tokens saved per heal |
 | **Tool result truncation** | Tool output capped at 4K chars — prevents context blowup from large reads | Up to 30K saved per turn |
 | **Zero-cost compaction** | Extracts structural signals (tools, files, errors) from history — no LLM call | $0.00 |

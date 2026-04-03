@@ -4,133 +4,143 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Wolverine is a self-healing Node.js server framework. It wraps a server process, catches crashes AND caught 500 errors, diagnoses them with AI (OpenAI or Anthropic), generates fixes, verifies them, and restarts — automatically. Published as `wolverine-ai` on npm (v2.1.1).
+Wolverine is a self-healing Node.js server framework. It wraps a server process, catches crashes AND caught 500 errors, diagnoses them with AI (OpenAI or Anthropic), generates fixes, verifies them, and restarts — automatically. Published as `wolverine-ai` on npm (v3.1.0). 65 exports, 83 files, 6 skills.
 
 ## Commands
 
 ```bash
-npm start                      # Run server/index.js under wolverine (self-healing)
-npm run server                 # Run server/index.js directly (no healing)
-npm run test:pentest           # Security scan for secret leakage
-npm run demo:list              # List demo scenarios
-npm run demo -- 01             # Run specific demo (backs up server/, runs buggy code, restores on exit)
-npx wolverine server/index.js  # CLI entry point
-wolverine --info               # Show system detection (cores, RAM, platform)
+npm start                        # Run server/index.js under wolverine (self-healing)
+npm run server                   # Run server/index.js directly (no healing)
+npm run test:pentest             # Security scan for secret leakage
+npm run demo:list                # List demo scenarios
+npm run demo -- 01               # Run specific demo
+npx wolverine server/index.js    # CLI entry point
+wolverine --info                 # System detection
+wolverine --update               # Safe framework upgrade
+wolverine --backup "reason"      # Create server snapshot
+wolverine --list-backups         # Show all snapshots
+wolverine --rollback <id>        # Restore specific backup
+wolverine --rollback-latest      # Restore most recent
 ```
 
-No standard test runner — demos in `tests/fixtures/` serve as integration tests. Run `node tests/run-all.js` for sequential execution.
+No standard test runner — demos in `tests/fixtures/` serve as integration tests.
 
 ## Architecture
 
-### The Heal Pipeline (src/core/wolverine.js)
+### Heal Pipeline (src/core/wolverine.js)
 
 ```
 Error detected (crash OR caught 500 via IPC)
-  → Parse error (file, line, message, errorType classification)
-  → Redact secrets → Injection scan (skip if stderr < 20 chars)
-  → Rate limit check (per-signature + global: max 5 heals per 5min)
-  → Operational fix (zero AI tokens):
+  → Empty stderr? → Just restart, no AI ($0.00)
+  → Parse error → classify type → redact secrets
+  → Injection scan (skip if < 20 chars)
+  → Loop guard: same error failed 3+ times in 10min? → File bug report, stop
+  → Rate limit: 5 heals per 5min max
+  → Operational fix (zero tokens):
       missing_module → deps.diagnose() → npm install
-      EADDRINUSE → find and kill stale process
+      EADDRINUSE → kill stale process
       ENOENT → create missing file
       EACCES → chmod
-  → If operational fix didn't apply:
-      Goal Loop (3 iterations, escalating):
-        1. Fast path: CODING_MODEL, JSON with code changes + shell commands
-           (includes backup source code for revert-vs-patch decisions)
-        2. Agent: REASONING_MODEL, 18 tools, multi-turn investigation
-        3. Sub-agents: explore → plan → fix (specialized agents)
-  → Verify: syntax check → boot probe → route probe (if route known)
-  → Success: retryCount reset, record to repair history + brain
-  → Fail: rollback, next iteration or give up
+  → Token budget by complexity: simple=20K, moderate=50K, complex=100K
+  → Goal Loop (3 iterations):
+      1. Fast path: CODING_MODEL, JSON with code+commands, backup diff context
+      2. Agent: dynamic prompt (400 tokens simple, 1200 complex), 18 tools
+      3. Sub-agents: explore→plan→fix (Haiku triage, Sonnet/Opus fix only)
+  → Verify: syntax → boot probe (route probe skipped — ErrorMonitor is safety net)
+  → Success: retryCount reset, record to brain with full context
+  → Fail: rollback, brain records "DO NOT REPEAT", next iteration
 ```
 
-`heal()` wraps `_healImpl()` with a 5-minute `Promise.race` timeout. File path is optional — when no file identified, skips fast path and goes straight to agent.
+`heal()` wraps `_healImpl()` with 5-minute `Promise.race` timeout.
 
 ### IPC Error Chain (caught 500s without crash)
 
-1. **error-hook.js** — preloaded via `--require`, patches `require("fastify")` and `require("express")` to add IPC error reporting. Uses `WeakSet` dedup.
-2. **runner.js** — spawns child with `stdio: ["inherit","inherit","pipe","ipc"]`, listens on `child.on("message")`
-3. **error-monitor.js** — tracks errors per normalized route (`/api/users/123` → `/api/users/:id`), triggers heal after threshold (default: 1). Health check failures also trigger heal (not just restart).
+1. **error-hook.js** — preloaded via `--require`, patches Fastify/Express for IPC. WeakSet dedup.
+2. **runner.js** — spawns child with `stdio: ["inherit","inherit","pipe","ipc"]`, listens `child.on("message")`
+3. **error-monitor.js** — tracks errors per normalized route (`/api/users/123` → `/api/users/:id`), threshold=1, 60s cooldown. Health check failures also trigger heal.
 
-### Dual Provider AI Client (src/core/ai-client.js)
+### AI Client (src/core/ai-client.js)
 
-Supports OpenAI and Anthropic through a unified interface. Provider auto-detected from model name (`claude-*` → Anthropic, everything else → OpenAI). All responses normalized to `{content, toolCalls, usage}` regardless of provider. Tool definitions auto-converted between formats.
-
-Every call tracked with: latencyMs, success/failure, input/output tokens, cost. Failed API calls are logged per-model for reliability tracking.
+Dual provider: OpenAI + Anthropic. Auto-detected from model name (`claude-*` → Anthropic). All responses normalized to `{content, toolCalls, usage}`. **Anthropic prompt caching** — system prompt marked `cache_control: ephemeral`, 90% cheaper on repeat calls. Per-model output limits with 10% buffer. Every call tracked: latencyMs, success/failure, tokens, cost.
 
 Embeddings always use OpenAI (Anthropic has no embedding API).
 
-### Agent Tool Harness (src/agent/agent-engine.js)
+### Agent (src/agent/agent-engine.js)
+
+**Dynamic system prompt**: simple errors (TypeError/ReferenceError) get 400-token compact prompt with 7 tools. Complex errors get full prompt with all 18 tools + strategy table.
 
 18 tools: file (read/write/edit/glob/grep/list_dir/move_file), shell (bash_exec/git_log/git_diff), database (inspect_db/run_db_fix), diagnostics (check_port/check_env), deps (audit_deps/check_migration), research (web_fetch), control (done).
 
-**Protected paths** — agent CANNOT modify: `src/`, `bin/`, `tests/`, `node_modules/`, `.env`, `package.json`. Only `server/` is editable.
+**Cost optimizations**: zero-cost structural compaction (no LLM, extracts signals from messages), tool result truncation (4K cap), token estimation (`text.length/4`), pre/post tool hooks (`.wolverine/hooks.json`), error-graceful tools (`[ERROR]` results not thrown).
 
-Sub-agents get restricted tool sets. Explorer gets diagnostic tools, fixer gets bash_exec + move_file + run_db_fix, planner gets audit_deps + check_migration.
+**Protected paths**: agent cannot modify `src/`, `bin/`, `tests/`, `node_modules/`, `.env`, `package.json`. Only `server/` is editable.
 
-### Provider Configuration (server/config/settings.json)
-
-Three named presets, selected by `"provider"` field:
+### Provider Config (server/config/settings.json)
 
 ```json
-{
-  "provider": "hybrid",              // "openai" | "anthropic" | "hybrid"
-  "openai_settings": { ... },        // all OpenAI models
-  "anthropic_settings": { ... },     // all Anthropic models
-  "hybrid_settings": { ... }         // mix: Anthropic for heavy, OpenAI for cheap
-}
+{ "provider": "hybrid", "openai_settings": {...}, "anthropic_settings": {...}, "hybrid_settings": {...} }
 ```
 
-Config loader (`src/core/config.js`) reads `{provider}_settings` as the model source. Env vars override per-role. `WOLVERINE_PROVIDER` env var overrides the settings.json value.
+Config loader reads `{provider}_settings`. Env vars override per-role. Missing config sections auto-patched on startup via `_ensureDefaults()`.
 
-### Backup Lifecycle (src/backup/backup-manager.js)
+### Brain (src/brain/vector-store.js + brain.js)
 
-Full `server/` snapshots. States: UNSTABLE → VERIFIED → STABLE (30min uptime). Every fix attempt creates a backup with a reason string. Rollback creates a pre-rollback safety backup. Dashboard endpoints: rollback, undo, hot-load.
+IVF-indexed vector store: k-means++ clustering, BM25 keyword search, binary persistence. 60 seed docs. Benchmarks: 100=0.2ms, 10K=4.4ms, 50K=23.7ms.
 
-### Skills (src/skills/)
+**Namespace isolation**: error heals search only `errors/fixes/learnings/functions` — seed docs (20K tokens) excluded unless query is about wolverine itself. Function map hash check skips re-embedding if unchanged.
 
-- **sql.js** — `sqlGuard()` injection prevention, `SafeDB` cluster-safe database, `idempotencyGuard()` + `db.idempotent()` for double-fire protection
-- **deps.js** — `diagnose()` for dependency errors (zero tokens), `healthReport()` for full audit, `getMigration()` for known upgrade paths (express→fastify, moment→dayjs, etc.)
+### Backup (src/backup/backup-manager.js)
+
+All backups in `~/.wolverine-safe-backups/` (outside project, survives git pull/npm install). States: UNSTABLE → VERIFIED → STABLE (30min). Protected files never rolled back: `settings.json`, `db.js`, `.env.local`.
+
+### Skills (src/skills/ — 6 files)
+
+- **sql.js** — injection prevention, SafeDB, idempotency guard
+- **deps.js** — dependency diagnosis (zero tokens), npm audit, migration paths
+- **update.js** — safe framework upgrade, emergency backup, brain seed merge
+- **backup.js** — agent-friendly backup/rollback with CLI commands
+- **loop-guard.js** — infinite loop detection, bug reports, process dedup (PID file)
+- **skill-registry.js** — auto-discovery + token-scored matching
 
 ### Telemetry (src/platform/)
 
-Heartbeats every 60s to `api.wolverinenode.xyz`. Payload includes `usage.byModel` (with latency, success rate, tokens/sec, cost/call per model), `usage.byProvider` (aggregated by openai/anthropic), `usage.byCategory`, repairs, routes, brain stats. All secrets redacted before sending.
+Heartbeats every 60s. Stable instance ID (persisted to `.wolverine/instance-id`). Cumulative usage from disk (not session-only). `byModel` with latency/success/tokens-per-sec/cost-per-call. `byProvider` aggregated. Auto-update checks every 5min, selective git checkout (never touches `server/`).
 
 ## Key Constraints
 
-- **Server port is always 3000.** Any other port breaks login and APIs. Kill anything on 3000 and bind there.
-- **Dashboard runs on PORT+1** (3001).
-- **heal() has a 5-minute timeout.** System recovers via `Promise.race`.
-- **Global rate limit: 5 heals per 5 minutes** regardless of error signature.
-- **Error threshold: 1** — a single caught 500 triggers heal immediately. 60s cooldown per route.
-- **bash_exec timeout: 30s default, 60s hard cap.**
-- **Process tree kill** — `_killProcessTree()` kills child + all descendants on restart (handles cluster workers).
-- **Verifier uses error classification, not string matching.** Compares error type + class.
-- **Backup before every fix attempt** with reason string.
-- **Both API keys needed for hybrid/anthropic mode** — OPENAI_API_KEY for embeddings, ANTHROPIC_API_KEY for everything else.
+- **Server port is always 3000.** Any other port breaks APIs. Kill 3000 and bind there.
+- **Dashboard on PORT+1** (3001).
+- **heal() has 5-minute timeout.** `Promise.race` recovery.
+- **Global rate limit: 5 heals per 5 minutes.**
+- **Loop guard: 3 failed heals on same error in 10min → stop + bug report.**
+- **Error threshold: 1** — single 500 triggers heal. 60s cooldown per route.
+- **Empty stderr → just restart, no AI.** Prevents token burn on signal kills.
+- **bash_exec: 30s default, 60s cap.**
+- **Process dedup via PID file.** Kills old process on startup.
+- **Both API keys needed for hybrid mode** — OPENAI_API_KEY for embeddings.
+- **Auto-update: selective git checkout** — only updates `src/`, `bin/`, `package.json`. Never touches `server/`.
+- **Rollback protects:** `settings.json`, `db.js`, `.env.local` never overwritten.
 
 ## Configuration
 
 - **Secrets:** `.env.local` (OPENAI_API_KEY, ANTHROPIC_API_KEY, WOLVERINE_ADMIN_KEY)
-- **Settings:** `server/config/settings.json` — provider, model presets, cluster, telemetry, rate limits, health checks
+- **Settings:** `server/config/settings.json` — provider, 3 model presets, cluster, telemetry, rate limits, health checks, autoUpdate, errorMonitor
 - **10 model slots:** reasoning, coding, chat, tool, classifier, audit, compacting, research, embedding
-- **Config priority:** env vars > `{provider}_settings` in settings.json > defaults
+- **Config priority:** env vars > `{provider}_settings` > defaults
 
 ## Files That Matter Most
 
 | File | Why |
 |------|-----|
-| `src/core/wolverine.js` | Heal pipeline + operational fixes + goal loop orchestration |
-| `src/core/runner.js` | Process manager, IPC listener, health/error monitor, process tree kill |
-| `src/core/ai-client.js` | Dual provider (OpenAI + Anthropic), response normalization, latency tracking |
-| `src/agent/agent-engine.js` | Agent system prompt, 18 tool definitions + implementations |
-| `src/core/verifier.js` | Fix verification: syntax + boot probe + route probe |
-| `src/core/config.js` | Provider resolution: reads `{provider}_settings` from settings.json |
-| `src/core/error-hook.js` | Auto-injected into child, patches Fastify/Express for IPC |
-| `src/security/secret-redactor.js` | Singleton redactor used everywhere |
-| `src/logger/token-tracker.js` | Per-model KPIs: latency, success rate, tokens/sec, cost/call |
-| `src/skills/sql.js` | SafeDB, idempotency guard, SQL injection prevention |
-| `src/skills/deps.js` | Dependency diagnosis, health report, migration knowledge |
-| `src/brain/brain.js` | 55+ seed docs, vector store, semantic search, function map |
-| `server/config/settings.json` | Provider selection + 3 named model presets |
+| `src/core/wolverine.js` | Heal pipeline, operational fixes, goal loop, token budgets |
+| `src/core/runner.js` | Process manager, IPC, health/error monitors, loop guard, auto-update |
+| `src/core/ai-client.js` | Dual provider, prompt caching, output limits, latency tracking |
+| `src/agent/agent-engine.js` | Dynamic prompt, 18 tools, zero-cost compaction, hooks |
+| `src/agent/sub-agents.js` | Dynamic token budgets, Haiku triage, restricted tool sets |
+| `src/core/verifier.js` | Syntax + boot probe, error classification comparison |
+| `src/brain/vector-store.js` | IVF + BM25 + binary persistence |
+| `src/brain/brain.js` | 60 seed docs, namespace isolation, function map hash |
+| `src/skills/loop-guard.js` | Infinite loop detection, bug reports, process dedup |
+| `src/skills/update.js` | Safe upgrade, emergency backup, brain seed merge |
+| `src/platform/auto-update.js` | Version lock, dep verification, max 1 attempt per boot |
+| `server/config/settings.json` | Provider selection, 3 model presets, all config |
