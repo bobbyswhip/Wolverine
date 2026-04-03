@@ -1,5 +1,6 @@
 const OpenAI = require("openai");
 const Anthropic = require("@anthropic-ai/sdk");
+const chalk = require("chalk");
 const { getModel, detectProvider } = require("./models");
 
 let _openaiClient = null;
@@ -9,12 +10,14 @@ let _tracker = null;
 function setTokenTracker(tracker) { _tracker = tracker; }
 
 function _extractTokens(usage) {
-  if (!usage) return { input: 0, output: 0 };
+  if (!usage) return { input: 0, output: 0, cacheCreation: 0, cacheRead: 0 };
   return {
     input: usage.prompt_tokens || usage.input_tokens || 0,
     output: usage.completion_tokens || usage.output_tokens || 0,
-    cacheCreation: usage.cache_creation_input_tokens || 0,
-    cacheRead: usage.cache_read_input_tokens || 0,
+    // Anthropic cache fields
+    cacheCreation: usage.cache_creation_input_tokens || usage.cache_write_tokens || 0,
+    // OpenAI uses cache_read_tokens, Anthropic uses cache_read_input_tokens
+    cacheRead: usage.cache_read_input_tokens || usage.cache_read_tokens || 0,
   };
 }
 
@@ -121,9 +124,41 @@ function tokenParam(model, limit) {
   // Anthropic uses max_tokens directly (handled in _anthropicCall)
   if (isAnthropicModel(model)) return { max_tokens: effectiveLimit };
   if (isResponsesModel(model)) return { max_output_tokens: effectiveLimit };
-  const usesNewParam = /^(o[1-9]|gpt-5|gpt-4o)/.test(model) || model.includes("nano");
-  if (usesNewParam) return { max_completion_tokens: effectiveLimit };
-  return { max_tokens: effectiveLimit };
+  // All modern OpenAI models use max_completion_tokens (max_tokens is deprecated)
+  return { max_completion_tokens: effectiveLimit };
+}
+
+/**
+ * Build OpenAI-specific params for reasoning models (o-series).
+ * - reasoning_effort: controls compute allocation (low/medium/high)
+ * - No temperature/top_p (forbidden on o-series)
+ */
+function _reasoningParams(model) {
+  if (!isReasoningModel(model)) return {};
+  // Default to medium effort — balances cost vs quality
+  // High effort for complex multi-file debugging, low for classification
+  return { reasoning_effort: process.env.WOLVERINE_REASONING_EFFORT || "medium" };
+}
+
+/**
+ * Retry with exponential backoff + jitter for rate limits.
+ */
+async function _withRetry(fn, maxRetries = 3) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const isRateLimit = err.status === 429 || err.code === "rate_limit_exceeded";
+      const isServerError = err.status >= 500;
+      if ((isRateLimit || isServerError) && attempt < maxRetries) {
+        const delay = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 1000, 30000);
+        console.log(chalk.yellow(`  ⏱️ API ${isRateLimit ? "rate limited" : "error"} — retrying in ${Math.round(delay / 1000)}s (attempt ${attempt + 1}/${maxRetries})`));
+        await new Promise(r => setTimeout(r, delay));
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 // ── Unified AI Call ──
@@ -206,7 +241,7 @@ async function _anthropicCall({ model, systemPrompt, userPrompt, maxTokens, tool
     else if (toolChoice && toolChoice !== "auto") params.tool_choice = { type: "auto" };
   }
 
-  const response = await client.messages.create(params);
+  const response = await _withRetry(() => client.messages.create(params));
   return _normalizeAnthropicResponse(response);
 }
 
@@ -292,7 +327,7 @@ async function _anthropicCallWithHistory({ model, messages, tools, maxTokens }) 
     params.tools = tools.map(_toAnthropicTool).filter(Boolean);
   }
 
-  const response = await client.messages.create(params);
+  const response = await _withRetry(() => client.messages.create(params));
 
   // Return in chat-compatible format
   const normalized = _normalizeAnthropicResponse(response);
@@ -377,7 +412,7 @@ async function _responsesCall(openai, { model, systemPrompt, userPrompt, maxToke
     });
   }
 
-  const response = await openai.responses.create(params);
+  const response = await _withRetry(() => openai.responses.create(params));
   let content = "";
   let toolCalls = null;
 
@@ -403,13 +438,31 @@ async function _chatCall(openai, { model, systemPrompt, userPrompt, maxTokens, t
   if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
   messages.push({ role: "user", content: userPrompt });
 
+  // No temperature for o-series and gpt-5+ (forbidden, causes error)
   const noTemp = /^(o[1-9]|gpt-5)/.test(model);
-  const params = { model, messages, ...(!noTemp ? { temperature: 0 } : {}), ...tokenParam(model, maxTokens) };
-  if (tools && tools.length > 0) { params.tools = tools; params.tool_choice = toolChoice || "auto"; }
+  const params = {
+    model, messages,
+    ...(!noTemp ? { temperature: 0 } : {}),
+    ...tokenParam(model, maxTokens),
+    ..._reasoningParams(model),
+  };
 
-  const response = await openai.chat.completions.create(params);
+  if (tools && tools.length > 0) {
+    params.tools = tools;
+    params.tool_choice = toolChoice || "auto";
+    // Disable parallel calls for reliability — sequential is more predictable for healing
+    params.parallel_tool_calls = false;
+  }
+
+  const response = await _withRetry(() => openai.chat.completions.create(params));
   const choice = response.choices[0];
-  return { content: (choice.message.content || "").trim(), toolCalls: choice.message.tool_calls || null, usage: response.usage || {}, _raw: response, _message: choice.message };
+  return {
+    content: (choice.message.content || "").trim(),
+    toolCalls: choice.message.tool_calls || null,
+    usage: response.usage || {},
+    _raw: response,
+    _message: choice.message,
+  };
 }
 
 // ── OpenAI: Multi-turn (Responses + Chat) ──
@@ -435,7 +488,7 @@ async function _responsesCallWithHistory(openai, { model, messages, tools, maxTo
     });
   }
 
-  const response = await openai.responses.create(params);
+  const response = await _withRetry(() => openai.responses.create(params));
   let content = "";
   let toolCalls = null;
 
@@ -454,9 +507,18 @@ async function _responsesCallWithHistory(openai, { model, messages, tools, maxTo
 
 async function _chatCallWithHistory(openai, { model, messages, tools, maxTokens }) {
   const noTemp = /^(o[1-9]|gpt-5)/.test(model);
-  const params = { model, messages, ...(!noTemp ? { temperature: 0 } : {}), ...tokenParam(model, maxTokens) };
-  if (tools && tools.length > 0) { params.tools = tools; params.tool_choice = "auto"; }
-  return openai.chat.completions.create(params);
+  const params = {
+    model, messages,
+    ...(!noTemp ? { temperature: 0 } : {}),
+    ...tokenParam(model, maxTokens),
+    ..._reasoningParams(model),
+  };
+  if (tools && tools.length > 0) {
+    params.tools = tools;
+    params.tool_choice = "auto";
+    params.parallel_tool_calls = false;
+  }
+  return _withRetry(() => openai.chat.completions.create(params));
 }
 
 // ── Fast Path Repair ──
