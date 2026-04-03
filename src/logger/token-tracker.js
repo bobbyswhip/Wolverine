@@ -64,11 +64,11 @@ class TokenTracker {
    * @param {number} outputTokens - Completion/output tokens
    * @param {string} tool - Optional tool name (e.g. "call_endpoint /time")
    */
-  record(model, category, inputTokens, outputTokens, tool, latencyMs, success) {
+  record(model, category, inputTokens, outputTokens, tool, latencyMs, success, cacheCreation, cacheRead) {
     const total = (inputTokens || 0) + (outputTokens || 0);
 
-    // Calculate USD cost
-    const cost = calculateCost(model, inputTokens || 0, outputTokens || 0);
+    // Calculate USD cost including cache tokens
+    const cost = calculateCost(model, inputTokens || 0, outputTokens || 0, cacheCreation || 0, cacheRead || 0);
 
     const entry = {
       timestamp: Date.now(),
@@ -76,21 +76,27 @@ class TokenTracker {
       category,
       input: inputTokens || 0,
       output: outputTokens || 0,
+      cacheCreation: cacheCreation || 0,
+      cacheRead: cacheRead || 0,
       total,
       cost: Math.round(cost.total * 1000000) / 1000000,
+      cacheSavings: Math.round((cost.cacheSavings || 0) * 1000000) / 1000000,
       tool: tool || null,
       latencyMs: latencyMs || 0,
       success: success !== false,
     };
 
     // Accumulate by model
-    if (!this._byModel[model]) this._byModel[model] = { input: 0, output: 0, total: 0, calls: 0, cost: 0, successes: 0, failures: 0, totalLatencyMs: 0, minLatencyMs: Infinity, maxLatencyMs: 0 };
+    if (!this._byModel[model]) this._byModel[model] = { input: 0, output: 0, total: 0, calls: 0, cost: 0, successes: 0, failures: 0, totalLatencyMs: 0, minLatencyMs: Infinity, maxLatencyMs: 0, cacheCreation: 0, cacheRead: 0, cacheSavings: 0 };
     const m = this._byModel[model];
     m.input += entry.input;
     m.output += entry.output;
     m.total += total;
     m.calls++;
     m.cost += cost.total;
+    m.cacheCreation += entry.cacheCreation;
+    m.cacheRead += entry.cacheRead;
+    m.cacheSavings += entry.cacheSavings;
     if (entry.success) m.successes++; else m.failures++;
     if (latencyMs > 0) {
       m.totalLatencyMs += latencyMs;
@@ -179,7 +185,10 @@ class TokenTracker {
         total: m.total,
         calls: m.calls,
         cost: m.cost,
-        successes: m.successes || m.calls, // backwards compat
+        cacheCreation: m.cacheCreation || 0,
+        cacheRead: m.cacheRead || 0,
+        cacheSavings: Math.round((m.cacheSavings || 0) * 1000000) / 1000000,
+        successes: m.successes || m.calls,
         failures: m.failures || 0,
         successRate: m.calls > 0 ? Math.round(((m.successes || m.calls) / m.calls) * 100) : 0,
         avgLatencyMs: m.calls > 0 && m.totalLatencyMs ? Math.round(m.totalLatencyMs / m.calls) : 0,

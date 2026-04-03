@@ -64,8 +64,9 @@ function collectHeartbeat(subsystems) {
       totalTokens: tokenTracker?._totalTokens || usage?.session?.totalTokens || 0,
       totalCost: tokenTracker?._totalCostUsd || usage?.session?.totalCostUsd || 0,
       totalCalls: tokenTracker?._totalCalls || usage?.session?.totalCalls || 0,
+      totalCacheSavings: _sumCacheSavings(usage?.byModel || {}),
       byCategory: usage?.byCategory || {},
-      byModel: usage?.byModel || {},
+      byModel: usage?.byModel || {},  // includes: latency, successRate, tokensPerSec, cacheSavings per model
       byTool: usage?.byTool || {},
       byProvider: _aggregateByProvider(usage?.byModel || {}),
     },
@@ -89,6 +90,15 @@ function collectHeartbeat(subsystems) {
   // Pre-flight security: redact entire payload before it leaves the process
   const { redactObj } = require("../security/secret-redactor");
   return redactObj(payload);
+}
+
+/** Sum cache savings across all models. */
+function _sumCacheSavings(byModel) {
+  let total = 0;
+  for (const stats of Object.values(byModel || {})) {
+    total += stats.cacheSavings || 0;
+  }
+  return Math.round(total * 1000000) / 1000000;
 }
 
 /**

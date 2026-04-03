@@ -20,8 +20,8 @@ function _extractTokens(usage) {
 
 function _track(model, category, usage, tool, latencyMs, success) {
   if (!_tracker) return;
-  const { input, output } = _extractTokens(usage);
-  _tracker.record(model, category, input, output, tool, latencyMs, success);
+  const { input, output, cacheCreation, cacheRead } = _extractTokens(usage);
+  _tracker.record(model, category, input, output, tool, latencyMs, success, cacheCreation, cacheRead);
 }
 
 // ── Client Management ──
