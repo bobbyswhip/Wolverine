@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Wolverine is a self-healing Node.js server framework. It wraps a server process, catches crashes AND caught 500 errors, diagnoses them with AI (OpenAI or Anthropic), generates fixes, verifies them, and restarts — automatically. Published as `wolverine-ai` on npm (v3.1.0). 65 exports, 83 files, 6 skills.
+Wolverine is a self-healing Node.js server framework. It wraps a server process, catches crashes AND caught 500 errors, diagnoses them with AI (OpenAI or Anthropic), generates fixes, verifies them, and restarts — automatically. Published as `wolverine-ai` on npm (v3.5.0). 65 exports, 83 files, 6 skills.
 
 ## Commands
 
@@ -39,12 +39,13 @@ Error detected (crash OR caught 500 via IPC)
   → Operational fix (zero tokens):
       missing_module → deps.diagnose() → npm install
       EADDRINUSE → kill stale process
-      ENOENT → create missing file
+      ENOENT → create missing file (JSON configs: infers expected fields from source code)
       EACCES → chmod
   → Token budget by complexity: simple=20K, moderate=50K, complex=100K
   → Goal Loop (3 iterations):
       1. Fast path: CODING_MODEL, JSON with code+commands, backup diff context
-      2. Agent: dynamic prompt (400 tokens simple, 1200 complex), 18 tools
+      2. Agent: dynamic prompt (400 tokens simple, 1200 complex), 18 tools, 45s/call timeout
+         Turn budget: simple=4, config/ENOENT=5, complex=8
       3. Sub-agents: explore→plan→fix (Haiku triage, Sonnet/Opus fix only)
   → Verify: syntax → boot probe (route probe skipped — ErrorMonitor is safety net)
   → Success: retryCount reset, record to brain with full context
@@ -55,7 +56,7 @@ Error detected (crash OR caught 500 via IPC)
 
 ### IPC Error Chain (caught 500s without crash)
 
-1. **error-hook.js** — preloaded via `--require`, patches Fastify/Express for IPC. WeakSet dedup.
+1. **error-hook.js** — preloaded via `--require`, patches Fastify/Express for IPC. WeakSet dedup. Auto-registers default error handler if user never calls setErrorHandler (catches async route throws).
 2. **runner.js** — spawns child with `stdio: ["inherit","inherit","pipe","ipc"]`, listens `child.on("message")`
 3. **error-monitor.js** — tracks errors per normalized route (`/api/users/123` → `/api/users/:id`), threshold=1, 60s cooldown. Health check failures also trigger heal.
 
@@ -116,7 +117,10 @@ Heartbeats every 60s. Stable instance ID (persisted to `.wolverine/instance-id`)
 - **Error threshold: 1** — single 500 triggers heal. 60s cooldown per route.
 - **Empty stderr → just restart, no AI.** Prevents token burn on signal kills.
 - **bash_exec: 30s default, 60s cap.**
-- **Process dedup via PID file.** Kills old process on startup.
+- **Agent per-API-call timeout: 45s.** Prevents indefinite hangs. Returns partial results if files already modified.
+- **Agent turn budget: simple=4, config=5, complex=8.**
+- **SIGTERM startup grace: 3s.** Prevents restart scripts from killing newly spawned process.
+- **Process dedup via PID file.** Kills old process on startup. Race-safe PID cleanup.
 - **Both API keys needed for hybrid mode** — OPENAI_API_KEY for embeddings.
 - **Auto-update: selective git checkout** — only updates `src/`, `bin/`, `package.json`. Never touches `server/`.
 - **Rollback protects:** `settings.json`, `db.js`, `.env.local` never overwritten.

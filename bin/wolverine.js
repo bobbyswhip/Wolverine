@@ -152,13 +152,23 @@ console.log("");
 
 const runner = new WolverineRunner(scriptPath, { cwd: process.cwd() });
 
+// Grace period: ignore SIGTERM for 3s after startup.
+// Prevents restart scripts using `pkill -f wolverine.js` from killing
+// both the old AND newly spawned process.
+let startupGrace = true;
+setTimeout(() => { startupGrace = false; }, 3000);
+
 process.on("SIGINT", () => {
-  console.log(chalk.yellow(`\n\n👋 Shutting down Wolverine${workerLabel}...`));
+  console.log(chalk.yellow(`\n\n👋 Shutting down Wolverine...`));
   runner.stop();
   process.exit(0);
 });
 
 process.on("SIGTERM", () => {
+  if (startupGrace) {
+    console.log(chalk.yellow("  ⚡ Ignoring SIGTERM during startup grace period (3s)"));
+    return;
+  }
   runner.stop();
   process.exit(0);
 });

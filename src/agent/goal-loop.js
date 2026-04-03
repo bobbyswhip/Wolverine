@@ -107,13 +107,18 @@ class GoalLoop {
           explanation: attempt.explanation,
         }).catch(() => {});
 
-        // Deep research after 2nd failure — bring in RESEARCH_MODEL
-        if (iteration >= 2) {
+        // Deep research only after 3rd failure — avoid adding latency on early iterations
+        if (iteration >= 3) {
           console.log(chalk.magenta(`  🔬 Triggering deep research after ${iteration} failures...`));
-          const research = await this.researcher.research(errorMessage, context);
-          if (research) {
-            console.log(chalk.gray(`  🔬 Research insight: ${research.slice(0, 100)}`));
-          }
+          try {
+            const research = await Promise.race([
+              this.researcher.research(errorMessage, context),
+              new Promise((resolve) => setTimeout(() => resolve(null), 30000)), // 30s cap
+            ]);
+            if (research) {
+              console.log(chalk.gray(`  🔬 Research insight: ${research.slice(0, 100)}`));
+            }
+          } catch {}
         }
       }
 

@@ -242,8 +242,15 @@ function ensureSingleProcess(cwd) {
     fs.writeFileSync(pidFile, String(process.pid), "utf-8");
   } catch {}
 
-  // Clean up on exit
-  process.on("exit", () => { try { fs.unlinkSync(pidFile); } catch {} });
+  // Clean up on exit — only delete if PID file still belongs to us
+  // (prevents race condition where old process deletes new process's PID)
+  const myPid = process.pid;
+  process.on("exit", () => {
+    try {
+      const current = parseInt(fs.readFileSync(pidFile, "utf-8").trim(), 10);
+      if (current === myPid) fs.unlinkSync(pidFile);
+    } catch {}
+  });
 }
 
 // ── Skill Metadata ──

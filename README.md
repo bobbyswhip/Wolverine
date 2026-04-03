@@ -70,7 +70,7 @@ wolverine/
 │   ├── core/                ← Wolverine engine
 │   │   ├── wolverine.js     ← Heal pipeline + goal loop
 │   │   ├── runner.js        ← Process manager (PM2-like)
-│   │   ├── ai-client.js     ← OpenAI client (Chat + Responses API)
+│   │   ├── ai-client.js     ← Dual provider client (OpenAI + Anthropic)
 │   │   ├── models.js        ← 10-model configuration system
 │   │   ├── verifier.js      ← Fix verification (syntax + boot probe)
 │   │   ├── error-parser.js  ← Stack trace parsing + error classification
@@ -81,7 +81,7 @@ wolverine/
 │   │   ├── system-info.js   ← Machine detection (cores, RAM, cloud, containers)
 │   │   └── cluster-manager.js← Auto-scaling worker management
 │   ├── agent/               ← AI agent system
-│   │   ├── agent-engine.js  ← Multi-turn agent with 10 tools
+│   │   ├── agent-engine.js  ← Multi-turn agent with 18 tools + 45s per-call timeout
 │   │   ├── goal-loop.js     ← Goal-driven repair loop
 │   │   ├── research-agent.js← Deep research + learning from failures
 │   │   └── sub-agents.js    ← 7 specialized sub-agents (explore/plan/fix/verify/...)
@@ -151,8 +151,9 @@ Server crashes
 
 Operational Fix (zero AI tokens):
   → "Cannot find module 'cors'" → npm install cors (instant, free)
-  → ENOENT on config file → create missing file with defaults
+  → ENOENT on config file → read source code, infer expected fields, create with correct structure
   → EACCES/EPERM → chmod 755
+  → EADDRINUSE → find and kill stale process on port
   → If operational fix works → done. No AI needed.
 
 Goal Loop (iterate until fixed or exhausted):
@@ -215,7 +216,7 @@ The AI agent has 18 built-in tools (inspired by [claw-code](https://github.com/u
 | `grep_code` | File | Regex search across codebase with context lines |
 | `list_dir` | File | List directory contents with sizes (find misplaced files) |
 | `move_file` | File | Move or rename files (fix structure problems) |
-| `bash_exec` | Shell | Sandboxed shell execution (npm install, chmod, kill, etc.) |
+| `bash_exec` | Shell | Sandboxed shell execution (npm install, chmod, kill, etc.) 30s default, 60s cap |
 | `git_log` | Shell | View recent commit history |
 | `git_diff` | Shell | View uncommitted changes |
 | `inspect_db` | Database | List tables, show schema, run SELECT on SQLite databases |
@@ -439,8 +440,11 @@ Three layers prevent token waste:
 | **Empty stderr guard** | Signal kills, clean shutdowns with no error | $0.00 |
 | **Loop guard** | Same error failing 3+ times in 10min → files bug report, stops healing | $0.00 after detection |
 | **Global rate limit** | Max 5 heals per 5 minutes regardless of error | Caps total spend |
+| **Per-API-call timeout** | 45s timeout on each AI call — prevents indefinite agent hangs | Saves time + tokens |
+| **Heal timeout** | 5-minute overall heal timeout via Promise.race | Prevents stuck heals |
+| **SIGTERM grace period** | 3s startup grace ignores SIGTERM — prevents restart scripts killing new process | Prevents shutdown loops |
 
-**Process dedup:** PID file ensures only one wolverine instance runs. Kills old process on startup.
+**Process dedup:** PID file ensures only one wolverine instance runs. Kills old process on startup. Exit handler only deletes PID file if it still belongs to current process (prevents race condition on restart).
 
 **Bug reports:** When loop guard triggers, generates a security-scanned report (no secrets/injection patterns) and sends to the platform backend for human review.
 
@@ -450,7 +454,7 @@ Three layers prevent token waste:
 
 | Technique | What it does | Cost |
 |-----------|-------------|------|
-| **Dynamic system prompt** | Simple errors get 400-token prompt with 7 tools. Complex get 1200 with 18 + strategy | 50% on 70% of heals |
+| **Dynamic system prompt** | Simple errors get 400-token prompt with 7 tools. Complex get 1200 with 18 + fast-fix strategy table | 50% on 70% of heals |
 | **Brain namespace isolation** | Seed docs (20K tokens) excluded from error heals — only searched for wolverine queries | 50% context reduction |
 | **Prompt caching** | Anthropic system prompt cached server-side — 90% cheaper on repeat calls | 12-16K tokens saved per heal |
 | **Tool result truncation** | Tool output capped at 4K chars — prevents context blowup from large reads | Up to 30K saved per turn |

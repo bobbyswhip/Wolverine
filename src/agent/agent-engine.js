@@ -414,15 +414,23 @@ class AgentEngine {
       }
 
       let response;
+      const AI_CALL_TIMEOUT_MS = 45000; // 45s per API call — prevents indefinite hangs
       try {
-        response = await aiCallWithHistory({
-          model,
-          messages: this.messages,
-          tools: allTools,
-          maxTokens: 4096,
-        });
+        response = await Promise.race([
+          aiCallWithHistory({
+            model,
+            messages: this.messages,
+            tools: allTools,
+            maxTokens: 4096,
+          }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error("AI call timed out after 45s")), AI_CALL_TIMEOUT_MS)),
+        ]);
       } catch (err) {
         console.log(chalk.red(`  Agent API error: ${err.message}`));
+        // On timeout, return what we have so far rather than failing completely
+        if (err.message.includes("timed out") && this.filesModified.length > 0) {
+          return { success: true, summary: `Partial fix applied (API timeout on turn ${this.turnCount})`, filesModified: this.filesModified, turnCount: this.turnCount, totalTokens: this.totalTokens };
+        }
         return { success: false, summary: err.message, filesModified: [], turnCount: this.turnCount, totalTokens: this.totalTokens };
       }
 
@@ -1060,26 +1068,31 @@ Project: ${cwd}`;
 function _fullPrompt(cwd, primaryFile) {
   return `You are Wolverine, an autonomous Node.js server repair agent. Diagnose and fix the error.
 
-You are a full server doctor. Errors can be code bugs, missing deps, database problems, config issues, port conflicts, permissions, or corrupted state. Investigate the root cause before fixing.
+You are a full server doctor. Errors can be code bugs, missing deps, database problems, config issues, port conflicts, permissions, or corrupted state.
+
+CRITICAL: Act fast. You have limited turns. Fix immediately when the solution is obvious from the error. Only investigate when the cause is unclear.
 
 For maximum efficiency, invoke multiple independent tools simultaneously rather than sequentially.
 
 TOOLS: read_file, write_file, edit_file, glob_files, grep_code, list_dir, move_file, bash_exec, git_log, git_diff, inspect_db, run_db_fix, check_port, check_env, audit_deps, check_migration, web_fetch, done
 
-STRATEGY:
-- Cannot find module 'X' → bash_exec: npm install X
-- Cannot find module './X' → edit_file: fix require path
-- ENOENT → write_file or move_file
-- EADDRINUSE → check_port then bash_exec: kill
-- TypeError/ReferenceError → read_file then edit_file
+FAST FIXES (act immediately, don't investigate):
+- Cannot find module 'X' → bash_exec: npm install X → done
+- Cannot find module './X' → grep for correct path → edit_file → done
+- ENOENT missing config/json file → read the code that loads it to see what fields it expects → write_file with required fields → done
+- EADDRINUSE → check_port → bash_exec: kill PID → done
+- TypeError/ReferenceError → read_file → edit_file → done
+- Missing env var → check_env → report it → done
+
+INVESTIGATION (only when cause is unclear):
 - Database error → inspect_db then run_db_fix
-- Missing env var → check_env
+- Unknown errors → grep_code, list_dir to find root cause
 
 RULES:
-1. Investigate first — read files before modifying
-2. Minimal targeted changes — fix root cause not symptoms
-3. bash_exec for operational fixes, edit_file for code, run_db_fix for data
-4. Call done with summary when finished
+1. Fix on turn 1-2 when possible. Investigation is a last resort.
+2. For ENOENT config files: read the code that requires the file, then create it with the expected structure.
+3. bash_exec for operational fixes, edit_file for code, write_file for missing files, run_db_fix for data
+4. Always call done with summary when finished — never end without calling done.
 ${primaryFile ? `\nFile: ${primaryFile}` : ""}
 Project: ${cwd}`;
 }

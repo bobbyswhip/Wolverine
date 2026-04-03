@@ -332,9 +332,12 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
       } else if (iteration <= 2) {
         // Agent path — REASONING_MODEL (also handles iteration 1 when no file)
         console.log(chalk.magenta(`  🤖 Agent path (${getModel("reasoning")})...`));
+        // Tight turn budget: simple errors get 4 turns, ENOENT/config gets 5, complex gets 8
+        const isConfigError = /ENOENT|missing.*config|missing.*file|no such file/i.test(parsed.errorMessage);
+        const agentMaxTurns = isSimpleError ? 4 : isConfigError ? 5 : 8;
         const agent = new AgentEngine({
           sandbox, logger, cwd, mcp,
-          maxTurns: isSimpleError ? 4 : 8,
+          maxTurns: agentMaxTurns,
           maxTokens: tokenBudget.agent,
         });
 
@@ -496,12 +499,20 @@ async function tryOperationalFix(parsed, cwd, logger) {
     if (!rel.startsWith("..") && /\.(json|yaml|yml|toml|ini|conf|cfg|env|log|txt|csv|db|sqlite)$/i.test(missingFile)) {
       try {
         fs.mkdirSync(path.dirname(missingFile), { recursive: true });
-        // Create empty file or sensible default
         const ext = path.extname(missingFile).toLowerCase();
-        const defaults = { ".json": "{}", ".yaml": "", ".yml": "", ".log": "", ".txt": "", ".csv": "", ".env": "" };
-        fs.writeFileSync(missingFile, defaults[ext] || "", "utf-8");
+
+        // For JSON config files, try to infer expected structure from the code that loads them
+        let content = "";
+        if (ext === ".json") {
+          content = _inferJsonConfig(missingFile, cwd, parsed) || "{}";
+        } else {
+          const defaults = { ".yaml": "", ".yml": "", ".log": "", ".txt": "", ".csv": "", ".env": "" };
+          content = defaults[ext] || "";
+        }
+
+        fs.writeFileSync(missingFile, content, "utf-8");
         console.log(chalk.blue(`  📄 Created missing file: ${rel}`));
-        return { fixed: true, action: `Created missing file: ${rel}` };
+        return { fixed: true, action: `Created missing file: ${rel} with ${content === "{}" ? "empty" : "inferred"} config` };
       } catch {}
     }
   }
@@ -542,6 +553,59 @@ async function tryOperationalFix(parsed, cwd, logger) {
   }
 
   return { fixed: false };
+}
+
+/**
+ * Try to infer JSON config structure by scanning the code that loads the file.
+ * Looks for property access patterns after require/readFile of the missing file.
+ * Returns a JSON string with empty/default values, or null if can't infer.
+ */
+function _inferJsonConfig(missingFile, cwd, parsed) {
+  const fs = require("fs");
+  const path = require("path");
+
+  // Find which source file loads the missing config
+  const basename = path.basename(missingFile);
+  const sourceFile = parsed.filePath;
+  if (!sourceFile) return null;
+
+  try {
+    const source = fs.readFileSync(sourceFile, "utf-8");
+    // Look for property accesses on the loaded config: config.apiUrl, config.timeout, etc.
+    const configVarMatch = source.match(new RegExp(`(?:const|let|var)\\s+(\\w+)\\s*=\\s*(?:require|JSON\\.parse).*${basename.replace(".", "\\.")}`));
+    if (!configVarMatch) return null;
+
+    const varName = configVarMatch[1];
+    // Find all property accesses: varName.prop or varName["prop"]
+    const propRegex = new RegExp(`${varName}\\.(\\w+)`, "g");
+    const bracketRegex = new RegExp(`${varName}\\["(\\w+)"\\]`, "g");
+    const props = new Set();
+    let m;
+    while ((m = propRegex.exec(source)) !== null) props.add(m[1]);
+    while ((m = bracketRegex.exec(source)) !== null) props.add(m[1]);
+
+    if (props.size === 0) return null;
+
+    // Build config with sensible defaults based on property names
+    const config = {};
+    for (const prop of props) {
+      const lower = prop.toLowerCase();
+      if (/url|endpoint|host|uri/.test(lower)) config[prop] = "http://localhost:3000";
+      else if (/port/.test(lower)) config[prop] = 3000;
+      else if (/timeout|delay|interval|ttl/.test(lower)) config[prop] = 5000;
+      else if (/key|token|secret/.test(lower)) config[prop] = "placeholder";
+      else if (/name/.test(lower)) config[prop] = "default";
+      else if (/enabled|active|debug/.test(lower)) config[prop] = true;
+      else if (/count|max|min|limit|size/.test(lower)) config[prop] = 10;
+      else if (/path|dir|file/.test(lower)) config[prop] = "./";
+      else config[prop] = "";
+    }
+
+    console.log(chalk.gray(`  🔍 Inferred ${props.size} config fields from ${path.basename(sourceFile)}: ${[...props].join(", ")}`));
+    return JSON.stringify(config, null, 2);
+  } catch {
+    return null;
+  }
 }
 
 module.exports = { heal };

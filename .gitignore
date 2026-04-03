@@ -13,4 +13,6 @@ Thumbs.db
 .npmrc
 *.tgz
 
-
+# Local dev docs (not tracked in git)
+*.md
+!README.md

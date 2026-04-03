@@ -58,20 +58,36 @@ Module._load = function (request, parent, isMain) {
 function _hookFastify(fastify) {
   // Wrap setErrorHandler so our IPC reporting runs BEFORE the user's handler
   const origSetError = fastify.setErrorHandler;
+  let customErrorHandlerSet = false;
   fastify.setErrorHandler = function (userHandler) {
+    customErrorHandlerSet = true;
     return origSetError.call(this, function (error, request, reply) {
       _reportError(request.url, request.method, error);
       return userHandler.call(this, error, request, reply);
     });
   };
 
-  // Also add onError hook as a fallback (fires even if no custom error handler)
+  // Add onError hook as primary fallback — fires for all route errors in Fastify
   try {
     fastify.addHook("onError", function (request, reply, error, done) {
       _reportError(request.url, request.method, error);
       done();
     });
   } catch { /* addHook may fail if server is already started */ }
+
+  // Register a default error handler if user never calls setErrorHandler
+  // This ensures we catch async route throws even without a custom handler
+  try {
+    fastify.addHook("onReady", function (done) {
+      if (!customErrorHandlerSet) {
+        origSetError.call(fastify, function (error, request, reply) {
+          _reportError(request.url, request.method, error);
+          reply.code(error.statusCode || 500).send({ error: error.message });
+        });
+      }
+      done();
+    });
+  } catch { /* non-fatal */ }
 }
 
 function _hookExpress(app) {
