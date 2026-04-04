@@ -260,6 +260,9 @@ class WolverineRunner {
 
   restart() {
     console.log(chalk.blue("\n  🔄 Restarting server..."));
+    // Reset config cache so restart picks up any settings.json changes
+    const { resetConfig } = require("./config");
+    resetConfig();
     this.healthMonitor.stop();
     this._clearStabilityTimer();
 

@@ -126,7 +126,7 @@ class ErrorMonitor {
    */
   reset() {
     this.routes.clear();
-    // Keep cooldowns — don't re-trigger immediately after restart
+    this._cooldowns.clear(); // Clear cooldowns on restart — fresh start, fresh heal eligibility
   }
 }
 
