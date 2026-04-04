@@ -176,7 +176,10 @@ function safeUpdate(cwd, options = {}) {
     if (isGit) {
       console.log(chalk.blue("  📦 Selective git update (server/ untouched)"));
       // ONLY update framework files — never touch server/ or its deps
-      const frameworkPaths = "src/ bin/ examples/ tests/ CLAUDE.md README.md CHANGELOG.md .npmignore";
+      // Only checkout paths that exist in the remote to avoid errors
+      const allPaths = ["src/", "bin/", "examples/", "tests/", "CLAUDE.md", "README.md", "CHANGELOG.md", ".npmignore"];
+      const remotePaths = execSync("git ls-tree --name-only origin/master", { cwd, encoding: "utf-8", timeout: 5000 }).trim().split("\n");
+      const frameworkPaths = allPaths.filter(p => remotePaths.some(r => r === p.replace("/", "") || r.startsWith(p))).join(" ");
       execSync(`git checkout origin/master -- ${frameworkPaths}`, { cwd, stdio: "pipe", timeout: 30000 });
       // Update package.json separately, then install deps to restore anything lost
       execSync("git checkout origin/master -- package.json", { cwd, stdio: "pipe", timeout: 10000 });
