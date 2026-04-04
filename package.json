@@ -1,6 +1,6 @@
 {
   "name": "wolverine-ai",
-  "version": "3.9.7",
+  "version": "3.9.8",
   "description": "Self-healing Node.js server framework powered by AI. Catches crashes, diagnoses errors, generates fixes, verifies, and restarts — automatically.",
   "main": "src/index.js",
   "bin": {
@@ -52,11 +52,21 @@
   ],
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",
+    "@fastify/compress": "^8.0.0",
+    "@fastify/cors": "^10.0.0",
     "chalk": "^4.1.2",
     "diff": "^7.0.0",
     "dotenv": "^16.4.7",
     "fastify": "^5.8.4",
-    "openai": "^4.73.0"
+    "ioredis": "^5.0.0",
+    "openai": "^4.73.0",
+    "pg": "^8.0.0"
+  },
+  "optionalDependencies": {
+    "@privy-io/server-auth": "^3.0.0",
+    "better-sqlite3": "^11.0.0",
+    "ethers": "^6.0.0",
+    "stripe": "^18.0.0"
   },
   "engines": {
     "node": ">=18.0.0"
