@@ -32,6 +32,12 @@ function _track(model, category, usage, tool, latencyMs, success) {
   _tracker.record(model, category, input, output, tool, latencyMs, success, cacheCreation, cacheRead);
 }
 
+function _trackEmbedding(model, usage, latencyMs, success) {
+  if (!_tracker) return;
+  const input = usage?.prompt_tokens || usage?.total_tokens || 0;
+  _tracker.record(model, "embedding", input, 0, null, latencyMs, success, 0, 0);
+}
+
 // ── Client Management ──
 
 function getClient(provider) {
@@ -619,4 +625,4 @@ Include both if needed, or just one.`;
   }
 }
 
-module.exports = { requestRepair, getClient, tokenParam, aiCall, aiCallWithHistory, isResponsesModel, isAnthropicModel, setTokenTracker, getTrackerSnapshot, detectProvider };
+module.exports = { requestRepair, getClient, tokenParam, aiCall, aiCallWithHistory, isResponsesModel, isAnthropicModel, setTokenTracker, getTrackerSnapshot, detectProvider, _trackEmbedding };

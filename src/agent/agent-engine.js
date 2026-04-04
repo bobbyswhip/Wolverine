@@ -331,6 +331,7 @@ class AgentEngine {
     this.logger = options.logger;
     this.cwd = options.cwd || process.cwd();
     this.mcp = options.mcp || null; // McpRegistry for external tools
+    this.category = options.category || "tool"; // Analytics category for token tracking
 
     // Budget constraints (claw-code: QueryEngineConfig)
     this.maxTurns = options.maxTurns || 15;
@@ -422,6 +423,7 @@ class AgentEngine {
             messages: this.messages,
             tools: allTools,
             maxTokens: 4096,
+            category: this.category,
           }),
           new Promise((_, reject) => setTimeout(() => reject(new Error(`AI call timed out after ${AI_CALL_TIMEOUT_MS / 1000}s`)), AI_CALL_TIMEOUT_MS)),
         ]);

@@ -1,4 +1,4 @@
-const { getClient, aiCall, detectProvider } = require("../core/ai-client");
+const { getClient, aiCall, detectProvider, _trackEmbedding } = require("../core/ai-client");
 const { getModel } = require("../core/models");
 
 /**
@@ -45,12 +45,14 @@ async function embed(text) {
   const openai = getClient("openai");
   const model = getModel("embedding");
 
+  const startMs = Date.now();
   const response = await openai.embeddings.create({
     model,
     input: text,
   });
 
   const embedding = response.data[0].embedding;
+  _trackEmbedding(model, response.usage, Date.now() - startMs, true);
   _cacheSet(text, embedding);
   return embedding;
 }
@@ -83,10 +85,12 @@ async function embedBatch(texts) {
   const openai = getClient("openai");
   const model = getModel("embedding");
 
+  const startMs = Date.now();
   const response = await openai.embeddings.create({
     model,
     input: uncached,
   });
+  _trackEmbedding(model, response.usage, Date.now() - startMs, true);
 
   // Sort by index to maintain order
   const sorted = response.data.sort((a, b) => a.index - b.index);

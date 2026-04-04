@@ -97,6 +97,8 @@ async function spawnAgent(type, task, options = {}) {
     });
   }
 
+  // Map sub-agent type to analytics category: triage agents = classifier, fix/db = coding
+  const categoryMap = { explore: "classifier", plan: "classifier", verify: "classifier", research: "research", fix: "coding", database: "coding", security: "audit" };
   const agent = new AgentEngine({
     sandbox: options.sandbox,
     logger: options.logger,
@@ -104,6 +106,7 @@ async function spawnAgent(type, task, options = {}) {
     mcp: options.mcp,
     maxTurns: config.maxTurns,
     maxTokens: config.maxTokens,
+    category: categoryMap[type] || "tool",
   });
 
   // Override the system prompt for this agent type
