@@ -1,5 +1,5 @@
 const { getClient, aiCall, detectProvider, _trackEmbedding } = require("../core/ai-client");
-const { getModel } = require("../core/models");
+const { getEmbeddingModel } = require("../core/models");
 
 /**
  * Embedder — converts text to vector embeddings using TEXT_EMBEDDING_MODEL.
@@ -41,12 +41,13 @@ async function embed(text) {
   const cached = _cacheGet(text);
   if (cached) return cached;
 
-  // Embeddings always use OpenAI (Anthropic doesn't have an embedding API)
-  const openai = getClient("openai");
-  const model = getModel("embedding");
+  const model = getEmbeddingModel();
+  const provider = detectProvider(model);
+  // wolverine-embedding-1 routes through billing proxy, others go direct
+  const client = provider === "wolverine" ? getClient("wolverine") : getClient("openai");
 
   const startMs = Date.now();
-  const response = await openai.embeddings.create({
+  const response = await client.embeddings.create({
     model,
     input: text,
   });
@@ -81,12 +82,12 @@ async function embedBatch(texts) {
 
   if (uncached.length === 0) return results;
 
-  // Embeddings always use OpenAI (Anthropic doesn't have an embedding API)
-  const openai = getClient("openai");
-  const model = getModel("embedding");
+  const model = getEmbeddingModel();
+  const provider = detectProvider(model);
+  const client = provider === "wolverine" ? getClient("wolverine") : getClient("openai");
 
   const startMs = Date.now();
-  const response = await openai.embeddings.create({
+  const response = await client.embeddings.create({
     model,
     input: uncached,
   });

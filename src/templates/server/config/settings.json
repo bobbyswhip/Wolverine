@@ -5,65 +5,23 @@
     "env": "development"
   },
 
-  "provider": "wolverine",
-
-  "openai_settings": {
-    "reasoning": "gpt-5.4-mini",
-    "coding": "gpt-5.1-codex-mini",
-    "chat": "gpt-5-nano",
-    "tool": "gpt-5.4-mini",
+  "models": {
+    "reasoning": "gpt-4o",
+    "coding": "gpt-4o",
+    "chat": "gpt-4o-mini",
+    "tool": "gpt-4o-mini",
     "classifier": "gpt-4o-mini",
     "audit": "gpt-4o-mini",
     "compacting": "gpt-4o-mini",
-    "research": "o4-mini-deep-research",
-    "embedding": "text-embedding-3-small"
+    "research": "gpt-4o"
   },
 
-  "anthropic_settings": {
-    "reasoning": "claude-sonnet-4-6",
-    "coding": "claude-opus-4-6",
-    "chat": "claude-haiku-4-5",
-    "tool": "claude-opus-4-6",
-    "classifier": "claude-haiku-4-5",
-    "audit": "claude-haiku-4-5",
-    "compacting": "claude-haiku-4-5",
-    "research": "claude-sonnet-4-6",
-    "embedding": "text-embedding-3-small"
-  },
-
-  "hybrid_settings": {
-    "reasoning": "claude-haiku-4-5",
-    "coding": "claude-sonnet-4-6",
-    "chat": "gpt-5-nano",
-    "tool": "claude-sonnet-4-6",
-    "classifier": "gpt-4o-mini",
-    "audit": "gpt-4o-mini",
-    "compacting": "gpt-4o-mini",
-    "research": "o4-mini-deep-research",
-    "embedding": "text-embedding-3-small"
-  },
-
-  "wolverine_settings": {
-    "reasoning": "wolverine-test-1",
-    "coding": "wolverine-test-1",
-    "chat": "wolverine-test-1",
-    "tool": "wolverine-test-1",
-    "classifier": "wolverine-test-1",
-    "audit": "wolverine-test-1",
-    "compacting": "wolverine-test-1",
-    "research": "wolverine-test-1",
-    "embedding": "text-embedding-3-small"
-  },
+  "embedding": "wolverine-embedding-1",
 
   "server": {
     "port": 3000,
     "maxRetries": 3,
     "maxMemoryMB": 512
-  },
-
-  "cluster": {
-    "enabled": false,
-    "workers": 0
   },
 
   "telemetry": {

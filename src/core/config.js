@@ -2,11 +2,15 @@ const fs = require("fs");
 const path = require("path");
 
 /**
- * Config Loader — reads wolverine.config.js, falls back to env vars.
+ * Config Loader — simplified hybrid-always architecture.
+ *
+ * No more provider selection. Users pick the best model for each task
+ * directly in settings.json. Provider is auto-detected from model name.
+ * Embedding is always wolverine-embedding-1 (billed through credits).
  *
  * Priority:
  * 1. Environment variables (highest — for CI/Docker overrides)
- * 2. wolverine.config.js (project settings)
+ * 2. settings.json models section
  * 3. Hardcoded defaults (lowest)
  */
 
@@ -15,7 +19,6 @@ let _config = null;
 function loadConfig() {
   if (_config) return _config;
 
-  // Load from server/config/settings.json
   const configPath = path.join(process.cwd(), "server", "config", "settings.json");
   let fileConfig = {};
   if (fs.existsSync(configPath)) {
@@ -26,15 +29,17 @@ function loadConfig() {
     }
   }
 
-  // Resolve provider and model set
-  // "openai" → openai_settings, "anthropic" → anthropic_settings, "hybrid" → hybrid_settings
-  const provider = process.env.WOLVERINE_PROVIDER || fileConfig.provider || "openai";
-  const settingsKey = `${provider}_settings`;
-  const modelSource = fileConfig[settingsKey] || fileConfig.openai_settings || fileConfig.models || {};
+  // Models: read from settings.json "models" section directly.
+  // Legacy support: if old provider-based config exists, migrate it.
+  let modelSource = fileConfig.models || {};
+  if (!fileConfig.models && fileConfig.provider) {
+    // Legacy: read from {provider}_settings for backward compatibility
+    const settingsKey = `${fileConfig.provider}_settings`;
+    modelSource = fileConfig[settingsKey] || fileConfig.hybrid_settings || fileConfig.openai_settings || {};
+  }
 
   _config = {
-    provider,
-
+    // 8 task-specific model slots — user picks any model for each task
     models: {
       reasoning:  process.env.REASONING_MODEL    || modelSource.reasoning  || "gpt-4o",
       coding:     process.env.CODING_MODEL       || modelSource.coding     || "gpt-4o",
@@ -45,8 +50,10 @@ function loadConfig() {
       compacting: process.env.COMPACTING_MODEL   || modelSource.compacting || "gpt-4o-mini",
       utility:    process.env.COMPACTING_MODEL   || modelSource.compacting || "gpt-4o-mini",
       research:   process.env.RESEARCH_MODEL     || modelSource.research   || "gpt-4o",
-      embedding:  process.env.TEXT_EMBEDDING_MODEL || modelSource.embedding || "text-embedding-3-small",
     },
+
+    // Embedding: separate from task models — always billed through wolverine credits
+    embedding: process.env.TEXT_EMBEDDING_MODEL || fileConfig.embedding || "wolverine-embedding-1",
 
     server: {
       port:        parseInt(process.env.PORT, 10)                    || fileConfig.server?.port        || 3000,
@@ -90,30 +97,37 @@ function loadConfig() {
     },
   };
 
-  // Merge any missing defaults into the live settings.json
-  _ensureDefaults(fileConfig, configPath);
+  // Migrate old settings.json to new format + ensure defaults
+  _migrateAndEnsureDefaults(fileConfig, configPath);
 
   return _config;
 }
 
-/**
- * Get a config value by dot path: getConfig("models.reasoning")
- */
 function getConfig(dotPath) {
   const config = loadConfig();
   return dotPath.split(".").reduce((obj, key) => obj?.[key], config);
 }
 
-/**
- * Reset config cache (for testing).
- */
 function resetConfig() { _config = null; }
 
 /**
- * Ensure the live settings.json has all required sections.
- * If a section is missing, add it with defaults. Never overwrites existing values.
+ * Migrate old provider-based config to new flat models format.
+ * Also ensure default sections exist.
  */
-function _ensureDefaults(fileConfig, configPath) {
+function _migrateAndEnsureDefaults(fileConfig, configPath) {
+  let needsWrite = false;
+
+  // Migrate: if old provider system exists, convert to flat models
+  if (fileConfig.provider && !fileConfig.models) {
+    const settingsKey = `${fileConfig.provider}_settings`;
+    const source = fileConfig[settingsKey] || {};
+    fileConfig.models = { ...source };
+    delete fileConfig.models.embedding; // embedding is now separate
+    fileConfig.embedding = source.embedding || "wolverine-embedding-1";
+    needsWrite = true;
+  }
+
+  // Ensure default sections
   const DEFAULTS = {
     autoUpdate: { enabled: true, intervalMs: 3600000 },
     errorMonitor: { defaultThreshold: 1, windowMs: 30000, cooldownMs: 60000 },
@@ -123,7 +137,6 @@ function _ensureDefaults(fileConfig, configPath) {
     cluster: { enabled: false, workers: 0 },
   };
 
-  let needsWrite = false;
   for (const [key, defaults] of Object.entries(DEFAULTS)) {
     if (!fileConfig[key]) {
       fileConfig[key] = defaults;
@@ -136,7 +149,7 @@ function _ensureDefaults(fileConfig, configPath) {
       const tmpPath = configPath + ".tmp";
       fs.writeFileSync(tmpPath, JSON.stringify(fileConfig, null, 2), "utf-8");
       fs.renameSync(tmpPath, configPath);
-    } catch { /* non-fatal — config still works from defaults in memory */ }
+    } catch {}
   }
 }
 

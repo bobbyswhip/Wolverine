@@ -14,22 +14,30 @@ const crypto = require("crypto");
  * Queue: when GPU is at capacity, requests queue with timeout.
  */
 
-// GPU backend URL — separate from WOLVERINE_INFERENCE_URL (which is the billing proxy)
+// GPU backend URLs
 const INFERENCE_URL = process.env.WOLVERINE_GPU_URL || process.env.WOLVERINE_INFERENCE_URL || "http://ssh8.vast.ai:24233";
+const EMBEDDING_URL = process.env.WOLVERINE_EMBEDDING_URL || INFERENCE_URL.replace(/:\d+$/, ":8081");
 const GPU_KEY = process.env.WOLVERINE_GPU_KEY || "";
 
 // Pricing in CREDITS per million tokens ($1 = 100 credits)
 const MODEL_PRICING = {
   "wolverine-test-1":  { input: 1.0, output: 4.0 },   // $0.01/$0.04 per 1M
   "wolverine-coding":  { input: 1.0, output: 4.0 },
-  "wolverine-reasoning": { input: 2.5, output: 10.0 }, // heavier model when available
+  "wolverine-reasoning": { input: 2.5, output: 10.0 },
+  "wolverine-embedding-1-test": { input: 0.2, output: 0 }, // embeddings: input only, 5x cheaper than LLM
 };
 
 const MODEL_MAP = {
   "wolverine-test-1": "wolverine-test-1",
   "wolverine-coding": "wolverine-test-1",
   "wolverine-reasoning": "wolverine-test-1",
+  "wolverine-embedding-1-test": "google/embeddinggemma-300m",
 };
+
+// VRAM safety — track GPU memory to prevent OOM
+let _lastVramMB = 0;
+const VRAM_LIMIT_SOFT = 10000; // 10GB — queue embeddings above this
+const VRAM_LIMIT_HARD = 11000; // 11GB — queue everything above this
 
 const TIER_LIMITS = {
   free: { rpm: 10, maxTokens: 1024 },
@@ -203,6 +211,60 @@ async function routes(fastify) {
       return reply.code(502).send({ error: { message: `Inference error: ${err.message}`, type: "inference_error" } });
     } finally {
       dequeue();
+    }
+  });
+
+  // ── POST /embeddings — proxy to OpenAI, billed at 2x through wolverine credits ──
+  fastify.post("/embeddings", { preHandler: authenticate }, async (request, reply) => {
+    const body = request.body || {};
+    const requestedModel = body.model || "wolverine-embedding-1";
+    const account = request.account;
+    const startMs = Date.now();
+
+    try {
+      // Forward to OpenAI text-embedding-3-small
+      const OpenAI = require("openai");
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      const response = await openai.embeddings.create({
+        model: "text-embedding-3-small",
+        input: body.input,
+      });
+
+      const latencyMs = Date.now() - startMs;
+      const totalTokens = response.usage?.total_tokens || 0;
+      // 2x markup: OpenAI charges $0.02/1M, we charge $0.04/1M = 0.4 credits/1M
+      const cost = (totalTokens / 1_000_000) * 0.4;
+
+      // Bill credits
+      if (account.owner !== "platform") {
+        await pool.query(
+          "UPDATE api_credits SET credits_remaining = credits_remaining - $1, credits_used = credits_used + $1, last_used = NOW() WHERE api_key = $2",
+          [cost, account.api_key]
+        );
+        if (account.account_id) {
+          await pool.query(
+            "UPDATE credit_accounts SET balance_credits = balance_credits - $1, lifetime_used = lifetime_used + $1, updated_at = NOW() WHERE id = $2 AND balance_credits >= $1",
+            [cost, account.account_id]
+          ).catch(() => {});
+        }
+        await pool.query(
+          "INSERT INTO api_usage_log (api_key, model, input_tokens, output_tokens, total_tokens, cost, latency_ms, success, endpoint) VALUES ($1, $2, $3, 0, $3, $4, $5, true, $6)",
+          [account.api_key, requestedModel, totalTokens, cost, latencyMs, "/v1/embeddings"]
+        );
+      }
+
+      // Rewrite model name in response
+      response.model = requestedModel;
+      response.x_wolverine = {
+        credits_used: Math.round(cost * 1000000) / 1000000,
+        credits_remaining: Math.max(0, parseFloat(account.credits_remaining) - cost),
+        latency_ms: latencyMs,
+        backend: "text-embedding-3-small",
+      };
+
+      return response;
+    } catch (err) {
+      return reply.code(502).send({ error: { message: `Embedding error: ${err.message}`, type: "embedding_error" } });
     }
   });
 

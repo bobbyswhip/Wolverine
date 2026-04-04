@@ -238,14 +238,33 @@ async function routes(fastify) {
     }
     const byModelCategory = Object.values(mcMerged);
 
+    // Merge local repair stats from repair-history.json
+    let localRepairs = { total: 0, successes: 0, cost: 0 };
+    try {
+      const repairPath = path.join(process.cwd(), ".wolverine", "repair-history.json");
+      const repairs = JSON.parse(fs.readFileSync(repairPath, "utf-8"));
+      if (Array.isArray(repairs)) {
+        localRepairs.total = repairs.length;
+        localRepairs.successes = repairs.filter(r => r.success).length;
+        localRepairs.cost = repairs.reduce((s, r) => s + (r.cost || 0), 0);
+      }
+    } catch {}
+
+    const dbRepairs = parseInt(rep.total, 10);
+    const dbSuccessRate = parseFloat(rep.success_rate) || 0;
+    const dbRepairCost = parseFloat(rep.cost);
+    const allRepairs = dbRepairs + localRepairs.total;
+    const allSuccesses = Math.round(dbRepairs * dbSuccessRate / 100) + localRepairs.successes;
+    const allRepairCost = dbRepairCost + localRepairs.cost;
+
     return {
       totalServers: parseInt(srv.total, 10),
-      activeServers: Math.max(parseInt(srv.active, 10), 1), // This server is always active
+      activeServers: Math.max(parseInt(srv.active, 10), 1),
       downServers: parseInt(srv.down, 10),
-      totalRepairs: parseInt(rep.total, 10),
-      successRate: parseFloat(rep.success_rate) || 0,
-      repairCost: parseFloat(rep.cost),
-      costPerRepair: parseFloat(rep.cost_per_repair),
+      totalRepairs: allRepairs,
+      successRate: allRepairs > 0 ? parseFloat(((allSuccesses / allRepairs) * 100).toFixed(2)) : 0,
+      repairCost: allRepairCost,
+      costPerRepair: allRepairs > 0 ? parseFloat((allRepairCost / allRepairs).toFixed(4)) : 0,
       totalCost: parseFloat(usg.cost) + (local?.totalCostUsd || 0),
       totalTokens: parseInt(usg.tokens, 10) + (local?.totalTokens || 0),
       totalCalls: parseInt(usg.calls, 10) + (local?.totalCalls || 0),

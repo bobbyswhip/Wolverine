@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Wolverine is a self-healing Node.js server framework. It wraps a server process, catches crashes AND caught 500 errors, diagnoses them with AI (OpenAI or Anthropic), generates fixes, verifies them, and restarts — automatically. Published as `wolverine-ai` on npm (v3.9.4). 65 exports, 87 files, 7 skills.
+Wolverine is a self-healing Node.js server framework. It wraps a server process, catches crashes AND caught 500 errors, diagnoses them with AI (OpenAI or Anthropic), generates fixes, verifies them, and restarts — automatically. Published as `wolverine-ai` on npm (v4.0.0). 65 exports, 88 files, 7 skills.
 
 ## Commands
 
@@ -76,13 +76,13 @@ Embeddings always use OpenAI (Anthropic has no embedding API).
 
 **Protected paths**: agent cannot modify `src/`, `bin/`, `tests/`, `node_modules/`, `.env`, `package.json`. Only `server/` is editable.
 
-### Provider Config (server/config/settings.json)
+### Config (server/config/settings.json)
 
 ```json
-{ "provider": "hybrid", "openai_settings": {...}, "anthropic_settings": {...}, "hybrid_settings": {...} }
+{ "models": { "reasoning": "wolverine-test-1", "coding": "claude-sonnet-4-6", ... }, "embedding": "wolverine-embedding-1" }
 ```
 
-Config loader reads `{provider}_settings`. Env vars override per-role. Missing config sections auto-patched on startup via `_ensureDefaults()`.
+No provider selection — always hybrid. Users pick any model per task. Provider auto-detected from name. Embedding separate — always billed through wolverine credits. Legacy `provider`/`*_settings` configs auto-migrated. Env vars override per-role.
 
 ### Brain (src/brain/vector-store.js + brain.js)
 
@@ -142,7 +142,8 @@ The startup backup system snapshots `server/` before first spawn. If the server 
 
 - **Secrets:** `.env.local` (OPENAI_API_KEY, ANTHROPIC_API_KEY, WOLVERINE_ADMIN_KEY)
 - **Settings:** `server/config/settings.json` — provider, 3 model presets, cluster, telemetry, rate limits, health checks, autoUpdate, errorMonitor
-- **9 model slots, 9 analytics categories by ACTIVITY:** audit (injection scan), classifier (error classification), coding (fast path, no tools), tool (agent + sub-agents WITH tools), research (deep investigation), chat (summaries), compacting (brain compression), embedding (brain vectors), reasoning (reserved for deep analysis without tools). Category = what AI is DOING, not which model slot.
+- **8 task model slots + embedding:** No provider selection — always hybrid. Users pick any model per task in `settings.json` `models` section. Provider auto-detected from model name. Embedding is separate (`embedding` key) — always `wolverine-embedding-1` (proxies text-embedding-3-small at 2x markup through credits).
+- **9 analytics categories by ACTIVITY:** audit (injection scan), classifier (error classification), coding (fast path, no tools), tool (agent + sub-agents WITH tools), research (deep investigation), chat (summaries), compacting (brain compression), embedding (brain vectors), reasoning (AI analysis). Category = what AI is DOING, not which model slot.
 - **Config priority:** env vars > `{provider}_settings` > defaults
 
 ## Files That Matter Most

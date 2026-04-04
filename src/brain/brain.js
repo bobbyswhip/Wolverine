@@ -130,7 +130,7 @@ const SEED_DOCS = [
     metadata: { topic: "system-detection" },
   },
   {
-    text: "Configuration: all settings in server/config/settings.json (models, port, telemetry, rate limits, health checks, clustering, cors, logging). Secrets only in .env.local (API keys, admin key). Config loader priority: env vars > settings.json > defaults. Agent can read and edit settings.json since it's inside server/.",
+    text: "Configuration: hybrid-always architecture — no provider selection. Users pick the best model for each of 8 task roles directly in settings.json 'models' section. Mix and match: wolverine for audit, claude for reasoning, gpt for coding. Provider auto-detected from model name. Embedding is separate ('embedding' key) — always wolverine-embedding-1 billed through credits (proxies to text-embedding-3-small at 2x markup). Secrets in .env.local. Config priority: env vars > settings.json > defaults.",
     metadata: { topic: "configuration" },
   },
   {
@@ -162,7 +162,7 @@ const SEED_DOCS = [
     metadata: { topic: "smart-edit" },
   },
   {
-    text: "Token tracking: every AI call tracked with input/output tokens, USD cost, latencyMs, and success/failure. Per-model KPIs: avgLatencyMs, minLatencyMs, maxLatencyMs, tokensPerSecond, successRate, costPerCall, successes, failures. Aggregated by model, by category, by tool, by provider (openai/anthropic/wolverine). 9 analytics categories match the 9 settings.json model roles: reasoning (deep debugging), coding (fast path repair + fix sub-agents), chat (dashboard), tool (main agent with tool use), classifier (triage sub-agents: explore/plan/verify), audit (injection scan + security sub-agent), compacting (brain text compression), research (research agent + research sub-agent), embedding (brain vector embeddings). All categories tracked in byModelCategory cross-reference for per-task model comparison. Persisted to .wolverine/usage.json + .wolverine/usage-history.jsonl. Telemetry sends all per-model performance data to platform backend for fleet-wide analytics.",
+    text: "Token tracking: every AI call tracked with input/output tokens, USD cost, latencyMs, success/failure, and TPOT (time per output token). 8 task roles + embedding tracked separately. Categories by ACTIVITY: audit (injection scan), classifier (error classification), reasoning (AI analyzes error), coding (code generation without tools), tool (agent using read_file/write_file/bash_exec), research (deep investigation), chat (summaries), compacting (brain compression). Embedding billed through wolverine-embedding-1 (proxies text-embedding-3-small at 2x). Benchmark metrics: Speed (tok/s), TPOT (ms/output token), Cost/Call, Pass%. All tracked in byModelCategory for per-task model comparison.",
     metadata: { topic: "token-tracking" },
   },
   {
