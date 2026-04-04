@@ -21,8 +21,9 @@ function _extractTokens(usage) {
     output: usage.completion_tokens || usage.output_tokens || 0,
     // Anthropic cache fields
     cacheCreation: usage.cache_creation_input_tokens || usage.cache_write_tokens || 0,
-    // OpenAI uses cache_read_tokens, Anthropic uses cache_read_input_tokens
-    cacheRead: usage.cache_read_input_tokens || usage.cache_read_tokens || 0,
+    // OpenAI prompt_tokens_details.cached_tokens + Anthropic cache_read_input_tokens
+    cacheRead: usage.cache_read_input_tokens || usage.cache_read_tokens
+      || usage.prompt_tokens_details?.cached_tokens || 0,
   };
 }
 
@@ -520,19 +521,20 @@ async function _chatCall(openai, { model, systemPrompt, userPrompt, maxTokens, t
   if (systemPrompt) messages.push({ role: "system", content: systemPrompt });
   messages.push({ role: "user", content: userPrompt });
 
-  // No temperature for o-series and gpt-5+ (forbidden, causes error)
   const noTemp = /^(o[1-9]|gpt-5)/.test(model);
+  const isWolverine = detectProvider(model) === "wolverine";
   const params = {
     model, messages,
     ...(!noTemp ? { temperature: 0 } : {}),
     ...tokenParam(model, maxTokens),
     ..._reasoningParams(model),
+    // Prompt caching: llama.cpp reuses KV cache for identical prefixes
+    ...(isWolverine ? { cache_prompt: true } : {}),
   };
 
   if (tools && tools.length > 0) {
     params.tools = tools;
     params.tool_choice = toolChoice || "auto";
-    // Disable parallel calls for reliability — sequential is more predictable for healing
     params.parallel_tool_calls = false;
   }
 
@@ -589,11 +591,14 @@ async function _responsesCallWithHistory(openai, { model, messages, tools, maxTo
 
 async function _chatCallWithHistory(openai, { model, messages, tools, maxTokens }) {
   const noTemp = /^(o[1-9]|gpt-5)/.test(model);
+  const isWolverine = detectProvider(model) === "wolverine";
   const params = {
     model, messages,
     ...(!noTemp ? { temperature: 0 } : {}),
     ...tokenParam(model, maxTokens),
     ..._reasoningParams(model),
+    // Prompt caching: llama.cpp KV cache reuse for multi-turn agent conversations
+    ...(isWolverine ? { cache_prompt: true } : {}),
   };
   if (tools && tools.length > 0) {
     params.tools = tools;

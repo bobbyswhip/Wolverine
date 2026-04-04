@@ -134,6 +134,10 @@ const SEED_DOCS = [
     metadata: { topic: "configuration" },
   },
   {
+    text: "AI client prompt caching: all 3 providers cache automatically. Anthropic: system prompt marked cache_control:ephemeral, 90% cheaper on repeat calls within 5 min TTL. OpenAI: automatic prefix caching for >=1024 token prefixes, 50% cheaper on cached input, tracked via usage.prompt_tokens_details.cached_tokens. Wolverine/llama.cpp: cache_prompt:true in request body reuses KV cache for identical prefixes between requests, near-zero TTFT on second+ call in a heal pipeline. Cache savings tracked in analytics: cacheCreation (tokens written to cache) and cacheRead (tokens served from cache).",
+    metadata: { topic: "prompt-caching" },
+  },
+  {
     text: "Platform telemetry: lightweight background process, zero-config. Default platform: api.wolverinenode.xyz. Auto-registers on first run (retries every 60s until platform responds), saves key to .wolverine/platform-key. Heartbeat payload matches PLATFORM.md spec: instanceId, server (name/port/uptime/status/pid), process (memoryMB/cpuPercent), routes, repairs, usage (tokens/cost/calls/byCategory), brain, backups. Offline-resilient: queues up to 1440 heartbeats locally, drains on reconnect. No chalk dependency, cached version/key in memory, minimal IO. Opt out: WOLVERINE_TELEMETRY=false. Override URL: WOLVERINE_PLATFORM_URL.",
     metadata: { topic: "platform-telemetry" },
   },
