@@ -250,7 +250,7 @@ const TOOL_DEFINITIONS = [
     type: "function",
     function: {
       name: "run_db_fix",
-      description: "Run a write query on a SQLite database to fix data issues: UPDATE invalid entries, DELETE corrupt rows, ALTER schema. Creates a backup first.",
+      description: "Run a write query on a SQLite database to fix data issues. IMPORTANT: Always use inspect_db FIRST to see the current state before writing. This tool auto-snapshots affected rows before and after the write. Creates a backup. Returns before/after state so you can verify the fix is correct.",
       parameters: {
         type: "object",
         properties: {
@@ -953,15 +953,60 @@ class AgentEngine {
       if (upper.startsWith("DROP DATABASE") || upper.includes("DROP TABLE sqlite_")) {
         return { content: "BLOCKED: Cannot drop system tables" };
       }
+
       // Backup the DB file first
       const backupPath = dbPath + ".wolverine-backup";
       fs.copyFileSync(dbPath, backupPath);
+
       const db = new Database(dbPath);
+
+      // SAFETY: Snapshot affected rows BEFORE the write
+      // Extract table name and WHERE clause to SELECT the rows that will change
+      let beforeSnapshot = "";
+      try {
+        const tableMatch = upper.match(/(?:UPDATE|DELETE\s+FROM|INSERT\s+INTO)\s+(\w+)/i);
+        const whereMatch = args.sql.match(/WHERE\s+(.+?)(?:;|$)/i);
+        if (tableMatch) {
+          const table = tableMatch[1];
+          const whereClause = whereMatch ? `WHERE ${whereMatch[1]}` : "";
+          const selectSql = `SELECT * FROM ${table} ${whereClause} LIMIT 20`;
+          try {
+            const before = db.prepare(selectSql).all();
+            if (before.length > 0) {
+              beforeSnapshot = `\n\nBEFORE STATE (${before.length} rows affected):\n${JSON.stringify(before, null, 2).slice(0, 2000)}`;
+              console.log(chalk.gray(`    🗃️ Snapshot: ${before.length} rows from ${table} ${whereClause ? whereClause.slice(0, 40) : "(all)"}`));
+            }
+          } catch { /* SELECT failed, might be INSERT into new table — that's fine */ }
+        }
+      } catch { /* snapshot failed, proceed with caution */ }
+
+      // Execute the fix
       const result = db.prepare(args.sql).run();
+
+      // SAFETY: Snapshot AFTER to show what changed
+      let afterSnapshot = "";
+      try {
+        const tableMatch = upper.match(/(?:UPDATE|DELETE\s+FROM|INSERT\s+INTO)\s+(\w+)/i);
+        const whereMatch = args.sql.match(/WHERE\s+(.+?)(?:;|$)/i);
+        if (tableMatch) {
+          const table = tableMatch[1];
+          const whereClause = whereMatch ? `WHERE ${whereMatch[1]}` : "";
+          const selectSql = `SELECT * FROM ${table} ${whereClause} LIMIT 20`;
+          try {
+            const after = db.prepare(selectSql).all();
+            afterSnapshot = `\n\nAFTER STATE (${after.length} rows):\n${JSON.stringify(after, null, 2).slice(0, 2000)}`;
+          } catch {}
+        }
+      } catch {}
+
       db.close();
       this.filesModified.push(args.db_path);
+
+      const summary = `SQL executed. Changes: ${result.changes}. Backup at: ${backupPath}${beforeSnapshot}${afterSnapshot}`;
       console.log(chalk.green(`    🗃️ DB fix applied: ${args.sql.slice(0, 60)} (changes: ${result.changes})`));
-      return { content: `SQL executed. Changes: ${result.changes}. Backup at: ${backupPath}` };
+      if (beforeSnapshot) console.log(chalk.gray(`    🗃️ Before/after snapshot captured for audit`));
+
+      return { content: summary };
     } catch (e) { return { content: `DB error: ${e.message}` }; }
   }
 
@@ -1094,14 +1139,23 @@ FAST FIXES (act immediately, don't investigate):
 - Missing env var → check_env → report it → done
 
 INVESTIGATION (only when cause is unclear):
-- Database error → inspect_db then run_db_fix
+- Database error → inspect_db FIRST to see current state → understand what went wrong → run_db_fix with targeted fix
 - Unknown errors → grep_code, list_dir to find root cause
+
+DATABASE SAFETY:
+- ALWAYS inspect_db before run_db_fix — never write blind
+- run_db_fix auto-snapshots affected rows before/after — check the response to verify your fix
+- For bad data: understand WHY the data is wrong before changing it
+- For NaN/null errors: check if the data was corrupted or if the code should handle it
+- Prefer fixing code to handle edge cases over modifying production data
+- A database backup is created automatically before every write
 
 RULES:
 1. Fix on turn 1-2 when possible. Investigation is a last resort.
 2. For ENOENT config files: read the code that requires the file, then create it with the expected structure.
 3. bash_exec for operational fixes, edit_file for code, write_file for missing files, run_db_fix for data
-4. Always call done with summary when finished — never end without calling done.
+4. For database errors: inspect first, fix data only when code can't reasonably handle the edge case
+5. Always call done with summary when finished — never end without calling done.
 ${primaryFile ? `\nFile: ${primaryFile}` : ""}
 Project: ${cwd}`;
 }

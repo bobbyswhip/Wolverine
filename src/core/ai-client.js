@@ -42,12 +42,13 @@ function getClient(provider) {
 
 function _getWolverineClient() {
   if (!_wolverineClient) {
-    // Wolverine inference: direct to GPU (WOLVERINE_INFERENCE_URL) or via proxy (api.wolverinenode.xyz/v1)
-    // Direct URL = no auth needed (Vast tunnel). Proxy URL = needs WOLVERINE_API_KEY for billing.
+    // Wolverine inference: direct to GPU or via proxy
+    // WOLVERINE_GPU_KEY = internal key for direct GPU access (llama.cpp --api-key)
+    // WOLVERINE_API_KEY = user key for billed proxy access (api.wolverinenode.xyz)
     const baseURL = process.env.WOLVERINE_INFERENCE_URL
       ? process.env.WOLVERINE_INFERENCE_URL + "/v1"
       : "https://api.wolverinenode.xyz/v1";
-    const apiKey = process.env.WOLVERINE_API_KEY || "none";
+    const apiKey = process.env.WOLVERINE_GPU_KEY || process.env.WOLVERINE_API_KEY || "none";
     _wolverineClient = new OpenAI({ apiKey, baseURL });
   }
   return _wolverineClient;

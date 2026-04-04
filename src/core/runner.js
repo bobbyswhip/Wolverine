@@ -590,11 +590,37 @@ class WolverineRunner {
     this._healStatus = { active: true, route: routePath, error: errorDetails?.message?.slice(0, 200), phase: "diagnosing", startedAt: Date.now() };
     this.logger.info("heal.error_monitor", `Healing caught 500 on ${routePath}`, { route: routePath });
 
-    // Build a synthetic stderr from the error details
+    // Build synthetic stderr that matches the error parser's expected format
+    // If IPC didn't include a file, try to resolve from the route path or stack
+    let file = errorDetails.file;
+    let line = errorDetails.line || 1;
+    if (!file && errorDetails.stack) {
+      // Try to find user-land file in stack (not node_modules, not node:)
+      const frames = (errorDetails.stack || "").split("\n");
+      for (const frame of frames) {
+        const m = frame.match(/\(([^)]+):(\d+):(\d+)\)/) || frame.match(/at\s+([^\s(]+):(\d+):(\d+)/);
+        if (m && !m[1].includes("node_modules") && !m[1].includes("node:")) {
+          file = m[1]; line = parseInt(m[2], 10); break;
+        }
+      }
+    }
+    if (!file && routePath) {
+      // Last resort: map route path to likely file (e.g., /breakable → server/routes/breakable.js)
+      const routeName = routePath.split("/").filter(Boolean).pop();
+      if (routeName) {
+        const path = require("path");
+        const guess = path.join(this.cwd, "server", "routes", routeName + ".js");
+        if (require("fs").existsSync(guess)) { file = guess; line = 1; }
+      }
+    }
+
+    const msg = errorDetails.message || "Unknown error";
+    const hasErrorPrefix = /^\w*Error:/.test(msg);
     const stderr = [
-      errorDetails.message || "Unknown error",
+      file ? `${file}:${line}` : "",
+      hasErrorPrefix ? msg : `Error: ${msg}`,
       errorDetails.stack || "",
-      errorDetails.file ? `    at ${errorDetails.file}:${errorDetails.line || 0}` : "",
+      file ? `    at ${file}:${line}:1` : "",
     ].filter(Boolean).join("\n");
 
     try {

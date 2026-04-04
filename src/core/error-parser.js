@@ -97,11 +97,11 @@ function classifyError(errorMessage, fullStderr) {
   const full = (fullStderr || "").toLowerCase();
 
   // Missing npm package: Cannot find module 'cors' (not a relative path)
-  if (/cannot find module '(?![./\\])/.test(msg) || /module_not_found/.test(full)) {
+  if (/cannot find module ['"](?![./\\])/.test(msg) || /module_not_found/.test(full)) {
     return "missing_module";
   }
   // Missing local file: Cannot find module './routes/api'
-  if (/cannot find module '[./\\]/.test(msg) || /enoent/.test(msg)) {
+  if (/cannot find module ['"][./\\]/.test(msg) || /enoent/.test(msg)) {
     return "missing_file";
   }
   // Permission denied
