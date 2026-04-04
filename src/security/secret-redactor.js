@@ -40,6 +40,11 @@ const SECRET_PATTERNS = [
   { pattern: /(?:password|secret|token|key|credential|auth)['"`]?\s*[:=]\s*['"`]([a-zA-Z0-9+/=_-]{32,})['"`]/gi, label: null }, // handled specially
   // JWT tokens
   { pattern: /eyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}/g, label: "[REDACTED_JWT]" },
+  // Vault: Ethereum private keys and encryption key material
+  { pattern: /0x[0-9a-fA-F]{64}/g, label: "[REDACTED_PRIVATE_KEY]" },
+  { pattern: /(?<![0-9a-fA-F])[0-9a-fA-F]{64}(?![0-9a-fA-F])/g, label: "[REDACTED_HEX_KEY]" },
+  // Vault file paths — prevent path disclosure that could guide file reads
+  { pattern: /master\.key|eth\.vault|\.wolverine\/vault/g, label: "[VAULT_REDACTED]" },
 ];
 
 class SecretRedactor {

@@ -41,6 +41,9 @@ const INJECTION_PATTERNS = [
   { pattern: /fs\.(unlink|rmdir|rm)Sync/i, label: "destructive-fs" },
   { pattern: /rimraf/i, label: "destructive-fs" },
   { pattern: /rm\s+-rf/i, label: "destructive-fs" },
+  // Vault key material leak — CRITICAL: block heal entirely
+  { pattern: /0x[0-9a-fA-F]{64}/i, label: "key-leak-critical" },
+  { pattern: /master\.key|eth\.vault|\.wolverine\/vault/i, label: "vault-path-leak" },
 ];
 
 /**

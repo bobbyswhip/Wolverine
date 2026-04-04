@@ -124,6 +124,7 @@ Heartbeats every 60s. Stable instance ID (persisted to `.wolverine/instance-id`)
 - **Process dedup via PID file.** Kills old process on startup. Race-safe PID cleanup.
 - **Both API keys needed for hybrid mode** — OPENAI_API_KEY for embeddings.
 - **Unified billing:** All wolverine provider calls route through billing proxy (`WOLVERINE_INFERENCE_URL`). `WOLVERINE_API_KEY` (billed, priority) vs `WOLVERINE_GPU_KEY` (direct, admin). Inference proxy deducts credits from `api_credits` + syncs to `credit_accounts`. Billing errors (402) stop heal immediately.
+- **Vault:** Encrypted key storage in `.wolverine/vault/`. AES-256-GCM. Private keys never as JS strings. Agent cannot access vault files (sandbox-blocked). Injection detector blocks heal on key_leak. Backed up in every snapshot. Rollback-protected.
 - **Auto-update: selective git checkout** — only updates `src/`, `bin/`, `package.json`. Never touches `server/`.
 - **Rollback protects:** `settings.json`, `db.js`, `.env.local` never overwritten.
 

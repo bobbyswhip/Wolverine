@@ -12,11 +12,27 @@ class Sandbox {
     this.rootDir = path.resolve(rootDir);
   }
 
+  // Paths the agent can NEVER read, write, or delete — even within the sandbox
+  static PROTECTED_PATHS = [
+    ".wolverine/vault/master.key",
+    ".wolverine/vault/eth.vault",
+    ".wolverine/vault",
+  ];
+
   /**
-   * Resolve and validate a file path. Throws if the path escapes the sandbox.
+   * Resolve and validate a file path. Throws if the path escapes the sandbox
+   * or targets a protected vault path.
    * Returns the resolved absolute path.
    */
   resolve(filePath) {
+    // Block vault access before any resolution
+    const normalized = filePath.replace(/\\/g, "/").toLowerCase();
+    for (const p of Sandbox.PROTECTED_PATHS) {
+      if (normalized.includes(p.toLowerCase())) {
+        throw new SandboxViolationError(`Access denied: "${filePath}" is a protected vault path`);
+      }
+    }
+
     // Resolve relative to sandbox root
     const resolved = path.isAbsolute(filePath)
       ? path.resolve(filePath)
@@ -30,6 +46,13 @@ class Sandbox {
       throw new SandboxViolationError(
         `Path "${filePath}" resolves to "${resolved}" which is outside the sandbox root "${this.rootDir}"`
       );
+    }
+
+    // Double-check resolved path against vault
+    for (const p of Sandbox.PROTECTED_PATHS) {
+      if (normalizedResolved.includes(p.toLowerCase())) {
+        throw new SandboxViolationError(`Access denied: resolved path targets protected vault`);
+      }
     }
 
     // Check for symlink escape

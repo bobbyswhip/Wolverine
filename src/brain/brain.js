@@ -178,6 +178,10 @@ const SEED_DOCS = [
     metadata: { topic: "notifications" },
   },
   {
+    text: "Vault: encrypted key storage in .wolverine/vault/. AES-256-GCM encryption. master.key (32 bytes raw) encrypts eth.vault (Ethereum private key). Generated on first run if missing. Private key NEVER exists as a JS string — only Buffer, wiped after use. wallet-ops.js exposes getWalletAddress(), signTransaction(), signMessage() — all decrypt→use→wipe with generic error messages only. Injection detector blocks heal if 0x+64hex chars detected in error (key_leak_critical). Redactor scrubs all hex key patterns. Sandbox blocks agent access to vault paths. Backed up in every snapshot. Rollback-protected (NEVER_ROLLBACK list). Vault skill in src/skills/vault.js for agent discovery. Server code uses vault skill to earn/spend ETH without touching the private key.",
+    metadata: { topic: "vault-security" },
+  },
+  {
     text: "MCP integration: connect external tools via Model Context Protocol. Configure in .wolverine/mcp.json with per-server tool allowlists. Security: arg sanitization (secrets redacted before sending to MCP servers), result injection scanning, rate limiting per server, audit logging. Tools appear as mcp__server__tool in the agent. Supports stdio and HTTP transports.",
     metadata: { topic: "mcp" },
   },

@@ -32,6 +32,8 @@ const NEVER_ROLLBACK = [
   "server/lib/redis.js",
   ".env",
   ".env.local",
+  ".wolverine/vault/master.key",
+  ".wolverine/vault/eth.vault",
 ];
 
 class BackupManager {
@@ -77,6 +79,19 @@ class BackupManager {
         backup: backupFile,
       });
     }
+
+    // Also back up vault keys (catastrophic recovery)
+    try {
+      const vaultDir = path.join(this.projectRoot, ".wolverine", "vault");
+      for (const vaultFile of ["master.key", "eth.vault"]) {
+        const src = path.join(vaultDir, vaultFile);
+        if (fs.existsSync(src)) {
+          const dest = path.join(backupDir, ".wolverine__vault__" + vaultFile);
+          fs.copyFileSync(src, dest);
+          files.push({ original: src, relative: `.wolverine/vault/${vaultFile}`, backup: dest });
+        }
+      }
+    } catch {}
 
     const entry = {
       id: backupId,

@@ -194,6 +194,23 @@ class WolverineRunner {
       console.log(chalk.yellow(`  ⚠️  MCP init failed (non-fatal): ${err.message}`));
     }
 
+    // Initialize vault (encrypted key storage)
+    try {
+      const { initVault, isVaultInitialized } = require("../vault/vault-manager");
+      const vaultResult = await initVault();
+      if (vaultResult.created) {
+        try {
+          const { getWalletAddress } = require("../vault/wallet-ops");
+          const addr = await getWalletAddress();
+          console.log(chalk.green(`  🔐 Vault initialized — wallet: ${addr}`));
+        } catch { console.log(chalk.green("  🔐 Vault initialized")); }
+      } else if (isVaultInitialized()) {
+        console.log(chalk.gray("  🔐 Vault: ready"));
+      }
+    } catch (err) {
+      console.log(chalk.yellow(`  ⚠️  Vault init failed (non-fatal): ${err.message}`));
+    }
+
     // Log redactor stats
     const redactorStats = this.redactor.getStats();
     console.log(chalk.gray(`  🔐 Secret redactor: ${redactorStats.trackedSecrets} secrets tracked from ${redactorStats.envFiles} env file(s)`));
