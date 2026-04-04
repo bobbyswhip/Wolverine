@@ -1,6 +1,6 @@
 const chalk = require("chalk");
 const { parseError } = require("./error-parser");
-const { requestRepair, getClient, aiCall } = require("./ai-client");
+const { requestRepair, getClient, aiCall, _trackOp } = require("./ai-client");
 const { getModel } = require("./models");
 const { applyPatch } = require("./patcher");
 const { verifyFix } = require("./verifier");
@@ -341,6 +341,10 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
             const patchResults = applyPatch(repair.changes, cwd, sandbox);
             if (!patchResults.every(r => r.success)) throw new Error("Patch failed");
 
+            // Track code generation as "coding" — the AI produced code changes
+            const codeTokens = repair.changes.reduce((s, c) => s + ((c.new || "").length / 4), 0);
+            _trackOp(getModel("coding"), "coding", 0, Math.round(codeTokens), "patch_apply", 0, true);
+
             for (const r of patchResults) console.log(chalk.green(`  ✅ Patched: ${r.file}`));
           }
 
@@ -348,6 +352,11 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
           if (verification.verified) {
             backupManager.markVerified(bid);
             rateLimiter.clearSignature(errorSignature);
+            // Track tool operations: file read + patch + verify + any commands
+            // These are the same operations an agent would do with read_file/write_file/bash_exec
+            const toolOps = 1 + (repair.changes?.length || 0) + (repair.commands?.length || 0) + 1; // read + patches + commands + verify
+            const toolTokens = (sourceCode?.length || 0) / 4; // approximate tokens for file read
+            _trackOp(getModel("tool"), "tool", Math.round(toolTokens), 0, "fast_path_ops", Date.now() - healStartTime, true);
             return { healed: true, explanation: repair.explanation, backupId: bid, mode: "fast" };
           }
 

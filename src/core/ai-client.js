@@ -38,6 +38,11 @@ function _trackEmbedding(model, usage, latencyMs, success) {
   _tracker.record(model, "embedding", input, 0, null, latencyMs, success, 0, 0);
 }
 
+function _trackOp(model, category, inputTokens, outputTokens, tool, latencyMs, success) {
+  if (!_tracker) return;
+  _tracker.record(model, category, inputTokens || 0, outputTokens || 0, tool || null, latencyMs || 0, success, 0, 0);
+}
+
 // ── Client Management ──
 
 function getClient(provider) {
@@ -614,7 +619,7 @@ ${backupSourceCode ? `## Last Known Working Version\n\`\`\`javascript\n${backupS
 "changes" is for code edits (optional, use for actual code fixes).
 Include both if needed, or just one.`;
 
-  const result = await aiCall({ model, systemPrompt, userPrompt, maxTokens: 2048, category: "coding" });
+  const result = await aiCall({ model, systemPrompt, userPrompt, maxTokens: 2048, category: "reasoning" });
   const content = (result.content || "").trim();
 
   // Strip thinking tags (Gemma), markdown fences, and any prefix text
@@ -639,4 +644,4 @@ Include both if needed, or just one.`;
   }
 }
 
-module.exports = { requestRepair, getClient, tokenParam, aiCall, aiCallWithHistory, isResponsesModel, isAnthropicModel, setTokenTracker, getTrackerSnapshot, detectProvider, _trackEmbedding };
+module.exports = { requestRepair, getClient, tokenParam, aiCall, aiCallWithHistory, isResponsesModel, isAnthropicModel, setTokenTracker, getTrackerSnapshot, detectProvider, _trackEmbedding, _trackOp };
