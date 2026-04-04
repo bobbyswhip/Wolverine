@@ -51,12 +51,10 @@ function getClient(provider) {
   return _getOpenAIClient();
 }
 
+let _wolverineDirectClient = null;
+
 function _getWolverineClient() {
   if (!_wolverineClient) {
-    // Wolverine inference: always route through billing proxy when API key is set.
-    // WOLVERINE_API_KEY = billed API key (credits deducted per call)
-    // WOLVERINE_GPU_KEY = direct GPU access (no billing, admin/internal only)
-    // Priority: API_KEY (billed) > GPU_KEY (direct) — billing is the default path
     const apiKey = process.env.WOLVERINE_API_KEY || process.env.WOLVERINE_GPU_KEY || "none";
     const baseURL = process.env.WOLVERINE_INFERENCE_URL
       ? process.env.WOLVERINE_INFERENCE_URL + "/v1"
@@ -64,6 +62,17 @@ function _getWolverineClient() {
     _wolverineClient = new OpenAI({ apiKey, baseURL });
   }
   return _wolverineClient;
+}
+
+// Direct GPU client — bypasses billing proxy. Used as fallback when proxy is down.
+function _getWolverineDirectClient() {
+  if (!_wolverineDirectClient && process.env.WOLVERINE_GPU_URL && process.env.WOLVERINE_GPU_KEY) {
+    _wolverineDirectClient = new OpenAI({
+      apiKey: process.env.WOLVERINE_GPU_KEY,
+      baseURL: process.env.WOLVERINE_GPU_URL + "/v1",
+    });
+  }
+  return _wolverineDirectClient;
 }
 
 function _getOpenAIClient() {
@@ -219,7 +228,19 @@ async function aiCall({ model, systemPrompt, userPrompt, maxTokens = 2048, tools
     if (provider === "anthropic") {
       result = await _anthropicCall({ model, systemPrompt, userPrompt, maxTokens, tools, toolChoice });
     } else if (provider === "wolverine") {
-      result = await _chatCall(_getWolverineClient(), { model, systemPrompt, userPrompt, maxTokens, tools, toolChoice });
+      try {
+        result = await _chatCall(_getWolverineClient(), { model, systemPrompt, userPrompt, maxTokens, tools, toolChoice });
+      } catch (proxyErr) {
+        // If billing proxy is down (server crashing), fall back to direct GPU
+        const isConnErr = /ECONNREFUSED|ECONNRESET|ETIMEDOUT|fetch failed/i.test(proxyErr.message || "");
+        const directClient = _getWolverineDirectClient();
+        if (isConnErr && directClient) {
+          console.log(chalk.yellow("  ⚠️  Billing proxy down — using direct GPU (unbilled)"));
+          result = await _chatCall(directClient, { model, systemPrompt, userPrompt, maxTokens, tools, toolChoice });
+        } else {
+          throw proxyErr;
+        }
+      }
     } else if (isResponsesModel(model)) {
       result = await _responsesCall(_getOpenAIClient(), { model, systemPrompt, userPrompt, maxTokens, tools });
     } else {
@@ -245,7 +266,18 @@ async function aiCallWithHistory({ model, messages, tools, maxTokens = 4096, cat
     if (provider === "anthropic") {
       result = await _anthropicCallWithHistory({ model, messages, tools, maxTokens });
     } else if (provider === "wolverine") {
-      result = await _chatCallWithHistory(_getWolverineClient(), { model, messages, tools, maxTokens });
+      try {
+        result = await _chatCallWithHistory(_getWolverineClient(), { model, messages, tools, maxTokens });
+      } catch (proxyErr) {
+        const isConnErr = /ECONNREFUSED|ECONNRESET|ETIMEDOUT|fetch failed/i.test(proxyErr.message || "");
+        const directClient = _getWolverineDirectClient();
+        if (isConnErr && directClient) {
+          console.log(chalk.yellow("  ⚠️  Billing proxy down — using direct GPU (unbilled)"));
+          result = await _chatCallWithHistory(directClient, { model, messages, tools, maxTokens });
+        } else {
+          throw proxyErr;
+        }
+      }
     } else if (isResponsesModel(model)) {
       result = await _responsesCallWithHistory(_getOpenAIClient(), { model, messages, tools, maxTokens });
     } else {
