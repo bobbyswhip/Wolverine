@@ -57,9 +57,9 @@ const HUMAN_REQUIRED_PATTERNS = [
   { pattern: /EACCES/i, category: "permission", hint: "Permission denied on file system" },
   { pattern: /EPERM/i, category: "permission", hint: "Operation not permitted — check file/process permissions" },
 
-  // Environment
+  // Environment — only match system-level env issues, not app config files the agent can create
   { pattern: /not\s+set|undefined.*env|missing.*env/i, category: "env", hint: "Environment variable not configured" },
-  { pattern: /missing.*config/i, category: "env", hint: "Configuration file or value missing" },
+  { pattern: /missing.*(\.env|environment|env\s*var)/i, category: "env", hint: "Environment variable or .env file missing" },
 
   // Disk
   { pattern: /ENOSPC/i, category: "disk", hint: "Disk space full" },
