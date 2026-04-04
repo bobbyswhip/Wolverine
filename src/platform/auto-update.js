@@ -123,8 +123,12 @@ function upgrade(cwd, logger) {
   _writeLock(cwd, { lastAttemptedVersion: latest, lastAttemptedAt: Date.now(), from: current });
 
   const { safeUpdate } = require("../skills/update");
-  _currentVersion = null;
+  _currentVersion = null; // reset cached version so post-update reads new package.json
+  // Also clear Node's require cache for package.json
+  try { delete require.cache[require.resolve(path.join(cwd, "package.json"))]; } catch {}
+  try { delete require.cache[require.resolve("../../package.json")]; } catch {}
   const result = safeUpdate(cwd, { logger });
+  _currentVersion = null; // reset again after update so next getCurrentVersion() reads fresh
 
   // Verify deps after update
   if (result.success) {

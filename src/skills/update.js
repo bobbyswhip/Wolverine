@@ -193,6 +193,9 @@ function safeUpdate(cwd, options = {}) {
     fs.writeFileSync(path.join(seedRefreshDir, ".seed-refresh"), new Date().toISOString(), "utf-8");
     console.log(chalk.gray("  🧠 Brain seed merge scheduled for next boot"));
 
+    // Clear Node's require cache for package.json so we read the new version
+    const pkgPath = path.resolve(cwd, "package.json");
+    delete require.cache[pkgPath];
     const newVersion = _getCurrentVersion(cwd);
     console.log(chalk.green(`  ✅ Updated: ${currentVersion} → ${newVersion}`));
     console.log(chalk.gray(`  🔒 Emergency backup at: ${backup.dir}`));
