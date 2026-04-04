@@ -43,14 +43,21 @@ async function embed(text) {
 
   const model = getEmbeddingModel();
   const provider = detectProvider(model);
-  // wolverine-embedding-1 routes through billing proxy, others go direct
   const client = provider === "wolverine" ? getClient("wolverine") : getClient("openai");
 
   const startMs = Date.now();
-  const response = await client.embeddings.create({
-    model,
-    input: text,
-  });
+  let response;
+  try {
+    response = await client.embeddings.create({ model, input: text });
+  } catch (err) {
+    // If wolverine proxy is down (startup, crash loop), fall back to OpenAI direct
+    if (provider === "wolverine" && /ECONNREFUSED|ECONNRESET|ETIMEDOUT|fetch failed/i.test(err.message || "")) {
+      const directClient = getClient("openai");
+      response = await directClient.embeddings.create({ model: "text-embedding-3-small", input: text });
+    } else {
+      throw err;
+    }
+  }
 
   const embedding = response.data[0].embedding;
   _trackEmbedding(model, response.usage, Date.now() - startMs, true);
@@ -87,10 +94,17 @@ async function embedBatch(texts) {
   const client = provider === "wolverine" ? getClient("wolverine") : getClient("openai");
 
   const startMs = Date.now();
-  const response = await client.embeddings.create({
-    model,
-    input: uncached,
-  });
+  let response;
+  try {
+    response = await client.embeddings.create({ model, input: uncached });
+  } catch (err) {
+    if (provider === "wolverine" && /ECONNREFUSED|ECONNRESET|ETIMEDOUT|fetch failed/i.test(err.message || "")) {
+      const directClient = getClient("openai");
+      response = await directClient.embeddings.create({ model: "text-embedding-3-small", input: uncached });
+    } else {
+      throw err;
+    }
+  }
   _trackEmbedding(model, response.usage, Date.now() - startMs, true);
 
   // Sort by index to maintain order
