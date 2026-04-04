@@ -125,6 +125,16 @@ Heartbeats every 60s. Stable instance ID (persisted to `.wolverine/instance-id`)
 - **Auto-update: selective git checkout** — only updates `src/`, `bin/`, `package.json`. Never touches `server/`.
 - **Rollback protects:** `settings.json`, `db.js`, `.env.local` never overwritten.
 
+## WARNING: Never `git pull` or `npm install` on Deployed Servers
+
+**NEVER run `git pull` or raw `npm install wolverine-ai` on a running server.** These overwrite `server/` which contains user code, routes, database config, and settings. Use the built-in update system instead:
+
+- `wolverine --update` — safe CLI update (backs up server/, only updates src/bin/)
+- Auto-update runs hourly by default (same safe path)
+- If you must update manually: `wolverine --backup "before update"` first
+
+The startup backup system snapshots `server/` before first spawn. If the server crashes immediately after a bad update, wolverine auto-rollbacks to the startup snapshot after max retries.
+
 ## Configuration
 
 - **Secrets:** `.env.local` (OPENAI_API_KEY, ANTHROPIC_API_KEY, WOLVERINE_ADMIN_KEY)

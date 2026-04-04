@@ -246,6 +246,15 @@ class WolverineRunner {
       console.log(chalk.gray("  🔄 Auto-update: disabled"));
     }
 
+    // Create startup backup — safety net for corrupted server/ from bad updates
+    // If the child crashes immediately after this, we can rollback to this known state
+    try {
+      this._startupBackupId = this.backupManager.createBackup("pre-start (safety snapshot)");
+      console.log(chalk.gray(`  📸 Startup backup: ${this._startupBackupId}`));
+    } catch (err) {
+      console.log(chalk.yellow(`  ⚠️  Startup backup failed (non-fatal): ${err.message}`));
+    }
+
     this._spawn();
   }
 
@@ -566,6 +575,20 @@ class WolverineRunner {
           console.log(chalk.yellow("   Retrying...\n"));
           this._spawn();
         } else {
+          // Max retries — try rolling back to startup backup as last resort
+          if (this._startupBackupId) {
+            console.log(chalk.yellow(`\n  🔄 Max retries reached — rolling back to startup backup ${this._startupBackupId}...`));
+            try {
+              this.backupManager.rollbackTo(this._startupBackupId);
+              console.log(chalk.green("  ✅ Rolled back to startup state. Restarting..."));
+              this.retryCount = 0;
+              this._startupBackupId = null; // don't rollback again if this also fails
+              this._spawn();
+              return;
+            } catch (rbErr) {
+              console.log(chalk.red(`  ❌ Rollback failed: ${rbErr.message}`));
+            }
+          }
           console.log(chalk.red("   Max retries reached."));
           this._logRollbackHint();
           this.running = false;

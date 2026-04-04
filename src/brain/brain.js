@@ -242,7 +242,7 @@ const SEED_DOCS = [
     metadata: { topic: "backup-skill" },
   },
   {
-    text: "CRITICAL: Never run raw 'npm install wolverine-ai' or 'git pull' to update — these OVERWRITE server/, .wolverine/ (brain, backups, events), and .env.local. Always use the safe update skill: wolverine --update (CLI), safeUpdate(cwd) (programmatic), or let auto-update handle it. ALL backups (heal snapshots + update snapshots) stored in ~/.wolverine-safe-backups/ (OUTSIDE project, survives git clean, rm -rf, project deletion). Structure: ~/.wolverine-safe-backups/snapshots/ (heal backups), ~/.wolverine-safe-backups/updates/ (pre-update snapshots), ~/.wolverine-safe-backups/manifest.json (backup registry). Old .wolverine/backups/ auto-migrated on first run. Restore with: wolverine --restore <name>. List: wolverine --backups.",
+    text: "CRITICAL: Never run raw 'npm install wolverine-ai' or 'git pull' to update — these OVERWRITE server/, .wolverine/ (brain, backups, events), and .env.local. Always use the safe update skill: wolverine --update (CLI), safeUpdate(cwd) (programmatic), or let auto-update handle it. Startup backup: wolverine creates a safety snapshot of server/ before first spawn on every start. If the server crashes immediately after a bad update and healing fails/is blocked, wolverine auto-rollbacks to the startup snapshot after max retries — prevents permanent breakage from corrupted server/ files. ALL backups (heal snapshots + update snapshots + startup snapshots) stored in ~/.wolverine-safe-backups/ (OUTSIDE project, survives git clean, rm -rf, project deletion). Restore with: wolverine --restore <name>. List: wolverine --backups.",
     metadata: { topic: "safe-update-warning" },
   },
   {
@@ -304,6 +304,13 @@ class Brain {
       console.log(chalk.gray("  🧠 Framework updated — merging new seed docs..."));
       await this._mergeSeedDocs();
       try { fs.unlinkSync(seedRefreshPath); } catch {}
+    } else {
+      // Auto-detect new seeds: if SEED_DOCS count > docs namespace count, merge
+      const docsCount = (this.store.getNamespace("docs") || []).length;
+      if (SEED_DOCS.length > docsCount) {
+        console.log(chalk.gray(`  🧠 New seed docs detected (${SEED_DOCS.length} vs ${docsCount}) — merging...`));
+        await this._mergeSeedDocs();
+      }
     }
 
     // 2. Scan project for live function map

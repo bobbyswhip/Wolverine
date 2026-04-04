@@ -127,6 +127,10 @@ if (args.includes("--backups")) {
 
 const scriptPath = args.find(a => !a.startsWith("--")) || "server/index.js";
 
+// Initialize server/ from template if it doesn't exist (first run)
+const { initServer } = require("../src/core/init-server");
+initServer(process.cwd(), scriptPath);
+
 // System detection (for analytics + dashboard, NOT for forking)
 // Wolverine runs as a single process manager. If users want clustering,
 // they handle it inside their server (e.g. @fastify/cluster, pm2 cluster mode).
