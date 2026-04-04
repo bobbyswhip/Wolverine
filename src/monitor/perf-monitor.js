@@ -236,7 +236,7 @@ Provide a brief analysis and actionable suggestions. Focus on:
 
 Keep your response under 300 words. Be specific and actionable.`,
         maxTokens: 512,
-        category: "audit",
+        category: "chat",
       });
 
       const analysis = result.content;

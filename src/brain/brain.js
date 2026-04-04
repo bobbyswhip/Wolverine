@@ -114,7 +114,7 @@ const SEED_DOCS = [
     metadata: { topic: "sub-agent-tools" },
   },
   {
-    text: "Heal pipeline escalation with cost optimization: Iteration 1 uses fast path (CODING_MODEL, tracked as 'coding' category). For simple errors (TypeError/ReferenceError/SyntaxError), verifier trusts syntax+boot and skips route probe — ErrorMonitor is safety net. Iteration 2 uses single agent (REASONING_MODEL, 4 turns for simple, 8 for complex, tracked as 'tool' category). Iteration 3+ uses sub-agents: explore/plan/verify use classifier model (tracked as 'classifier'), fixer uses coding model (tracked as 'coding'), research sub-agent tracked as 'research', security as 'audit'. All calls billed through unified credit system — framework authenticates as a normal API user via WOLVERINE_API_KEY through the billing proxy. Billing errors (402, insufficient_quota) immediately stop healing, no token waste.",
+    text: "Heal pipeline with analytics categories matching 9 model roles: (1) Injection scan → AUDIT_MODEL → 'audit'. (2) Fast path single-shot repair → CODING_MODEL → 'coding'. (3) Main agent with tools → REASONING_MODEL → 'reasoning'. (4) Sub-agents: explore/plan/verify → CLASSIFIER_MODEL → 'classifier'; fix/database → TOOL_MODEL → 'tool'; research → RESEARCH_MODEL → 'research'; security → AUDIT_MODEL → 'audit'. (5) Brain compaction → COMPACTING_MODEL → 'compacting'. (6) Embeddings → EMBEDDING_MODEL → 'embedding'. (7) Notifier/perf summaries → CHAT_MODEL → 'chat'. All 9 roles tracked: reasoning, coding, chat, tool, classifier, audit, compacting, research, embedding. Billing: all calls go through unified credit proxy (WOLVERINE_API_KEY). Billing errors (402) stop healing immediately.",
     metadata: { topic: "heal-escalation" },
   },
   {

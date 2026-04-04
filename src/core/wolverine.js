@@ -339,6 +339,7 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
           sandbox, logger, cwd, mcp,
           maxTurns: agentMaxTurns,
           maxTokens: tokenBudget.agent,
+          category: "reasoning",
         });
 
         const agentResult = await agent.run({
