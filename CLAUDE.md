@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Wolverine is a self-healing Node.js server framework. It wraps a server process, catches crashes AND caught 500 errors, diagnoses them with AI (OpenAI or Anthropic), generates fixes, verifies them, and restarts — automatically. Published as `wolverine-ai` on npm (v3.7.4). 65 exports, 83 files, 6 skills.
+Wolverine is a self-healing Node.js server framework. It wraps a server process, catches crashes AND caught 500 errors, diagnoses them with AI (OpenAI or Anthropic), generates fixes, verifies them, and restarts — automatically. Published as `wolverine-ai` on npm (v3.7.7). 65 exports, 85 files, 6 skills.
 
 ## Commands
 
@@ -123,6 +123,7 @@ Heartbeats every 60s. Stable instance ID (persisted to `.wolverine/instance-id`)
 - **SIGTERM startup grace: 3s.** Prevents restart scripts from killing newly spawned process.
 - **Process dedup via PID file.** Kills old process on startup. Race-safe PID cleanup.
 - **Both API keys needed for hybrid mode** — OPENAI_API_KEY for embeddings.
+- **Unified billing:** All wolverine provider calls route through billing proxy (`WOLVERINE_INFERENCE_URL`). `WOLVERINE_API_KEY` (billed, priority) vs `WOLVERINE_GPU_KEY` (direct, admin). Inference proxy deducts credits from `api_credits` + syncs to `credit_accounts`. Billing errors (402) stop heal immediately.
 - **Auto-update: selective git checkout** — only updates `src/`, `bin/`, `package.json`. Never touches `server/`.
 - **Rollback protects:** `settings.json`, `db.js`, `.env.local` never overwritten.
 
@@ -140,7 +141,7 @@ The startup backup system snapshots `server/` before first spawn. If the server 
 
 - **Secrets:** `.env.local` (OPENAI_API_KEY, ANTHROPIC_API_KEY, WOLVERINE_ADMIN_KEY)
 - **Settings:** `server/config/settings.json` — provider, 3 model presets, cluster, telemetry, rate limits, health checks, autoUpdate, errorMonitor
-- **10 model slots:** reasoning, coding, chat, tool, classifier, audit, compacting, research, embedding
+- **9 model slots = 9 analytics categories:** reasoning, coding, chat, tool, classifier, audit, compacting, research, embedding. Each tracked in byModelCategory for per-task model comparison.
 - **Config priority:** env vars > `{provider}_settings` > defaults
 
 ## Files That Matter Most

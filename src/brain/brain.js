@@ -114,7 +114,7 @@ const SEED_DOCS = [
     metadata: { topic: "sub-agent-tools" },
   },
   {
-    text: "Heal pipeline escalation with cost optimization: Iteration 1 uses fast path (CODING_MODEL). For simple errors (TypeError/ReferenceError/SyntaxError), verifier trusts syntax+boot and skips route probe — ErrorMonitor is safety net. This prevents false-rejection cascades that waste tokens. Iteration 2 uses single agent (REASONING_MODEL, 4 turns for simple errors, 8 for complex). Iteration 3+ uses sub-agents with Haiku for triage (explore/plan/verify/research use classifier model) and only fixer uses coding model — 90% cheaper. Token budgets capped by error complexity: simple=20K, moderate=50K, complex=100K. Context compacted every 3 agent turns to prevent token blowup (95K→20K). Prior attempt summaries passed between iterations instead of full context. Brain checked for cached fix patterns before starting AI.",
+    text: "Heal pipeline escalation with cost optimization: Iteration 1 uses fast path (CODING_MODEL, tracked as 'coding' category). For simple errors (TypeError/ReferenceError/SyntaxError), verifier trusts syntax+boot and skips route probe — ErrorMonitor is safety net. Iteration 2 uses single agent (REASONING_MODEL, 4 turns for simple, 8 for complex, tracked as 'tool' category). Iteration 3+ uses sub-agents: explore/plan/verify use classifier model (tracked as 'classifier'), fixer uses coding model (tracked as 'coding'), research sub-agent tracked as 'research', security as 'audit'. All calls billed through unified credit system — framework authenticates as a normal API user via WOLVERINE_API_KEY through the billing proxy. Billing errors (402, insufficient_quota) immediately stop healing, no token waste.",
     metadata: { topic: "heal-escalation" },
   },
   {
@@ -146,7 +146,7 @@ const SEED_DOCS = [
     metadata: { topic: "fastify" },
   },
   {
-    text: "npm package: wolverine-ai on npmjs.com. Install: npm i wolverine-ai. CLI: npx wolverine server/index.js. v1.0.0, 79 files, 125KB compressed. Includes src/, bin/, server/, examples/. GitHub: https://github.com/bobbyswhip/Wolverine",
+    text: "npm package: wolverine-ai on npmjs.com (v3.7.7). Install: npm i wolverine-ai. CLI: npx wolverine server/index.js. 85 files, 190KB compressed. Includes src/, bin/, examples/. Server directory created from src/templates/server/ on first run (never overwritten). GitHub: https://github.com/bobbyswhip/Wolverine. Unified billing: all AI calls route through inference proxy with credit-based billing. WOLVERINE_API_KEY authenticates through billing proxy, WOLVERINE_GPU_KEY for direct GPU access. 3 providers: openai, anthropic, wolverine (self-hosted GPU via Vast.ai).",
     metadata: { topic: "npm-package" },
   },
   {
@@ -162,7 +162,7 @@ const SEED_DOCS = [
     metadata: { topic: "smart-edit" },
   },
   {
-    text: "Token tracking: every AI call tracked with input/output tokens, USD cost, latencyMs, and success/failure. Per-model KPIs: avgLatencyMs, minLatencyMs, maxLatencyMs, tokensPerSecond, successRate, costPerCall, successes, failures. Aggregated by model, by category, by tool, by provider (openai/anthropic). Persisted to .wolverine/usage.json + .wolverine/usage-history.jsonl. Pricing includes both OpenAI (gpt-5.x, o4, codex) and Anthropic (opus-4, sonnet-4, haiku-4) families. Customizable via .wolverine/pricing.json. Telemetry sends all per-model performance data to platform backend for fleet-wide cost:speed:reliability analysis.",
+    text: "Token tracking: every AI call tracked with input/output tokens, USD cost, latencyMs, and success/failure. Per-model KPIs: avgLatencyMs, minLatencyMs, maxLatencyMs, tokensPerSecond, successRate, costPerCall, successes, failures. Aggregated by model, by category, by tool, by provider (openai/anthropic/wolverine). 9 analytics categories match the 9 settings.json model roles: reasoning (deep debugging), coding (fast path repair + fix sub-agents), chat (dashboard), tool (main agent with tool use), classifier (triage sub-agents: explore/plan/verify), audit (injection scan + security sub-agent), compacting (brain text compression), research (research agent + research sub-agent), embedding (brain vector embeddings). All categories tracked in byModelCategory cross-reference for per-task model comparison. Persisted to .wolverine/usage.json + .wolverine/usage-history.jsonl. Telemetry sends all per-model performance data to platform backend for fleet-wide analytics.",
     metadata: { topic: "token-tracking" },
   },
   {
