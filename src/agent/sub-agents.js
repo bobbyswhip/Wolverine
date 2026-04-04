@@ -97,9 +97,9 @@ async function spawnAgent(type, task, options = {}) {
     });
   }
 
-  // Map sub-agent type to analytics category matching the 9 model roles:
-  // explore/plan/verify = classifier (triage), fix/database = tool (uses tools to fix), research = research, security = audit
-  const categoryMap = { explore: "classifier", plan: "classifier", verify: "classifier", research: "research", fix: "tool", database: "tool", security: "audit" };
+  // Map sub-agent type to analytics category by ACTIVITY (what the AI is doing):
+  // All agents that use tools = "tool", classification/planning = "classifier", research = "research", security = "audit"
+  const categoryMap = { explore: "tool", plan: "classifier", verify: "tool", research: "research", fix: "tool", database: "tool", security: "audit" };
   const agent = new AgentEngine({
     sandbox: options.sandbox,
     logger: options.logger,

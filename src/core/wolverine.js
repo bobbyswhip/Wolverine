@@ -367,7 +367,7 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
           sandbox, logger, cwd, mcp,
           maxTurns: agentMaxTurns,
           maxTokens: tokenBudget.agent,
-          category: "reasoning",
+          category: "tool", // Agent uses tools (read_file, write_file, bash_exec) = tool category
         });
 
         const agentResult = await agent.run({

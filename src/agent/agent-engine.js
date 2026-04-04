@@ -331,7 +331,7 @@ class AgentEngine {
     this.logger = options.logger;
     this.cwd = options.cwd || process.cwd();
     this.mcp = options.mcp || null; // McpRegistry for external tools
-    this.category = options.category || "reasoning"; // Analytics category — matches model role
+    this.category = options.category || "tool"; // Agent uses tools = tool category by default
 
     // Budget constraints (claw-code: QueryEngineConfig)
     this.maxTurns = options.maxTurns || 15;
