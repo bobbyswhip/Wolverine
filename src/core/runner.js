@@ -558,6 +558,7 @@ class WolverineRunner {
         this._healInProgress = false;
         this._healStatus = null;
         this._spawn();
+        this._processPendingErrorHeal();
       } else {
         console.log(chalk.red(`\n🐺 Wolverine could not heal: ${result.explanation}`));
 
@@ -609,7 +610,13 @@ class WolverineRunner {
    * Unlike crash healing, the server is still running — we heal and restart.
    */
   async _healFromError(routePath, errorDetails) {
-    if (this._healInProgress || this._shuttingDown) return;
+    if (this._shuttingDown) return;
+    if (this._healInProgress) {
+      // Queue the error — process after current heal finishes
+      this._pendingErrorHeal = { routePath, errorDetails };
+      console.log(chalk.yellow(`  🔄 Heal in progress — queued IPC error on ${routePath} for after current heal`));
+      return;
+    }
     this._healInProgress = true;
 
     console.log(chalk.yellow(`\n🐺 Wolverine healing caught error on ${routePath}...`));
@@ -690,6 +697,16 @@ class WolverineRunner {
       console.log(chalk.red(`\n🐺 Error during heal: ${err.message}`));
       this._healInProgress = false;
       this._healStatus = null;
+    }
+  }
+
+  _processPendingErrorHeal() {
+    if (this._pendingErrorHeal) {
+      const { routePath, errorDetails } = this._pendingErrorHeal;
+      this._pendingErrorHeal = null;
+      console.log(chalk.yellow(`  🔄 Processing queued IPC error on ${routePath}`));
+      // Small delay to let the new child process start
+      setTimeout(() => this._healFromError(routePath, errorDetails), 2000);
     }
   }
 
