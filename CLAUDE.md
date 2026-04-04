@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Wolverine is a self-healing Node.js server framework. It wraps a server process, catches crashes AND caught 500 errors, diagnoses them with AI (OpenAI or Anthropic), generates fixes, verifies them, and restarts — automatically. Published as `wolverine-ai` on npm (v3.7.7). 65 exports, 85 files, 6 skills.
+Wolverine is a self-healing Node.js server framework. It wraps a server process, catches crashes AND caught 500 errors, diagnoses them with AI (OpenAI or Anthropic), generates fixes, verifies them, and restarts — automatically. Published as `wolverine-ai` on npm (v3.9.4). 65 exports, 87 files, 7 skills.
 
 ## Commands
 
@@ -142,7 +142,7 @@ The startup backup system snapshots `server/` before first spawn. If the server 
 
 - **Secrets:** `.env.local` (OPENAI_API_KEY, ANTHROPIC_API_KEY, WOLVERINE_ADMIN_KEY)
 - **Settings:** `server/config/settings.json` — provider, 3 model presets, cluster, telemetry, rate limits, health checks, autoUpdate, errorMonitor
-- **9 model slots = 9 analytics categories:** reasoning, coding, chat, tool, classifier, audit, compacting, research, embedding. Each tracked in byModelCategory for per-task model comparison.
+- **9 model slots, 9 analytics categories by ACTIVITY:** audit (injection scan), classifier (error classification), coding (fast path, no tools), tool (agent + sub-agents WITH tools), research (deep investigation), chat (summaries), compacting (brain compression), embedding (brain vectors), reasoning (reserved for deep analysis without tools). Category = what AI is DOING, not which model slot.
 - **Config priority:** env vars > `{provider}_settings` > defaults
 
 ## Files That Matter Most
