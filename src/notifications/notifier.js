@@ -29,11 +29,17 @@ const HUMAN_REQUIRED_PATTERNS = [
   { pattern: /(api|auth|token|key|credential).*(expired|revoked|rotated|invalid)/i, category: "auth", hint: "Credential has expired or been revoked" },
   { pattern: /authentication\s+failed/i, category: "auth", hint: "Authentication failed — check credentials" },
 
-  // Billing/Quota
+  // Billing/Quota — covers OpenAI, Anthropic, Wolverine, and generic patterns
   { pattern: /429\s*(too many|rate limit)/i, category: "billing", hint: "Rate limit hit — may need to upgrade plan or wait" },
   { pattern: /(quota|limit|credits?)\s*(exceeded|exhausted|depleted)/i, category: "billing", hint: "Usage quota or credits exhausted" },
   { pattern: /billing.*(?:issue|error|failed|inactive)/i, category: "billing", hint: "Billing issue on the account" },
   { pattern: /insufficient.*(funds|credits|quota)/i, category: "billing", hint: "Insufficient credits or funds" },
+  { pattern: /billing_hard_limit_reached/i, category: "billing", hint: "OpenAI billing hard limit reached — add payment method or raise limit" },
+  { pattern: /insufficient_quota/i, category: "billing", hint: "API quota exhausted — check billing dashboard" },
+  { pattern: /rate_limit_exceeded/i, category: "billing", hint: "API rate limit exceeded — wait or upgrade plan" },
+  { pattern: /402\s*(payment|required)/i, category: "billing", hint: "Payment required — check billing status" },
+  { pattern: /exceeded.*(?:budget|spending|token)/i, category: "billing", hint: "Spending or token budget exceeded" },
+  { pattern: /overloaded_error/i, category: "billing", hint: "Anthropic API overloaded — retry later" },
 
   // External service failures
   { pattern: /ECONNREFUSED/i, category: "service", hint: "External service connection refused — is it running?" },

@@ -169,7 +169,20 @@ async function _withRetry(fn, maxRetries = 3) {
     try {
       return await fn();
     } catch (err) {
-      const isRateLimit = err.status === 429 || err.code === "rate_limit_exceeded";
+      const msg = (err.message || "").toLowerCase();
+      const code = (err.code || "").toLowerCase();
+
+      // Permanent billing/quota errors — never retry, surface immediately
+      const isBillingError = err.status === 402
+        || /insufficient.*(quota|credits|funds)/i.test(msg)
+        || /billing_hard_limit|insufficient_quota|quota_exceeded/i.test(msg)
+        || /billing_hard_limit|insufficient_quota|quota_exceeded/i.test(code);
+      if (isBillingError) {
+        console.log(chalk.red(`  💳 Billing error (not retrying): ${err.message}`));
+        throw err;
+      }
+
+      const isRateLimit = err.status === 429 || code === "rate_limit_exceeded";
       const isServerError = err.status >= 500;
       if ((isRateLimit || isServerError) && attempt < maxRetries) {
         const delay = Math.min(1000 * Math.pow(2, attempt) + Math.random() * 1000, 30000);
