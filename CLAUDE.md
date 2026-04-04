@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Wolverine is a self-healing Node.js server framework. It wraps a server process, catches crashes AND caught 500 errors, diagnoses them with AI (OpenAI or Anthropic), generates fixes, verifies them, and restarts — automatically. Published as `wolverine-ai` on npm (v3.5.0). 65 exports, 83 files, 6 skills.
+Wolverine is a self-healing Node.js server framework. It wraps a server process, catches crashes AND caught 500 errors, diagnoses them with AI (OpenAI or Anthropic), generates fixes, verifies them, and restarts — automatically. Published as `wolverine-ai` on npm (v3.7.4). 65 exports, 83 files, 6 skills.
 
 ## Commands
 
@@ -44,7 +44,7 @@ Error detected (crash OR caught 500 via IPC)
   → Token budget by complexity: simple=20K, moderate=50K, complex=100K
   → Goal Loop (3 iterations):
       1. Fast path: CODING_MODEL, JSON with code+commands, backup diff context
-      2. Agent: dynamic prompt (400 tokens simple, 1200 complex), 18 tools, 45s/call timeout
+      2. Agent: dynamic prompt (400 tokens simple, 1200 complex), 18 tools, 90s/call timeout
          Turn budget: simple=4, config/ENOENT=5, complex=8
       3. Sub-agents: explore→plan→fix (Haiku triage, Sonnet/Opus fix only)
   → Verify: syntax → boot probe (route probe skipped — ErrorMonitor is safety net)
@@ -117,7 +117,8 @@ Heartbeats every 60s. Stable instance ID (persisted to `.wolverine/instance-id`)
 - **Error threshold: 1** — single 500 triggers heal. 60s cooldown per route.
 - **Empty stderr → just restart, no AI.** Prevents token burn on signal kills.
 - **bash_exec: 30s default, 60s cap.**
-- **Agent per-API-call timeout: 45s.** Prevents indefinite hangs. Returns partial results if files already modified.
+- **AI call timeout: 90s default** (configurable via `WOLVERINE_AI_CALL_TIMEOUT_MS`). Self-hosted GPU needs more time.
+- **Agent per-API-call timeout: 90s default** (configurable via `WOLVERINE_AI_CALL_TIMEOUT_MS`). Returns partial results if files already modified.
 - **Agent turn budget: simple=4, config=5, complex=8.**
 - **SIGTERM startup grace: 3s.** Prevents restart scripts from killing newly spawned process.
 - **Process dedup via PID file.** Kills old process on startup. Race-safe PID cleanup.

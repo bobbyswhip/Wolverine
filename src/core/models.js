@@ -119,9 +119,12 @@ function getModel(role) {
 function getModelConfig() {
   const config = {};
   for (const [role, def] of Object.entries(MODEL_ROLES)) {
+    const resolved = getModel(role);
+    const fromEnv = !!process.env[def.envKey];
+    const fromDefault = resolved === def.default;
     config[role] = {
-      model: process.env[def.envKey] || def.default,
-      source: process.env[def.envKey] ? "env" : "default",
+      model: resolved,
+      source: fromEnv ? "env" : fromDefault ? "default" : "settings",
       tier: def.tier,
     };
   }

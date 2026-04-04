@@ -144,9 +144,10 @@ console.log(chalk.yellow.bold("\n  🐺 Wolverine Node.js — Autonomous Server 
 logSystemInfo(systemInfo);
 console.log("");
 
-console.log(chalk.bold("  Models:"));
+console.log(chalk.bold(`  Models (${config.provider}):`));
 logModelConfig(chalk);
 console.log("");
+console.log(chalk.gray(`  Provider:   ${config.provider}`));
 console.log(chalk.gray(`  Script:     ${scriptPath}`));
 console.log(chalk.gray(`  Port:       ${config.server.port}`));
 console.log(chalk.gray(`  Retries:    ${config.server.maxRetries}`));

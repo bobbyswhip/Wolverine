@@ -43,6 +43,7 @@ function loadConfig() {
       classifier: process.env.CLASSIFIER_MODEL   || modelSource.classifier || "gpt-4o-mini",
       audit:      process.env.AUDIT_MODEL        || modelSource.audit      || "gpt-4o-mini",
       compacting: process.env.COMPACTING_MODEL   || modelSource.compacting || "gpt-4o-mini",
+      utility:    process.env.COMPACTING_MODEL   || modelSource.compacting || "gpt-4o-mini",
       research:   process.env.RESEARCH_MODEL     || modelSource.research   || "gpt-4o",
       embedding:  process.env.TEXT_EMBEDDING_MODEL || modelSource.embedding || "text-embedding-3-small",
     },

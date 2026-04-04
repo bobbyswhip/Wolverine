@@ -414,7 +414,7 @@ class AgentEngine {
       }
 
       let response;
-      const AI_CALL_TIMEOUT_MS = 45000; // 45s per API call — prevents indefinite hangs
+      const AI_CALL_TIMEOUT_MS = parseInt(process.env.WOLVERINE_AI_CALL_TIMEOUT_MS, 10) || 90000; // 90s per API call — self-hosted GPU needs more time
       try {
         response = await Promise.race([
           aiCallWithHistory({
@@ -423,7 +423,7 @@ class AgentEngine {
             tools: allTools,
             maxTokens: 4096,
           }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error("AI call timed out after 45s")), AI_CALL_TIMEOUT_MS)),
+          new Promise((_, reject) => setTimeout(() => reject(new Error(`AI call timed out after ${AI_CALL_TIMEOUT_MS / 1000}s`)), AI_CALL_TIMEOUT_MS)),
         ]);
       } catch (err) {
         console.log(chalk.red(`  Agent API error: ${err.message}`));
