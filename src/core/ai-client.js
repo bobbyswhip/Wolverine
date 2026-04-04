@@ -232,7 +232,7 @@ async function aiCall({ model, systemPrompt, userPrompt, maxTokens = 2048, tools
         result = await _chatCall(_getWolverineClient(), { model, systemPrompt, userPrompt, maxTokens, tools, toolChoice });
       } catch (proxyErr) {
         // If billing proxy is down (server crashing), fall back to direct GPU
-        const isConnErr = /ECONNREFUSED|ECONNRESET|ETIMEDOUT|fetch failed/i.test(proxyErr.message || "");
+        const isConnErr = /ECONNREFUSED|ECONNRESET|ETIMEDOUT|fetch failed|Connection error/i.test(proxyErr.message || "");
         const directClient = _getWolverineDirectClient();
         if (isConnErr && directClient) {
           console.log(chalk.yellow("  ⚠️  Billing proxy down — using direct GPU (unbilled)"));
@@ -269,7 +269,7 @@ async function aiCallWithHistory({ model, messages, tools, maxTokens = 4096, cat
       try {
         result = await _chatCallWithHistory(_getWolverineClient(), { model, messages, tools, maxTokens });
       } catch (proxyErr) {
-        const isConnErr = /ECONNREFUSED|ECONNRESET|ETIMEDOUT|fetch failed/i.test(proxyErr.message || "");
+        const isConnErr = /ECONNREFUSED|ECONNRESET|ETIMEDOUT|fetch failed|Connection error/i.test(proxyErr.message || "");
         const directClient = _getWolverineDirectClient();
         if (isConnErr && directClient) {
           console.log(chalk.yellow("  ⚠️  Billing proxy down — using direct GPU (unbilled)"));

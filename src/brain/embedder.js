@@ -51,7 +51,7 @@ async function embed(text) {
     response = await client.embeddings.create({ model, input: text });
   } catch (err) {
     // If wolverine proxy is down (startup, crash loop), fall back to OpenAI direct
-    if (provider === "wolverine" && /ECONNREFUSED|ECONNRESET|ETIMEDOUT|fetch failed/i.test(err.message || "")) {
+    if (provider === "wolverine" && /ECONNREFUSED|ECONNRESET|ETIMEDOUT|fetch failed|Connection error/i.test(err.message || "")) {
       const directClient = getClient("openai");
       response = await directClient.embeddings.create({ model: "text-embedding-3-small", input: text });
     } else {
@@ -98,7 +98,7 @@ async function embedBatch(texts) {
   try {
     response = await client.embeddings.create({ model, input: uncached });
   } catch (err) {
-    if (provider === "wolverine" && /ECONNREFUSED|ECONNRESET|ETIMEDOUT|fetch failed/i.test(err.message || "")) {
+    if (provider === "wolverine" && /ECONNREFUSED|ECONNRESET|ETIMEDOUT|fetch failed|Connection error/i.test(err.message || "")) {
       const directClient = getClient("openai");
       response = await directClient.embeddings.create({ model: "text-embedding-3-small", input: uncached });
     } else {
