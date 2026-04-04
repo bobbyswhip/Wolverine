@@ -289,14 +289,17 @@ class WolverineRunner {
     if (this.child) {
       const oldChild = this.child;
       this.child = null;
+      let spawned = false;
 
       // Wait for old process to actually exit before spawning new one
       const onExit = () => {
+        if (spawned) return; // Prevent double-spawn from exit + force-kill timeout
+        spawned = true;
         // Give port time to fully release (TIME_WAIT)
         setTimeout(() => {
           this._ensurePortFree();
-          setTimeout(() => this._spawn(), 200);
-        }, 300);
+          setTimeout(() => this._spawn(), 500);
+        }, 500);
       };
 
       oldChild.removeAllListeners("exit");
@@ -305,8 +308,10 @@ class WolverineRunner {
 
       // Force kill if it doesn't exit in 3s
       setTimeout(() => {
-        this._killProcessTree(oldChild.pid, "SIGKILL");
-        onExit();
+        if (!spawned) {
+          this._killProcessTree(oldChild.pid, "SIGKILL");
+          onExit();
+        }
       }, 3000);
     } else {
       this._ensurePortFree();
@@ -579,7 +584,8 @@ class WolverineRunner {
         this._healStatus = null;
         // Clear pending errors — the heal fixed the root cause, stale errors are irrelevant
         this._pendingErrorHeal = null;
-        this._spawn();
+        // Use restart() to properly kill old child before spawning — prevents EADDRINUSE
+        this.restart();
       } else {
         console.log(chalk.red(`\n🐺 Wolverine could not heal: ${result.explanation}`));
 
