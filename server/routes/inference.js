@@ -14,7 +14,8 @@ const crypto = require("crypto");
  * Queue: when GPU is at capacity, requests queue with timeout.
  */
 
-const INFERENCE_URL = process.env.WOLVERINE_INFERENCE_URL || "http://ssh8.vast.ai:24233";
+// GPU backend URL — separate from WOLVERINE_INFERENCE_URL (which is the billing proxy)
+const INFERENCE_URL = process.env.WOLVERINE_GPU_URL || process.env.WOLVERINE_INFERENCE_URL || "http://ssh8.vast.ai:24233";
 const GPU_KEY = process.env.WOLVERINE_GPU_KEY || "";
 
 // Pricing in CREDITS per million tokens ($1 = 100 credits)
