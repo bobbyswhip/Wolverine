@@ -1,6 +1,6 @@
 const chalk = require("chalk");
 const { parseError } = require("./error-parser");
-const { requestRepair, getClient } = require("./ai-client");
+const { requestRepair, getClient, aiCall } = require("./ai-client");
 const { getModel } = require("./models");
 const { applyPatch } = require("./patcher");
 const { verifyFix } = require("./verifier");
@@ -232,23 +232,51 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
     } catch {}
   }
 
-  // 7. Research — check past attempts to avoid loops
+  // 7. Classify error complexity — CLASSIFIER_MODEL determines strategy
+  let errorComplexity = "moderate";
+  try {
+    const classifyResult = await aiCall({
+      model: getModel("classifier"),
+      systemPrompt: "You classify Node.js errors. Respond with ONLY one word: SIMPLE, MODERATE, or COMPLEX.",
+      userPrompt: `Classify this error:\n${parsed.errorMessage}\n\nFile: ${parsed.filePath || "unknown"}\nType: ${parsed.errorType || "unknown"}`,
+      maxTokens: 10,
+      category: "classifier",
+    });
+    const word = (classifyResult.content || "").trim().toUpperCase();
+    if (word.includes("SIMPLE")) errorComplexity = "simple";
+    else if (word.includes("COMPLEX")) errorComplexity = "complex";
+    else errorComplexity = "moderate";
+    console.log(chalk.gray(`  🏷️  Classifier: ${errorComplexity}`));
+  } catch {
+    // Fallback to regex classification
+    if (/TypeError|ReferenceError|SyntaxError|Cannot find module/.test(parsed.errorMessage)) errorComplexity = "simple";
+    else if (/ECONNREFUSED|timeout|ENOENT|EACCES/.test(parsed.errorMessage)) errorComplexity = "moderate";
+    else errorComplexity = "complex";
+    console.log(chalk.gray(`  🏷️  Classifier (fallback): ${errorComplexity}`));
+  }
+
+  // 7b. Research — look up past fixes AND search for solutions
   const researcher = new ResearchAgent({ brain, logger });
   let researchContext = "";
   try {
     researchContext = await researcher.buildFixContext(parsed.errorMessage);
     if (researchContext) console.log(chalk.gray(`  🔍 Research: found past context for this error`));
+    // For moderate/complex errors, also do a deep research call
+    if (errorComplexity !== "simple" && brain && brain._initialized) {
+      const deepCtx = await researcher.research(parsed.errorMessage, researchContext || brainContext);
+      if (deepCtx) researchContext = (researchContext || "") + "\n" + deepCtx;
+    }
   } catch {}
 
-  // 7b. Token budget by error complexity — simple bugs get tight caps
-  const isSimpleError = /TypeError|ReferenceError|SyntaxError|Cannot find module/.test(parsed.errorMessage);
-  const isModerateError = /ECONNREFUSED|timeout|ENOENT|EACCES|EADDRINUSE/.test(parsed.errorMessage);
+  // 7c. Token budget by classified complexity
+  const isSimpleError = errorComplexity === "simple";
+  const isModerateError = errorComplexity === "moderate";
   const tokenBudget = isSimpleError
     ? { fast: 5000, agent: 20000, subAgent: 15000 }
     : isModerateError
     ? { fast: 10000, agent: 50000, subAgent: 30000 }
     : { fast: 15000, agent: 100000, subAgent: 50000 };
-  console.log(chalk.gray(`  💰 Token budget: ${isSimpleError ? "simple" : isModerateError ? "moderate" : "complex"} (agent: ${tokenBudget.agent})`));
+  console.log(chalk.gray(`  💰 Token budget: ${errorComplexity} (agent: ${tokenBudget.agent})`));
 
   // 8. Goal Loop — set goal, iterate until fixed or exhausted
   const loop = new GoalLoop({
@@ -429,6 +457,21 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
       duration,
       filesModified: goalResult.agentStats?.filesModified || [],
     });
+  }
+
+  // Generate a concise heal summary using CHAT_MODEL
+  if (goalResult.success) {
+    try {
+      const summaryResult = await aiCall({
+        model: getModel("chat"),
+        systemPrompt: "Summarize this server heal in 1-2 sentences for a developer dashboard. Be specific about what broke and how it was fixed.",
+        userPrompt: `Error: ${parsed.errorMessage}\nFile: ${parsed.filePath || "unknown"}\nFix mode: ${goalResult.mode}\nResolution: ${goalResult.explanation?.slice(0, 200) || "fixed"}`,
+        maxTokens: 80,
+        category: "chat",
+      });
+      goalResult.summary = (summaryResult.content || "").trim();
+      if (goalResult.summary) console.log(chalk.cyan(`  💬 ${goalResult.summary}`));
+    } catch {}
   }
 
   // Record outcome to brain — both successes AND failures with full context
