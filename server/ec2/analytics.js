@@ -1,4 +1,18 @@
 const { pool } = require("../lib/db");
+const fs = require("fs");
+const path = require("path");
+
+/**
+ * Read local usage.json — this server IS the analytics backend,
+ * so it doesn't send heartbeats to itself. Its own usage data
+ * lives in .wolverine/usage.json and must be included directly.
+ */
+function getLocalUsage() {
+  try {
+    const usagePath = path.join(process.cwd(), ".wolverine", "usage.json");
+    return JSON.parse(fs.readFileSync(usagePath, "utf-8"));
+  } catch { return null; }
+}
 
 function detectProvider(model) {
   if (!model) return "openai";
@@ -159,19 +173,82 @@ async function routes(fastify) {
         }
       }
     }
+    // Merge local server's own usage (this server doesn't heartbeat to itself)
+    const local = getLocalUsage();
+    if (local) {
+      // Local byProvider
+      if (local.byProvider) {
+        for (const [prov, stats] of Object.entries(local.byProvider)) {
+          if (!byProvider[prov]) byProvider[prov] = { tokens: 0, cost: 0, calls: 0 };
+          byProvider[prov].tokens += stats.tokens || stats.total || 0;
+          byProvider[prov].cost += stats.cost || 0;
+          byProvider[prov].calls += stats.calls || 0;
+        }
+      }
+      // Local byCategory
+      if (local.byCategory) {
+        for (const [cat, val] of Object.entries(local.byCategory)) {
+          const tokens = typeof val === "object" ? val.total || val.tokens || 0 : val || 0;
+          const cost = typeof val === "object" ? val.cost || 0 : 0;
+          const calls = typeof val === "object" ? val.calls || 0 : 0;
+          if (!byCategory[cat]) byCategory[cat] = { tokens: 0, cost: 0, calls: 0 };
+          byCategory[cat].tokens += tokens;
+          byCategory[cat].cost += cost;
+          byCategory[cat].calls += calls;
+        }
+      }
+      // Local byModelCategory — the key data for per-task analytics
+      if (local.byModelCategory) {
+        const items = Array.isArray(local.byModelCategory)
+          ? local.byModelCategory
+          : Object.values(local.byModelCategory);
+        for (const item of items) {
+          if (!item || !item.model || !item.category) continue;
+          const key = `${item.model}|${item.category}`;
+          const calls = item.calls || 0;
+          const successes = item.successes || 0;
+          const failures = item.failures || 0;
+          const successRate = calls > 0 ? parseFloat((((calls - failures) / calls) * 100).toFixed(2)) : 100;
+          const avgLatencyMs = calls > 0 && item.totalLatencyMs ? Math.round(item.totalLatencyMs / calls) : 0;
+          const tps = item.totalLatencyMs > 0 ? Math.round((item.total || 0) / (item.totalLatencyMs / 1000) * 10) / 10 : 0;
+          const entry = { model: item.model, category: item.category, calls, cost: item.cost || 0, tokens: item.total || 0, input: item.input || 0, output: item.output || 0, successRate, avgLatencyMs, tokensPerSecond: tps };
+          if (!mcMerged[key]) {
+            mcMerged[key] = entry;
+          } else {
+            const e = mcMerged[key];
+            const prevCalls = e.calls || 0;
+            const totalCalls = prevCalls + calls;
+            e.calls = totalCalls;
+            e.cost = (e.cost || 0) + entry.cost;
+            e.tokens = (e.tokens || 0) + entry.tokens;
+            e.input = (e.input || 0) + entry.input;
+            e.output = (e.output || 0) + entry.output;
+            if (totalCalls > 0) {
+              e.successRate = ((e.successRate || 0) * prevCalls + entry.successRate * calls) / totalCalls;
+              e.avgLatencyMs = Math.round(((e.avgLatencyMs || 0) * prevCalls + entry.avgLatencyMs * calls) / totalCalls);
+              e.tokensPerSecond = ((e.tokensPerSecond || 0) * prevCalls + entry.tokensPerSecond * calls) / totalCalls;
+            }
+          }
+        }
+      }
+      // Add local tokens/cost to totals
+      const localTokens = local.totalTokens || 0;
+      const localCost = local.totalCostUsd || 0;
+      const localCalls = local.totalCalls || 0;
+    }
     const byModelCategory = Object.values(mcMerged);
 
     return {
       totalServers: parseInt(srv.total, 10),
-      activeServers: parseInt(srv.active, 10),
+      activeServers: Math.max(parseInt(srv.active, 10), 1), // This server is always active
       downServers: parseInt(srv.down, 10),
       totalRepairs: parseInt(rep.total, 10),
       successRate: parseFloat(rep.success_rate) || 0,
       repairCost: parseFloat(rep.cost),
       costPerRepair: parseFloat(rep.cost_per_repair),
-      totalCost: parseFloat(usg.cost),
-      totalTokens: parseInt(usg.tokens, 10),
-      totalCalls: parseInt(usg.calls, 10),
+      totalCost: parseFloat(usg.cost) + (local?.totalCostUsd || 0),
+      totalTokens: parseInt(usg.tokens, 10) + (local?.totalTokens || 0),
+      totalCalls: parseInt(usg.calls, 10) + (local?.totalCalls || 0),
       byProvider,
       byCategory,
       byModelCategory,
