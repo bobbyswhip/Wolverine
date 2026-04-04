@@ -446,6 +446,10 @@ class AgentEngine {
         return { success: false, summary: "Token budget exhausted", filesModified: this.filesModified, turnCount: this.turnCount, totalTokens: this.totalTokens };
       }
 
+      if (!response.choices || !response.choices[0]) {
+        console.log(chalk.red(`  ⚠️  AI returned no choices: ${JSON.stringify(response).slice(0, 200)}`));
+        return { success: false, summary: "AI returned empty response", filesModified: this.filesModified, turnCount: this.turnCount, totalTokens: this.totalTokens };
+      }
       const choice = response.choices[0];
       const assistantMessage = choice.message || choice;
       this.messages.push(assistantMessage);

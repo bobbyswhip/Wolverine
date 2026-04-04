@@ -615,13 +615,27 @@ ${backupSourceCode ? `## Last Known Working Version\n\`\`\`javascript\n${backupS
 Include both if needed, or just one.`;
 
   const result = await aiCall({ model, systemPrompt, userPrompt, maxTokens: 2048, category: "coding" });
-  const content = result.content;
-  const cleaned = content.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+  const content = (result.content || "").trim();
+
+  // Strip thinking tags (Gemma), markdown fences, and any prefix text
+  let cleaned = content
+    .replace(/<\|channel>.*?<channel\|>/gs, "")
+    .replace(/<\|think\|>[\s\S]*?<\|\/think\|>/g, "")
+    .replace(/^```(?:json)?\s*/gm, "")
+    .replace(/```\s*$/gm, "")
+    .trim();
+
+  // Extract JSON object from response
+  const jsonMatch = cleaned.match(/\{[\s\S]*"(?:explanation|changes|commands)"[\s\S]*\}/);
+  if (jsonMatch) cleaned = jsonMatch[0];
 
   try {
     return JSON.parse(cleaned);
-  } catch (parseErr) {
-    throw new Error(`Failed to parse AI response as JSON.\nRaw response:\n${content}`);
+  } catch {
+    // Last resort: try to find any JSON object
+    const anyJson = cleaned.match(/\{[\s\S]*\}/);
+    if (anyJson) try { return JSON.parse(anyJson[0]); } catch {}
+    throw new Error(`AI response was not valid JSON`);
   }
 }
 
