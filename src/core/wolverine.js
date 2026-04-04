@@ -487,8 +487,11 @@ async function tryOperationalFix(parsed, cwd, logger) {
     }
   }
 
-  // Pattern 2: ENOENT on config/data files the server expects
-  const enoent = msg.match(/ENOENT.*?'([^']+)'/);
+  // Pattern 2: Missing files — ENOENT or error messages mentioning missing file paths
+  const enoent = msg.match(/ENOENT.*?'([^']+)'/)
+    || msg.match(/[Mm]issing\s+(?:required\s+)?(?:config\s+)?file:\s*([^\s,."]+\.\w+)/)
+    || msg.match(/no such file.*?'([^']+)'/)
+    || msg.match(/cannot find.*?'([^']+\.\w+)'/i);
   if (enoent) {
     const missingFile = enoent[1];
     const fs = require("fs");
@@ -501,10 +504,31 @@ async function tryOperationalFix(parsed, cwd, logger) {
         fs.mkdirSync(path.dirname(missingFile), { recursive: true });
         const ext = path.extname(missingFile).toLowerCase();
 
-        // For JSON config files, try to infer expected structure from the code that loads them
+        // For JSON config files, try to infer expected structure from the code or error message
         let content = "";
         if (ext === ".json") {
-          content = _inferJsonConfig(missingFile, cwd, parsed) || "{}";
+          content = _inferJsonConfig(missingFile, cwd, parsed);
+          // Also try to extract fields from the error message: "Expected JSON with { field1, field2 }"
+          if (!content) {
+            const fieldsMatch = msg.match(/(?:expected|with|fields?)[:\s]*\{\s*([^}]+)\}/i);
+            if (fieldsMatch) {
+              const fields = fieldsMatch[1].split(/[,\s]+/).filter(f => /^[a-zA-Z_]\w*$/.test(f.trim()));
+              if (fields.length > 0) {
+                const config = {};
+                for (const f of fields) {
+                  const lower = f.toLowerCase();
+                  if (/url|endpoint|host|uri/.test(lower)) config[f] = "http://localhost:3000";
+                  else if (/timeout|delay/.test(lower)) config[f] = 5000;
+                  else if (/port/.test(lower)) config[f] = 3000;
+                  else if (/enabled|active/.test(lower)) config[f] = true;
+                  else config[f] = "";
+                }
+                console.log(chalk.gray(`  🔍 Inferred ${fields.length} fields from error message: ${fields.join(", ")}`));
+                content = JSON.stringify(config, null, 2);
+              }
+            }
+          }
+          content = content || "{}";
         } else {
           const defaults = { ".yaml": "", ".yml": "", ".log": "", ".txt": "", ".csv": "", ".env": "" };
           content = defaults[ext] || "";
