@@ -282,6 +282,9 @@ class WolverineRunner {
     resetConfig();
     this.healthMonitor.stop();
     this._clearStabilityTimer();
+    // Clear any pending heals — restart is a clean slate
+    this._pendingErrorHeal = null;
+    this._healInProgress = false;
 
     if (this.child) {
       const oldChild = this.child;
@@ -574,8 +577,9 @@ class WolverineRunner {
 
         this._healInProgress = false;
         this._healStatus = null;
+        // Clear pending errors — the heal fixed the root cause, stale errors are irrelevant
+        this._pendingErrorHeal = null;
         this._spawn();
-        this._processPendingErrorHeal();
       } else {
         console.log(chalk.red(`\n🐺 Wolverine could not heal: ${result.explanation}`));
 
