@@ -172,7 +172,7 @@ class Notifier {
       systemPrompt: "You summarize server errors for developers. Write 1-2 short sentences. Be direct and actionable. Do not include any secrets, passwords, or API key values — only refer to them by name (e.g. 'the OPENAI_API_KEY').",
       userPrompt: `Summarize this error for a developer notification:\n\nCategory: ${classification.category}\nError: ${safeError}\n\nStack (first 300 chars): ${safeStack.slice(0, 300)}`,
       maxTokens: 100,
-      category: "security",
+      category: "audit",
     });
 
     // Double-sanitize the AI response (in case the AI echoes something)

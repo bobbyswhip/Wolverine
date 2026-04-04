@@ -15,7 +15,14 @@
  */
 function detectProvider(model) {
   if (!model) return "openai";
-  if (/^claude/i.test(model)) return "anthropic";
+  if (/^wolverine/i.test(model) || /^gemma/i.test(model)) return "wolverine";
+  if (/^claude/i.test(model) || /^anthropic/i.test(model)) return "anthropic";
+  if (/^gemini/i.test(model) || /^google/i.test(model)) return "google";
+  if (/^mistral/i.test(model) || /^codestral/i.test(model) || /^pixtral/i.test(model)) return "mistral";
+  if (/^llama/i.test(model) || /^meta/i.test(model)) return "meta";
+  if (/^deepseek/i.test(model)) return "deepseek";
+  if (/^command/i.test(model) || /^cohere/i.test(model)) return "cohere";
+  // Default: OpenAI (gpt-*, o1-*, o3-*, o4-*, codex-*, text-embedding-*, dall-e-*, etc.)
   return "openai";
 }
 

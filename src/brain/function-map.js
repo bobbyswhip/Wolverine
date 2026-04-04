@@ -17,7 +17,7 @@ const path = require("path");
  * - Config files (.env, .json, .yaml)
  */
 
-const SKIP_DIRS = new Set(["node_modules", ".wolverine", ".git", "dist", "build", "coverage", "src", "bin", "tests"]);
+const SKIP_DIRS = new Set(["node_modules", ".wolverine", ".git", "dist", "build", "coverage", "src", "bin", "tests", "examples", "public", "static", "assets", "__tests__", ".next", ".nuxt"]);
 const CODE_EXTENSIONS = new Set([".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx"]);
 const CONFIG_EXTENSIONS = new Set([".json", ".yaml", ".yml", ".toml", ".env"]);
 
@@ -51,6 +51,11 @@ function scanProject(projectRoot) {
 
   // Recursive scan
   _scanDir(root, root, map);
+
+  // Cap collections to prevent memory bloat on large projects
+  if (map.functions.length > 500) map.functions = map.functions.slice(0, 500);
+  if (map.classes.length > 200) map.classes = map.classes.slice(0, 200);
+  if (map.exports.length > 300) map.exports = map.exports.slice(0, 300);
 
   // Build summary
   map.summary = _buildSummary(map);
@@ -88,11 +93,20 @@ function _scanDir(dir, root, map) {
 
     map.files.push({ path: relPath, type: "code" });
 
+    // Skip large/minified files — they bloat memory and aren't useful for repair context
+    let stat;
+    try { stat = fs.statSync(fullPath); } catch { continue; }
+    if (stat.size > 100000) continue; // Skip files > 100KB (bundles, minified, generated)
+
     // Parse the file for patterns
     let content;
     try {
       content = fs.readFileSync(fullPath, "utf-8");
     } catch { continue; }
+
+    // Skip minified code (avg line length > 200 chars = likely minified)
+    const lines = content.split("\n");
+    if (lines.length > 0 && content.length / lines.length > 200) continue;
 
     _extractRoutes(content, relPath, map);
     _extractExports(content, relPath, map);

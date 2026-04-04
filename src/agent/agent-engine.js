@@ -448,6 +448,15 @@ class AgentEngine {
       const assistantMessage = choice.message || choice;
       this.messages.push(assistantMessage);
 
+      // Parse Gemma-style text tool calls: "call:tool_name{json_args}" → structured tool_calls
+      if ((!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) && assistantMessage.content) {
+        const parsed = _parseTextToolCalls(assistantMessage.content);
+        if (parsed.length > 0) {
+          assistantMessage.tool_calls = parsed;
+          console.log(chalk.gray(`  🔧 Parsed ${parsed.length} tool call(s) from text output`));
+        }
+      }
+
       if (!assistantMessage.tool_calls || assistantMessage.tool_calls.length === 0) {
         if (assistantMessage.content) {
           console.log(chalk.gray(`  💬 ${(assistantMessage.content || "").slice(0, 200)}`));
@@ -1221,6 +1230,52 @@ function _runPostHook(toolName, toolInput, toolOutput, isError, cwd) {
       } catch {}
     }
   } catch {}
+}
+
+/**
+ * Parse Gemma-style text tool calls into OpenAI tool_calls format.
+ * Gemma outputs: "call:tool_name{json_args}" or "<|tool_call>call:tool_name{args}<tool_call|>"
+ * We convert to: [{ id, type: "function", function: { name, arguments } }]
+ */
+function _parseTextToolCalls(content) {
+  if (!content) return [];
+  const calls = [];
+  // Match patterns: call:name{args} or call:name{"key":"val"}
+  const patterns = [
+    /call:(\w+)\{([^}]*(?:\{[^}]*\}[^}]*)*)\}/g,  // call:name{args with nested braces}
+    /call:(\w+)\(([^)]*)\)/g,                        // call:name(args)
+  ];
+  for (const regex of patterns) {
+    let match;
+    while ((match = regex.exec(content)) !== null) {
+      const name = match[1];
+      let argsStr = match[2];
+      // Try to parse as JSON, otherwise build from key:value pairs
+      let args;
+      try {
+        // Clean up Gemma's quoting: path:"value" → "path":"value"
+        const cleaned = argsStr.replace(/(\w+)\s*:\s*/g, '"$1":').replace(/<\|"\|>/g, '"');
+        args = JSON.parse("{" + cleaned + "}");
+      } catch {
+        try { args = JSON.parse(argsStr); } catch {
+          // Last resort: treat as single string argument for the most common param
+          const paramGuess = argsStr.replace(/['"<|>]/g, "").trim();
+          if (name === "read_file" || name === "glob_files") args = { path: paramGuess };
+          else if (name === "grep_code") args = { pattern: paramGuess };
+          else if (name === "bash_exec") args = { command: paramGuess };
+          else if (name === "write_file") args = { path: paramGuess, content: "" };
+          else args = { input: paramGuess };
+        }
+      }
+      calls.push({
+        id: "call_" + Date.now().toString(36) + "_" + calls.length,
+        type: "function",
+        function: { name, arguments: JSON.stringify(args) },
+      });
+    }
+    if (calls.length > 0) break; // use first matching pattern
+  }
+  return calls;
 }
 
 module.exports = { AgentEngine, TOOL_DEFINITIONS, BLOCKED_COMMANDS };

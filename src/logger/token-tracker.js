@@ -33,6 +33,8 @@ class TokenTracker {
     this._byModel = {};
     // Per-category totals
     this._byCategory = {};
+    // Per-model-per-category cross-reference (model::category → stats)
+    this._byModelCategory = {};
     // Per-tool totals
     this._byTool = {};
     // Timeline: recent entries for charts (in-memory)
@@ -87,7 +89,7 @@ class TokenTracker {
     };
 
     // Accumulate by model
-    if (!this._byModel[model]) this._byModel[model] = { input: 0, output: 0, total: 0, calls: 0, cost: 0, successes: 0, failures: 0, totalLatencyMs: 0, minLatencyMs: Infinity, maxLatencyMs: 0, cacheCreation: 0, cacheRead: 0, cacheSavings: 0 };
+    if (!this._byModel[model]) this._byModel[model] = { input: 0, output: 0, total: 0, calls: 0, cost: 0, successes: 0, failures: 0, totalLatencyMs: 0, totalLatencyTokens: 0, timedCalls: 0, minLatencyMs: Infinity, maxLatencyMs: 0, cacheCreation: 0, cacheRead: 0, cacheSavings: 0 };
     const m = this._byModel[model];
     m.input += entry.input;
     m.output += entry.output;
@@ -100,6 +102,8 @@ class TokenTracker {
     if (entry.success) m.successes++; else m.failures++;
     if (latencyMs > 0) {
       m.totalLatencyMs += latencyMs;
+      m.totalLatencyTokens += total;
+      m.timedCalls++;
       if (latencyMs < m.minLatencyMs) m.minLatencyMs = latencyMs;
       if (latencyMs > m.maxLatencyMs) m.maxLatencyMs = latencyMs;
     }
@@ -111,6 +115,18 @@ class TokenTracker {
     this._byCategory[category].total += total;
     this._byCategory[category].calls++;
     this._byCategory[category].cost += cost.total;
+
+    // Accumulate by model+category cross-reference
+    const mcKey = `${model}::${category}`;
+    if (!this._byModelCategory[mcKey]) this._byModelCategory[mcKey] = { model, category, input: 0, output: 0, total: 0, calls: 0, cost: 0, successes: 0, failures: 0, totalLatencyMs: 0 };
+    const mc = this._byModelCategory[mcKey];
+    mc.input += entry.input;
+    mc.output += entry.output;
+    mc.total += total;
+    mc.calls++;
+    mc.cost += cost.total;
+    if (entry.success) mc.successes++; else mc.failures++;
+    if (latencyMs > 0) mc.totalLatencyMs += latencyMs;
 
     // Accumulate by tool
     if (tool) {
@@ -158,6 +174,7 @@ class TokenTracker {
       },
       byModel: this._formatModelStats(),
       byCategory: this._byCategory,
+      byModelCategory: this._formatModelCategoryStats(),
       byTool: this._byTool,
       // Recent in-memory timeline
       timeline: this._timeline.slice(-100).map(e => ({
@@ -188,17 +205,40 @@ class TokenTracker {
         cacheCreation: m.cacheCreation || 0,
         cacheRead: m.cacheRead || 0,
         cacheSavings: Math.round((m.cacheSavings || 0) * 1000000) / 1000000,
-        successes: m.successes || m.calls,
+        successes: m.successes != null ? m.successes : m.calls - (m.failures || 0),
         failures: m.failures || 0,
-        successRate: m.calls > 0 ? Math.round(((m.successes || m.calls) / m.calls) * 100) : 0,
-        avgLatencyMs: m.calls > 0 && m.totalLatencyMs ? Math.round(m.totalLatencyMs / m.calls) : 0,
+        successRate: m.calls > 0 ? parseFloat((((m.calls - (m.failures || 0)) / m.calls) * 100).toFixed(2)) : 0,
+        // Latency normalized by token count
+        avgLatencyMs: (m.timedCalls || 0) > 0 ? Math.round(m.totalLatencyMs / m.timedCalls) : 0,
+        msPerKToken: (m.totalLatencyTokens || 0) > 0 ? Math.round((m.totalLatencyMs / m.totalLatencyTokens) * 1000) : 0,
+        tokensPerSecond: m.totalLatencyMs > 0 ? Math.round((m.totalLatencyTokens || m.total) / (m.totalLatencyMs / 1000) * 10) / 10 : 0,
+        outputTokPerSecond: m.totalLatencyMs > 0 && m.output > 0 ? Math.round((m.output / (m.totalLatencyMs / 1000)) * 10) / 10 : 0,
+        timedCalls: m.timedCalls || 0,
         minLatencyMs: m.minLatencyMs === Infinity ? 0 : (m.minLatencyMs || 0),
         maxLatencyMs: m.maxLatencyMs || 0,
-        tokensPerSecond: m.totalLatencyMs > 0 ? Math.round((m.total / (m.totalLatencyMs / 1000)) * 10) / 10 : 0,
         costPerCall: m.calls > 0 ? Math.round((m.cost / m.calls) * 1000000) / 1000000 : 0,
       };
     }
     return result;
+  }
+
+  /**
+   * Format model+category cross-reference for analytics.
+   * Returns array of { model, category, calls, cost, tokens, successRate, avgLatencyMs }
+   */
+  _formatModelCategoryStats() {
+    return Object.values(this._byModelCategory).map(mc => ({
+      model: mc.model,
+      category: mc.category,
+      calls: mc.calls,
+      cost: Math.round(mc.cost * 1000000) / 1000000,
+      tokens: mc.total,
+      input: mc.input,
+      output: mc.output,
+      successRate: mc.calls > 0 ? parseFloat((((mc.calls - (mc.failures || 0)) / mc.calls) * 100).toFixed(2)) : 100,
+      avgLatencyMs: mc.calls > 0 && mc.totalLatencyMs > 0 ? Math.round(mc.totalLatencyMs / mc.calls) : 0,
+      tokensPerSecond: mc.totalLatencyMs > 0 ? Math.round((mc.total / (mc.totalLatencyMs / 1000)) * 10) / 10 : 0,
+    }));
   }
 
   /**
@@ -253,6 +293,7 @@ class TokenTracker {
       lastSaved: Date.now(),
       byModel: this._byModel,
       byCategory: this._byCategory,
+      byModelCategory: this._byModelCategory,
       byTool: this._byTool,
       totalTokens: this._totalTokens,
       totalCalls: this._totalCalls,
@@ -275,6 +316,7 @@ class TokenTracker {
         const data = JSON.parse(fs.readFileSync(this.usagePath, "utf-8"));
         this._byModel = data.byModel || {};
         this._byCategory = data.byCategory || {};
+        this._byModelCategory = data.byModelCategory || {};
         this._byTool = data.byTool || {};
         this._totalTokens = data.totalTokens || 0;
         this._totalCalls = data.totalCalls || 0;

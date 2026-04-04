@@ -95,7 +95,7 @@ Respond with ONLY valid JSON:
     systemPrompt: "You are a security analyst. Respond with ONLY valid JSON.",
     userPrompt,
     maxTokens: 128,
-    category: "security",
+    category: "audit",
   });
 
   const content = result.content;

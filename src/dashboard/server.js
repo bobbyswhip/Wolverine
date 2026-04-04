@@ -336,7 +336,7 @@ class DashboardServer {
         systemPrompt: "Route a command. Respond with two words: ROUTE SIZE.\nROUTE: SIMPLE (general knowledge/explanation, no live data needed), TOOLS (needs live server data, file contents, or endpoint calls), AGENT (create/modify/fix code).\nSIZE: SMALL, MEDIUM, LARGE.\nExamples: 'what is wolverine' → SIMPLE SMALL. 'what time is it' → TOOLS SMALL. 'show me index.js' → TOOLS SMALL. 'add endpoint' → AGENT SMALL. 'build auth' → AGENT LARGE.",
         userPrompt: command,
         maxTokens: 10,
-        category: "classify",
+        category: "classifier",
       });
 
       const raw = (result.content || "").trim().toUpperCase();
@@ -424,7 +424,7 @@ ${indexContent}
 Existing route files:
 ${existingRoutes || "(none)"}`,
       maxTokens: 2048,
-      category: "develop",
+      category: "tool",
     });
 
     const raw = (result.content || "").trim().replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");

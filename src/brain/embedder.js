@@ -115,7 +115,7 @@ async function compact(text) {
     systemPrompt: "Compress the following text into a dense, semantically rich summary. Keep all technical terms, function names, file paths, and error messages. Remove filler words. Output ONLY the compressed text, nothing else.",
     userPrompt: text,
     maxTokens: 256,
-    category: "brain",
+    category: "compacting",
   });
 
   return result.content || text;

@@ -5,6 +5,7 @@ const { getModel, detectProvider } = require("./models");
 
 let _openaiClient = null;
 let _anthropicClient = null;
+let _wolverineClient = null;
 let _tracker = null;
 
 function setTokenTracker(tracker) { _tracker = tracker; }
@@ -35,7 +36,21 @@ function _track(model, category, usage, tool, latencyMs, success) {
 
 function getClient(provider) {
   if (provider === "anthropic") return _getAnthropicClient();
+  if (provider === "wolverine") return _getWolverineClient();
   return _getOpenAIClient();
+}
+
+function _getWolverineClient() {
+  if (!_wolverineClient) {
+    // Wolverine inference: direct to GPU (WOLVERINE_INFERENCE_URL) or via proxy (api.wolverinenode.xyz/v1)
+    // Direct URL = no auth needed (Vast tunnel). Proxy URL = needs WOLVERINE_API_KEY for billing.
+    const baseURL = process.env.WOLVERINE_INFERENCE_URL
+      ? process.env.WOLVERINE_INFERENCE_URL + "/v1"
+      : "https://api.wolverinenode.xyz/v1";
+    const apiKey = process.env.WOLVERINE_API_KEY || "none";
+    _wolverineClient = new OpenAI({ apiKey, baseURL });
+  }
+  return _wolverineClient;
 }
 
 function _getOpenAIClient() {
@@ -65,6 +80,7 @@ function isReasoningModel(model) {
 }
 
 function isAnthropicModel(model) { return detectProvider(model) === "anthropic"; }
+function isWolverineModel(model) { return detectProvider(model) === "wolverine"; }
 
 /**
  * Per-model max output token limits (with 10% overestimation buffer).
@@ -176,6 +192,8 @@ async function aiCall({ model, systemPrompt, userPrompt, maxTokens = 2048, tools
   try {
     if (provider === "anthropic") {
       result = await _anthropicCall({ model, systemPrompt, userPrompt, maxTokens, tools, toolChoice });
+    } else if (provider === "wolverine") {
+      result = await _chatCall(_getWolverineClient(), { model, systemPrompt, userPrompt, maxTokens, tools, toolChoice });
     } else if (isResponsesModel(model)) {
       result = await _responsesCall(_getOpenAIClient(), { model, systemPrompt, userPrompt, maxTokens, tools });
     } else {
@@ -200,6 +218,8 @@ async function aiCallWithHistory({ model, messages, tools, maxTokens = 4096, cat
   try {
     if (provider === "anthropic") {
       result = await _anthropicCallWithHistory({ model, messages, tools, maxTokens });
+    } else if (provider === "wolverine") {
+      result = await _chatCallWithHistory(_getWolverineClient(), { model, messages, tools, maxTokens });
     } else if (isResponsesModel(model)) {
       result = await _responsesCallWithHistory(_getOpenAIClient(), { model, messages, tools, maxTokens });
     } else {
@@ -573,7 +593,7 @@ ${backupSourceCode ? `## Last Known Working Version\n\`\`\`javascript\n${backupS
 "changes" is for code edits (optional, use for actual code fixes).
 Include both if needed, or just one.`;
 
-  const result = await aiCall({ model, systemPrompt, userPrompt, maxTokens: 2048, category: "heal" });
+  const result = await aiCall({ model, systemPrompt, userPrompt, maxTokens: 2048, category: "coding" });
   const content = result.content;
   const cleaned = content.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
 

@@ -66,7 +66,8 @@ function collectHeartbeat(subsystems) {
       totalCalls: tokenTracker?._totalCalls || usage?.session?.totalCalls || 0,
       totalCacheSavings: _sumCacheSavings(usage?.byModel || {}),
       byCategory: usage?.byCategory || {},
-      byModel: usage?.byModel || {},  // includes: latency, successRate, tokensPerSec, cacheSavings per model
+      byModel: usage?.byModel || {},
+      byModelCategory: usage?.byModelCategory || [],
       byTool: usage?.byTool || {},
       byProvider: _aggregateByProvider(usage?.byModel || {}),
     },

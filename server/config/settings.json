@@ -5,7 +5,7 @@
     "env": "development"
   },
 
-  "provider": "hybrid",
+  "provider": "wolverine",
 
   "openai_settings": {
     "reasoning": "gpt-5.4-mini",
@@ -40,6 +40,18 @@
     "audit": "gpt-4o-mini",
     "compacting": "gpt-4o-mini",
     "research": "o4-mini-deep-research",
+    "embedding": "text-embedding-3-small"
+  },
+
+  "wolverine_settings": {
+    "reasoning": "wolverine-test-1",
+    "coding": "wolverine-test-1",
+    "chat": "wolverine-test-1",
+    "tool": "wolverine-test-1",
+    "classifier": "wolverine-test-1",
+    "audit": "wolverine-test-1",
+    "compacting": "wolverine-test-1",
+    "research": "wolverine-test-1",
     "embedding": "text-embedding-3-small"
   },
 
@@ -82,6 +94,11 @@
   "autoUpdate": {
     "enabled": true,
     "intervalMs": 300000
+  },
+
+  "platform": {
+    "apiKey": "",
+    "cors": ["http://localhost:3000"]
   },
 
   "dashboard": {},

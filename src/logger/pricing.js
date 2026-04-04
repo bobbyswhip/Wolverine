@@ -53,6 +53,14 @@ const DEFAULT_PRICING = {
   "claude-3-sonnet":      { input: 3.00,  output: 15.00, cache_write: 3.75,  cache_read: 0.30 },
   "claude-3-haiku":       { input: 0.25,  output: 1.25,  cache_write: 0.3125, cache_read: 0.025 },
 
+  // ── Wolverine Self-Hosted (Gemma 4 via api.wolverinenode.xyz) ──
+  // Priced between Anthropic and OpenAI — cheaper than both
+  "wolverine-test-1":     { input: 0.10,  output: 0.40 },
+  "wolverine-gemma-26b":  { input: 0.25,  output: 1.00 },
+  "wolverine-gemma-8b":   { input: 0.10,  output: 0.40 },
+  "wolverine-coding":     { input: 0.10,  output: 0.40 },
+  "wolverine-reasoning":  { input: 0.25,  output: 1.00 },
+
   // ── Fallback ──
   "_default":             { input: 1.00,  output: 4.00 },
 };
