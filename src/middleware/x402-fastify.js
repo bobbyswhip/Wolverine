@@ -160,6 +160,8 @@ async function x402Plugin(fastify, opts) {
     // Verify via facilitator
     try {
       console.log(`  💰 x402 verify: from=${decodedPayment.payload?.authorization?.from} value=${decodedPayment.payload?.authorization?.value} network=${decodedPayment.network}`);
+      console.log(`  💰 x402 payload: ${JSON.stringify(decodedPayment).slice(0, 300)}`);
+      console.log(`  💰 x402 requirements: ${JSON.stringify(actualRequirements).slice(0, 300)}`);
       const verifyResult = await _facilitatorClient.verify(decodedPayment, actualRequirements);
       if (!verifyResult.isValid) {
         console.log(`  ⚠️ x402 verify failed: ${verifyResult.invalidReason} ${verifyResult.invalidMessage || ""}`);
@@ -167,8 +169,10 @@ async function x402Plugin(fastify, opts) {
         return;
       }
     } catch (err) {
-      console.log(`  ⚠️ x402 verify error: ${err.message}`);
-      reply.code(402).send({ error: "Payment verification failed: " + err.message, accepts: [paymentRequirements] });
+      // Extract detailed error from the x402 SDK
+      const detail = err.invalidReason || err.invalidMessage || err.cause?.message || "";
+      console.log(`  ⚠️ x402 verify error: ${err.message} | ${detail}`);
+      reply.code(402).send({ error: err.invalidReason || err.message, message: err.invalidMessage || detail, accepts: [paymentRequirements] });
       return;
     }
 
