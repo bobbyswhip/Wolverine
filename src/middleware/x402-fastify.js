@@ -99,15 +99,20 @@ async function x402Plugin(fastify, opts) {
 
     // Build payment requirements (v1 format matching @coinbase/x402)
     const { getAddress } = await import("viem");
+    // Build full resource URL (required by facilitator)
+    const proto = request.headers["x-forwarded-proto"] || "https";
+    const host = request.headers["x-forwarded-host"] || request.headers.host || "localhost";
+    const resourceUrl = `${proto}://${host}${request.url}`;
+
     const paymentRequirements = {
       scheme: "exact",
       network: _network,
       maxAmountRequired: usdcAtomicAmount,
-      resource: `${request.method} ${request.url}`,
-      description: routeConfig.description || `Payment for ${request.method} ${request.url}`,
+      resource: resourceUrl,
+      description: routeConfig.description || `Payment of $${dollarAmount.toFixed(2)} USDC`,
       mimeType: "application/json",
       payTo: getAddress(_payTo),
-      maxTimeoutSeconds: 300,
+      maxTimeoutSeconds: 60,
       asset: getAddress(USDC_ADDRESS),
       extra: USDC_EIP712,
     };
@@ -187,10 +192,12 @@ async function x402Plugin(fastify, opts) {
 
       const userValue = decodedPayment.payload.authorization.value;
       const { getAddress } = await import("viem");
+      const proto = request.headers["x-forwarded-proto"] || "https";
+      const host = request.headers["x-forwarded-host"] || request.headers.host || "localhost";
       const requirements = {
         scheme: "exact", network: _network, maxAmountRequired: userValue,
-        resource: `${request.method} ${request.url}`, description: "", mimeType: "application/json",
-        payTo: getAddress(_payTo), maxTimeoutSeconds: 300, asset: getAddress(USDC_ADDRESS), extra: USDC_EIP712,
+        resource: `${proto}://${host}${request.url}`, description: "", mimeType: "application/json",
+        payTo: getAddress(_payTo), maxTimeoutSeconds: 60, asset: getAddress(USDC_ADDRESS), extra: USDC_EIP712,
       };
 
       const settleResult = await _facilitatorClient.settle(decodedPayment, requirements);
