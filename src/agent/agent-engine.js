@@ -477,6 +477,13 @@ const BLOCKED_COMMANDS = [
   /\bnpm\s+publish\b/i,         // no accidental publishes
   /\bcurl\b.*\|\s*bash/i,       // pipe to bash
   /\beval\s*\(/i,
+  /wget.*\|\s*sh/i,             // wget pipe to shell
+  /curl.*\$\(/i,                // curl data exfiltration via command substitution
+  /cat\s+\.env/i,               // read secrets via bash
+  />\s*src\//i,                 // redirect write to src/
+  /cp\s+.*\s+src\//i,          // copy into src/
+  /tee\s+.*src\//i,            // tee into src/
+  /mv\s+.*\s+src\//i,          // move into src/
 ];
 
 class AgentEngine {
@@ -885,7 +892,7 @@ class AgentEngine {
 
         try {
           this.sandbox.resolve(fullPath);
-          const content = fs.readFileSync(fullPath, "utf-8");
+          const content = this.sandbox.readFile(fullPath);
           const lines = content.split("\n");
           const relPath = path.relative(this.cwd, fullPath).replace(/\\/g, "/");
 
@@ -946,7 +953,7 @@ class AgentEngine {
 
   _gitLog(args) {
     const count = args.count || 10;
-    const fileFilter = args.file ? ` -- ${args.file}` : "";
+    const fileFilter = args.file ? ` -- "${args.file}"` : "";
     try {
       const output = execSync(
         `git log --oneline --no-decorate -n ${count}${fileFilter}`,
@@ -960,8 +967,8 @@ class AgentEngine {
   }
 
   _gitDiff(args) {
-    const ref = args.ref || "";
-    const fileFilter = args.file ? ` -- ${args.file}` : "";
+    const ref = args.ref ? `"${args.ref}"` : "";
+    const fileFilter = args.file ? ` -- "${args.file}"` : "";
     try {
       const output = execSync(
         `git diff ${ref}${fileFilter}`,
@@ -981,6 +988,30 @@ class AgentEngine {
       const url = args.url;
       if (!url || !url.startsWith("http")) {
         resolve({ content: "Error: URL must start with http:// or https://" });
+        return;
+      }
+
+      // SSRF protection: block private/internal IPs
+      try {
+        const parsedUrl = new (require("url").URL)(url);
+        const hostname = parsedUrl.hostname;
+        const privatePatterns = [
+          /^127\./,
+          /^localhost$/i,
+          /^169\.254\.169\.254$/,
+          /^100\.100\.100\.200$/,
+          /^10\./,
+          /^172\.(1[6-9]|2\d|3[01])\./,
+          /^192\.168\./,
+          /^fd[0-9a-f]{2}:/i,
+          /^::1$/,
+        ];
+        if (privatePatterns.some(p => p.test(hostname))) {
+          resolve({ content: `BLOCKED: Cannot fetch private/internal address "${hostname}"` });
+          return;
+        }
+      } catch (e) {
+        resolve({ content: `Error parsing URL: ${e.message}` });
         return;
       }
 
@@ -1020,6 +1051,7 @@ class AgentEngine {
   _listDir(args) {
     const dirPath = path.resolve(this.cwd, args.path || ".");
     try {
+      this.sandbox.resolve(dirPath);
       const entries = fs.readdirSync(dirPath, { withFileTypes: true });
       const lines = entries.map(e => {
         try {
@@ -1066,15 +1098,18 @@ class AgentEngine {
 
   _checkEnv(args) {
     const { redact } = require("../security/secret-redactor");
+    const isSecretKey = (k) => /KEY|SECRET|TOKEN|PASSWORD|AUTH|CREDENTIAL/i.test(k);
     if (args.variable) {
       const val = process.env[args.variable];
-      const display = val ? redact(val) : "(not set)";
+      if (!val) return { content: `${args.variable}=(not set)` };
+      const display = isSecretKey(args.variable) ? "SET (redacted)" : redact(val);
       return { content: `${args.variable}=${display}` };
     }
     // List all env vars with redacted values
     const keys = Object.keys(process.env).sort();
     const lines = keys.map(k => {
       const val = process.env[k];
+      if (isSecretKey(k)) return `${k}=${val ? "SET (redacted)" : "(not set)"}`;
       return `${k}=${val && val.length > 50 ? "(set, " + val.length + " chars)" : redact(val || "")}`;
     });
     return { content: lines.join("\n") };
@@ -1100,6 +1135,9 @@ class AgentEngine {
         const upper = args.sql.trim().toUpperCase();
         if (!upper.startsWith("SELECT") && !upper.startsWith("PRAGMA")) {
           return { content: "BLOCKED: inspect_db only allows SELECT/PRAGMA. Use run_db_fix for writes." };
+        }
+        if (args.sql.includes(";")) {
+          return { content: "BLOCKED: inspect_db does not allow stacked queries (multiple statements separated by ';')." };
         }
         const rows = db.prepare(args.sql).all();
         result = JSON.stringify(rows.slice(0, 50), null, 2);
@@ -1129,7 +1167,9 @@ class AgentEngine {
 
       // Backup the DB file first
       const backupPath = dbPath + ".wolverine-backup";
-      fs.copyFileSync(dbPath, backupPath);
+      if (fs.existsSync(dbPath)) {
+        fs.copyFileSync(dbPath, backupPath);
+      }
 
       const db = new Database(dbPath);
 
@@ -1258,7 +1298,7 @@ class AgentEngine {
   }
 
   _checkLogs(args) {
-    const lines = args.lines || 50;
+    const lines = Math.max(1, Math.min(parseInt(args.lines, 10) || 50, 1000));
     const filter = args.filter || "";
     try {
       let cmd;
@@ -1291,8 +1331,9 @@ class AgentEngine {
       if (args.host) {
         try {
           const dns = require("dns");
-          const addresses = execSync(`node -e "require('dns').resolve('${args.host.replace(/'/g, "")}', (e,a) => console.log(e ? 'FAIL:'+e.code : a.join(',')))"`, { encoding: "utf-8", timeout: 5000 }).trim();
-          results.push(`DNS ${args.host}: ${addresses}`);
+          const safeHost = args.host.replace(/[^a-zA-Z0-9.:\/-_]/g, "");
+          const addresses = execSync(`node -e "require('dns').resolve('${safeHost.replace(/'/g, "")}', (e,a) => console.log(e ? 'FAIL:'+e.code : a.join(',')))"`, { encoding: "utf-8", timeout: 5000 }).trim();
+          results.push(`DNS ${safeHost}: ${addresses}`);
         } catch (e) { results.push(`DNS ${args.host}: FAILED — ${e.message}`); }
       }
       // Port check
@@ -1308,8 +1349,9 @@ class AgentEngine {
       // URL reachability
       if (args.url) {
         try {
-          const urlResult = execSync(`node -e "require('${args.url.startsWith('https') ? 'https' : 'http'}').get('${args.url.replace(/'/g, "")}', r => { console.log(r.statusCode); r.resume(); }).on('error', e => console.log('FAIL:'+e.code))"`, { encoding: "utf-8", timeout: 10000 }).trim();
-          results.push(`URL ${args.url}: ${urlResult}`);
+          const safeUrl = args.url.replace(/[^a-zA-Z0-9.:\/-_]/g, "");
+          const urlResult = execSync(`node -e "require('${safeUrl.startsWith('https') ? 'https' : 'http'}').get('${safeUrl.replace(/'/g, "")}', r => { console.log(r.statusCode); r.resume(); }).on('error', e => console.log('FAIL:'+e.code))"`, { encoding: "utf-8", timeout: 10000 }).trim();
+          results.push(`URL ${safeUrl}: ${urlResult}`);
         } catch (e) { results.push(`URL ${args.url}: FAILED — ${e.message}`); }
       }
       if (results.length === 0) results.push("Provide host, port, or url to check.");
@@ -1358,7 +1400,15 @@ class AgentEngine {
       if (fs.existsSync(binDir)) {
         for (const bin of fs.readdirSync(binDir)) {
           const target = path.join(binDir, bin);
-          try { fs.readlinkSync(target); } catch { brokenBins++; }
+          try {
+            if (process.platform === "win32") {
+              // Windows uses .cmd shims instead of symlinks
+              const cmdFile = target.endsWith(".cmd") ? target : target + ".cmd";
+              if (!fs.existsSync(cmdFile) && !fs.existsSync(target)) brokenBins++;
+            } else {
+              fs.readlinkSync(target);
+            }
+          } catch { brokenBins++; }
         }
       }
       const rec = missing.length > 5 || broken.length > 3 ? "rm -rf node_modules && npm install" : missing.length > 0 ? "npm install" : "ok";
@@ -1475,7 +1525,10 @@ class AgentEngine {
           try { execSync(`rm -rf "${t.path.replace("~", os.homedir())}"`, { timeout: 10000 }); } catch {}
         }
       }
-      const diskFree = Math.round(parseInt(execSync("df -m . | tail -1 | awk '{print $4}'", { encoding: "utf-8", cwd: this.cwd, timeout: 3000 }).trim() || "0", 10));
+      let diskFree;
+      try {
+        diskFree = Math.round(parseInt(execSync("df -m . | tail -1 | awk '{print $4}'", { encoding: "utf-8", cwd: this.cwd, timeout: 3000 }).trim() || "0", 10));
+      } catch { diskFree = "unknown"; }
       const lines = [
         `Disk free: ${diskFree}MB`,
         `Reclaimable: ${reclaimable}MB (${targets.length} targets)`,
@@ -1653,7 +1706,7 @@ class AgentEngine {
 function _simplePrompt(cwd, primaryFile) {
   return `You are Wolverine, a Node.js server repair agent. Fix the error using minimal changes.
 
-TOOLS: read_file, write_file, edit_file, glob_files, grep_code, bash_exec, done
+TOOLS: read_file, write_file, edit_file, glob_files, grep_code, bash_exec, done + 24 more diagnostic tools available
 RULES: Read the file before editing. Use edit_file for targeted fixes. Call done when finished. Use multiple tools at once when independent.
 ${primaryFile ? `File: ${primaryFile}` : ""}
 Project: ${cwd}`;
@@ -1669,7 +1722,7 @@ CRITICAL: Act fast. You have limited turns. Fix immediately when the solution is
 
 For maximum efficiency, invoke multiple independent tools simultaneously rather than sequentially.
 
-TOOLS: read_file, write_file, edit_file, glob_files, grep_code, list_dir, move_file, bash_exec, git_log, git_diff, inspect_db, run_db_fix, check_port, check_env, audit_deps, check_migration, web_fetch, done
+TOOLS: read_file, write_file, edit_file, glob_files, grep_code, list_dir, move_file, bash_exec, git_log, git_diff, inspect_db, run_db_fix, check_port, check_env, audit_deps, check_migration, web_fetch, check_memory, list_processes, check_logs, restart_service, check_network, inspect_env, verify_node_modules, inspect_certificate, inspect_cache, disk_cleanup, check_file_descriptors, check_event_loop, check_websocket, done
 
 FAST FIXES (act immediately, don't investigate):
 - Cannot find module 'X' → bash_exec: npm install X → done
