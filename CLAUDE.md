@@ -44,7 +44,7 @@ Error detected (crash OR caught 500 via IPC)
   → Token budget by complexity: simple=20K, moderate=50K, complex=100K
   → Goal Loop (3 iterations):
       1. Fast path: CODING_MODEL, JSON with code+commands, backup diff context
-      2. Agent: dynamic prompt (400 tokens simple, 1200 complex), 18 tools, 90s/call timeout
+      2. Agent: dynamic prompt (400 tokens simple, 1200 complex), 24 tools, 90s/call timeout
          Turn budget: simple=4, config/ENOENT=5, complex=8
       3. Sub-agents: explore→plan→fix (Haiku triage, Sonnet/Opus fix only)
   → Verify: syntax → boot probe (route probe skipped — ErrorMonitor is safety net)

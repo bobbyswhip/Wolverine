@@ -292,6 +292,76 @@ const TOOL_DEFINITIONS = [
   {
     type: "function",
     function: {
+      name: "check_memory",
+      description: "Check system and process memory usage. Returns RSS, heap, free system memory, and whether memory pressure is detected.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_processes",
+      description: "List running Node.js processes. Useful for finding zombie/orphan processes or port conflicts.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "check_logs",
+      description: "Read recent log output. Returns the last N lines from the server's log source.",
+      parameters: {
+        type: "object",
+        properties: {
+          lines: { type: "number", description: "Number of lines to return (default: 50)" },
+          filter: { type: "string", description: "Optional grep filter pattern" },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "restart_service",
+      description: "Trigger a graceful server restart. Use after applying fixes that require a process restart to take effect.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "check_network",
+      description: "Check network connectivity: DNS resolution, port availability, and external service reachability.",
+      parameters: {
+        type: "object",
+        properties: {
+          host: { type: "string", description: "Hostname to check DNS for (optional)" },
+          port: { type: "number", description: "Port to check availability (optional)" },
+          url: { type: "string", description: "URL to check reachability (optional)" },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "inspect_env",
+      description: "List environment variable names (NOT values) that are set. Checks if required vars exist without exposing secrets.",
+      parameters: {
+        type: "object",
+        properties: {
+          check: { type: "array", items: { type: "string" }, description: "Specific var names to check if set (optional)" },
+        },
+        required: [],
+      },
+    },
+  },
+  // ── TASK MANAGEMENT ──
+  {
+    type: "function",
+    function: {
       name: "done",
       description: "Call this when you have finished analyzing and fixing the issue.",
       parameters: {
@@ -569,6 +639,12 @@ class AgentEngine {
       case "run_db_fix":    return this._runDbFix(args);
       case "audit_deps":    return this._auditDeps(args);
       case "check_migration": return this._checkMigration(args);
+      case "check_memory":  return this._checkMemory(args);
+      case "list_processes": return this._listProcesses(args);
+      case "check_logs":    return this._checkLogs(args);
+      case "restart_service": return this._restartService(args);
+      case "check_network": return this._checkNetwork(args);
+      case "inspect_env":   return this._inspectEnv(args);
       case "done":          return this._done(args);
       // Legacy aliases
       case "list_files":    return this._globFiles({ pattern: (args.dir || ".") + "/*" + (args.pattern || "") });
@@ -1060,6 +1136,112 @@ class AgentEngine {
       console.log(chalk.gray(`    📦 Migration: ${args.package} → ${migration.to}`));
       return { content: lines.join("\n") };
     } catch (e) { return { content: `Migration check error: ${e.message}` }; }
+  }
+
+  // ── SERVER DIAGNOSTICS ──
+
+  _checkMemory() {
+    const os = require("os");
+    const mem = process.memoryUsage();
+    const totalMB = Math.round(os.totalmem() / 1048576);
+    const freeMB = Math.round(os.freemem() / 1048576);
+    const usedPct = Math.round((1 - os.freemem() / os.totalmem()) * 100);
+    const lines = [
+      `Process RSS: ${Math.round(mem.rss / 1048576)}MB`,
+      `Process Heap: ${Math.round(mem.heapUsed / 1048576)}MB / ${Math.round(mem.heapTotal / 1048576)}MB`,
+      `Process External: ${Math.round(mem.external / 1048576)}MB`,
+      `System: ${freeMB}MB free / ${totalMB}MB total (${usedPct}% used)`,
+      usedPct > 90 ? "⚠️ MEMORY PRESSURE DETECTED — system above 90% usage" : "✅ Memory OK",
+    ];
+    return { content: lines.join("\n") };
+  }
+
+  _listProcesses() {
+    try {
+      const cmd = process.platform === "win32"
+        ? 'tasklist /FI "IMAGENAME eq node.exe" /FO CSV /NH'
+        : "ps aux | grep -E 'node|PID' | grep -v grep";
+      const output = execSync(cmd, { encoding: "utf-8", timeout: 5000 }).trim();
+      return { content: output || "(no node processes found)" };
+    } catch (e) { return { content: `Error listing processes: ${e.message}` }; }
+  }
+
+  _checkLogs(args) {
+    const lines = args.lines || 50;
+    const filter = args.filter || "";
+    try {
+      let cmd;
+      if (process.platform === "win32") {
+        cmd = `powershell -c "Get-Content -Tail ${lines} .wolverine\\events.log"`;
+      } else {
+        // Try journalctl first (systemd), fall back to log file
+        cmd = `journalctl -u wolverine --no-pager -n ${lines} 2>/dev/null || tail -n ${lines} .wolverine/events.log 2>/dev/null || echo 'No logs found'`;
+      }
+      if (filter) cmd += ` | grep -i '${filter.replace(/'/g, "'\\''")}'`;
+      const output = execSync(cmd, { encoding: "utf-8", timeout: 10000, cwd: this.cwd }).trim();
+      return { content: output.slice(0, 4000) || "(empty)" };
+    } catch (e) { return { content: `Error reading logs: ${e.message}` }; }
+  }
+
+  _restartService() {
+    // Signal the parent wolverine process to restart the child server
+    // We can't directly restart — but we can signal via a file that the runner checks
+    try {
+      const restartFlag = path.join(this.cwd, ".wolverine", "restart-requested");
+      fs.writeFileSync(restartFlag, Date.now().toString(), "utf-8");
+      return { content: "Restart requested. The server will restart after this heal completes." };
+    } catch (e) { return { content: `Error requesting restart: ${e.message}` }; }
+  }
+
+  _checkNetwork(args) {
+    const results = [];
+    try {
+      // DNS check
+      if (args.host) {
+        try {
+          const dns = require("dns");
+          const addresses = execSync(`node -e "require('dns').resolve('${args.host.replace(/'/g, "")}', (e,a) => console.log(e ? 'FAIL:'+e.code : a.join(',')))"`, { encoding: "utf-8", timeout: 5000 }).trim();
+          results.push(`DNS ${args.host}: ${addresses}`);
+        } catch (e) { results.push(`DNS ${args.host}: FAILED — ${e.message}`); }
+      }
+      // Port check
+      if (args.port) {
+        try {
+          const portCmd = process.platform === "win32"
+            ? `netstat -ano | findstr ":${args.port}"`
+            : `ss -tlnp | grep ":${args.port}" || echo "port ${args.port} is free"`;
+          const portResult = execSync(portCmd, { encoding: "utf-8", timeout: 3000 }).trim();
+          results.push(`Port ${args.port}: ${portResult || "free"}`);
+        } catch { results.push(`Port ${args.port}: free (nothing listening)`); }
+      }
+      // URL reachability
+      if (args.url) {
+        try {
+          const urlResult = execSync(`node -e "require('${args.url.startsWith('https') ? 'https' : 'http'}').get('${args.url.replace(/'/g, "")}', r => { console.log(r.statusCode); r.resume(); }).on('error', e => console.log('FAIL:'+e.code))"`, { encoding: "utf-8", timeout: 10000 }).trim();
+          results.push(`URL ${args.url}: ${urlResult}`);
+        } catch (e) { results.push(`URL ${args.url}: FAILED — ${e.message}`); }
+      }
+      if (results.length === 0) results.push("Provide host, port, or url to check.");
+      return { content: results.join("\n") };
+    } catch (e) { return { content: `Network check error: ${e.message}` }; }
+  }
+
+  _inspectEnv(args) {
+    if (args.check && Array.isArray(args.check)) {
+      const results = args.check.map(v => `${v}: ${process.env[v] ? "SET (" + process.env[v].length + " chars)" : "NOT SET"}`);
+      return { content: results.join("\n") };
+    }
+    // List all env var names (not values) grouped by category
+    const keys = Object.keys(process.env).sort();
+    const wolverine = keys.filter(k => /^WOLVERINE|^PORT$|^NODE_ENV$/i.test(k));
+    const apiKeys = keys.filter(k => /KEY|SECRET|TOKEN|PASSWORD|AUTH/i.test(k));
+    const other = keys.filter(k => !wolverine.includes(k) && !apiKeys.includes(k));
+    const lines = [
+      `Wolverine vars (${wolverine.length}): ${wolverine.join(", ") || "none"}`,
+      `Secret vars (${apiKeys.length}): ${apiKeys.map(k => k + "=" + (process.env[k] ? "SET" : "MISSING")).join(", ") || "none"}`,
+      `Total env vars: ${keys.length}`,
+    ];
+    return { content: lines.join("\n") };
   }
 
   _done(args) {
