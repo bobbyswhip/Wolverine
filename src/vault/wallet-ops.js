@@ -119,7 +119,15 @@ function _getCrypto() {
   const crypto = require("crypto");
 
   function keccak256(data) {
-    return crypto.createHash("sha3-256").update(data).digest();
+    // Ethereum uses keccak256 (NOT NIST SHA3-256)
+    try {
+      const { keccak256: k } = require("ethers");
+      const buf = data instanceof Uint8Array ? data : Buffer.from(data);
+      const hex = k(buf);
+      return Buffer.from(hex.slice(2), "hex");
+    } catch {
+      return crypto.createHash("sha3-256").update(data).digest();
+    }
   }
 
   function getPublicKey(privKeyBuf, compressed = false) {

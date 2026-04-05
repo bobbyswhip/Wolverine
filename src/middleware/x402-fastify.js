@@ -187,8 +187,8 @@ async function _verifyPayment(paymentSig, price) {
     try {
       const { ethers } = require("ethers");
       // Normalize all addresses to proper EIP-55 checksum format
-      const fromAddr = ethers.getAddress(auth.from);
-      const toAddr = ethers.getAddress(auth.to);
+      const fromAddr = ethers.getAddress(auth.from.toLowerCase());
+      const toAddr = ethers.getAddress(auth.to.toLowerCase());
 
       const domain = {
         name: "USD Coin",
