@@ -146,6 +146,10 @@ const SEED_DOCS = [
     metadata: { topic: "server-context" },
   },
   {
+    text: "Tool router (src/brain/tool-router.js): maps error types to recommended tool chains. Injected into agent prompt automatically — agent sees 'TOOL ROUTE: diagnose with [X, Y], fix with [Z]. Strategy: ...' for every error it heals. 25+ error categories mapped: TypeError→read_file+edit_file, ENOENT→list_dir+write_file, ECONNREFUSED→check_network+check_port+inspect_cache, EMFILE→check_file_descriptors+disk_cleanup, ENOSPC→disk_cleanup, certificate→inspect_certificate, OOM→check_memory+check_event_loop, websocket���check_websocket, database→inspect_db+run_db_fix (with prereq: inspect_db FIRST), missing_module→audit_deps+verify_node_modules, env_missing→inspect_env+add_env_var. Lookup is O(1) by error type + regex fallback. No AI tokens used for routing.",
+    metadata: { topic: "tool-router" },
+  },
+  {
     text: "Telemetry architecture: 4 files, ~250 lines total. heartbeat.js sends one HTTP POST every 60s (5s timeout, non-blocking). register.js auto-registers and caches key in memory + disk. queue.js appends to JSONL file only on failure, trims lazily. telemetry.js collects from subsystems using optional chaining (no crashes if subsystem missing). All secrets redacted before sending. Response bodies drained immediately (res.resume). No blocking, no delays, no busy waits.",
     metadata: { topic: "telemetry-architecture" },
   },

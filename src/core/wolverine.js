@@ -13,6 +13,7 @@ const { RateLimiter } = require("../security/rate-limiter");
 const { detectInjection } = require("../security/injection-detector");
 const { redact, hasSecrets } = require("../security/secret-redactor");
 const { BackupManager } = require("../backup/backup-manager");
+const { getRoutePrompt } = require("../brain/tool-router");
 const { AgentEngine } = require("../agent/agent-engine");
 const { ResearchAgent } = require("../agent/research-agent");
 const { GoalLoop } = require("../agent/goal-loop");
@@ -215,6 +216,12 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
     const serverCtx = getServerContextSummary(cwd);
     if (serverCtx) brainContext += serverCtx + "\n\n";
   } catch {}
+  // Inject tool routing — tells agent exactly which tools to use for this error type
+  const toolRoute = getRoutePrompt(parsed.errorMessage, parsed.errorType);
+  if (toolRoute) {
+    brainContext += toolRoute + "\n\n";
+    console.log(chalk.gray(`  🗺️  Tool route: ${toolRoute.split("\n")[1]?.trim() || "matched"}`));
+  }
   // Inject relevant skill context (claw-code: pre-enrich prompt with matched tools)
   if (skills) {
     const skillCtx = skills.buildContext(parsed.errorMessage);
