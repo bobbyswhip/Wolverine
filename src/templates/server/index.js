@@ -22,6 +22,9 @@ if (clusterEnabled && cluster.isPrimary && workerCount > 1) {
   // Single worker or cluster worker — run the server
   const fastify = require("fastify")({ logger: false });
 
+  // x402 payment middleware (auto-detects vault, no-op if no vault)
+  try { fastify.register(require("wolverine-ai/src/middleware/x402-fastify")); } catch {}
+
   // Routes
   fastify.register(require("./routes/health"), { prefix: "/health" });
   fastify.register(require("./routes/api"), { prefix: "/api" });

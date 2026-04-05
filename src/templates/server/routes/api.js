@@ -1,26 +1,25 @@
 /**
- * Demo API routes — shows both free endpoints and x402 paid APIs.
+ * Demo API routes — free endpoints and x402 paid APIs.
  *
- * Wolverine's vault provides an encrypted Ethereum wallet (AES-256-GCM)
- * for each server instance. The wallet is used as the payment receiver
- * for x402 paid APIs on the Base network (USDC).
+ * x402 Setup (one-time):
+ *   1. wolverine --init-vault          Create encrypted wallet
+ *   2. Set CDP_API_KEY_ID + CDP_API_KEY_SECRET in .env.local
+ *      (free at https://cdp.coinbase.com)
+ *   3. Add { config: { x402: { price: "$0.01" } } } to any route
  *
- * Vault commands:
- *   wolverine --init-vault      Create encrypted wallet
- *   wolverine --x402-info       Show wallet address & config
+ * That's it — the route now requires USDC payment on Base.
+ * The middleware handles 402 responses, wallet signing, facilitator
+ * verification, and on-chain settlement automatically.
  *
- * The vault is stored in .wolverine/vault/ and is:
- *   - Auto-backed up in every server snapshot
- *   - Protected from agent access (sandbox-blocked)
- *   - Private keys never exist as JS strings (Buffer only)
- *   - Rollback-protected (never overwritten by restore)
- *
- * Dashboard: localhost:3001 — view wallet balances, x402 revenue,
- * payment history, and all server health metrics in real time.
+ * Protocol: https://docs.cdp.coinbase.com/x402/welcome
+ * Network:  Base mainnet — USDC payments
+ * Wallet:   Auto-detected from vault
+ * Node:     22+ required
  */
 
 async function routes(fastify) {
-  // ── Free endpoints ──
+  // ── Free endpoints (no x402 config = no payment required) ──
+
   fastify.get("/", async () => ({ message: "Hello from Wolverine API" }));
 
   fastify.get("/users", async () => ({
@@ -30,29 +29,19 @@ async function routes(fastify) {
     ],
   }));
 
-  // ── x402 Paid API ──────────────────────────────────────────────
-  // Any route becomes a paid API by adding x402 config.
-  // Callers without a valid USDC payment get a 402 with payment instructions.
-  // Callers with a valid Payment-Signature header get the response.
-  //
-  // Protocol: https://docs.cdp.coinbase.com/x402/welcome
-  // Network:  Base (eip155:8453) — USDC payments
-  // Wallet:   Auto-detected from vault (wolverine --init-vault)
-  //
-  // To change pricing live without restart:
-  //   Update the price in config and the next request picks it up.
-  //   Or use the dashboard command: "change /api/premium price to $0.05"
-
-  // Fixed price — charge $0.01 per call:
+  // ── Paid endpoint — fixed price ──
+  // Just add x402 config. Handler only runs after USDC settles on-chain.
   fastify.get("/premium", {
     config: { x402: { price: "$0.01", description: "Premium data endpoint" } },
   }, async (req) => ({
     data: "This response cost $0.01 in USDC on Base",
-    paid: req.x402?.amount,
-    from: req.x402?.from,
+    paid: req.x402.amount,
+    from: req.x402.from,
+    txHash: req.x402.txHash,
   }));
 
-  // Variable price — caller chooses amount (e.g. buying credits):
+  // ── Paid endpoint — variable price ──
+  // Caller specifies amount in request body. Good for credit purchases.
   // POST /api/purchase { "dollars": "5.00" }
   fastify.post("/purchase", {
     config: {
@@ -65,9 +54,10 @@ async function routes(fastify) {
       },
     },
   }, async (req) => ({
-    message: `Received ${req.x402?.amount} USDC payment`,
-    from: req.x402?.from,
-    receipt: req.x402?.receipt ? "valid" : "none",
+    message: `Received ${req.x402.amount} USDC payment`,
+    from: req.x402.from,
+    txHash: req.x402.txHash,
+    settled: req.x402.settled,
   }));
 }
 
