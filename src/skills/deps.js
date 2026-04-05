@@ -277,6 +277,27 @@ function diagnose(errorMessage, cwd) {
     }
   }
 
+  // Pattern: Fastify v5 on old Node.js (tracingChannel requires Node 19.9+)
+  if (/tracingChannel is not a function/i.test(msg) || /diagnostics.*tracingChannel/i.test(msg)) {
+    const nodeVersion = parseInt(process.version.slice(1), 10);
+    if (nodeVersion < 20) {
+      return {
+        diagnosed: true,
+        category: "version_conflict",
+        summary: `Fastify v5 requires Node.js >= 20 (you have ${process.version}). diagnostics_channel.tracingChannel() was added in Node 19.9`,
+        fixes: [
+          "npm install fastify@4", // downgrade to v4 which supports Node 16+
+        ],
+      };
+    }
+    return {
+      diagnosed: true,
+      category: "version_conflict",
+      summary: "Fastify tracingChannel error — try reinstalling: rm -rf node_modules && npm install",
+      fixes: ["rm -rf node_modules && npm install"],
+    };
+  }
+
   // Pattern: version/compatibility errors
   if (/version mismatch|incompatible|peer dep|ERESOLVE/i.test(msg)) {
     const peerIssues = checkPeerDeps(cwd);
