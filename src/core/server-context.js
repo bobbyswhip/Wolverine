@@ -168,12 +168,60 @@ function scan(cwd) {
   scanForEnv(serverDir);
   context.envVars = [...envVars].sort();
 
+  // 8. Security scan — detect dangerous patterns in server code
+  context.warnings = [];
+  const scanForDangers = (dir) => {
+    if (!fs.existsSync(dir)) return;
+    for (const file of _listFiles(dir, ".js")) {
+      try {
+        const code = fs.readFileSync(file, "utf-8");
+        const rel = path.relative(cwd, file);
+        // Hardcoded secrets
+        if (/['"][a-zA-Z0-9_-]{20,}['"]/.test(code)) {
+          const secretPatterns = [
+            { regex: /sk-[a-zA-Z0-9]{20,}/g, label: "OpenAI API key" },
+            { regex: /sk-ant-[a-zA-Z0-9_-]{20,}/g, label: "Anthropic API key" },
+            { regex: /ghp_[a-zA-Z0-9]{36,}/g, label: "GitHub token" },
+            { regex: /AKIA[0-9A-Z]{16}/g, label: "AWS access key" },
+            { regex: /['"](?:password|secret|token|api_key|apikey|auth)\s*['"]?\s*[:=]\s*['"][^'"]{8,}['"]/gi, label: "Hardcoded credential" },
+            { regex: /mongodb\+srv:\/\/[^\s'"]+/g, label: "MongoDB connection string" },
+            { regex: /postgres:\/\/[^\s'"]+/g, label: "PostgreSQL connection string" },
+            { regex: /redis:\/\/[^\s'"]+/g, label: "Redis connection string" },
+          ];
+          for (const p of secretPatterns) {
+            if (p.regex.test(code)) {
+              context.warnings.push({ file: rel, type: "hardcoded_secret", label: p.label });
+              p.regex.lastIndex = 0;
+            }
+          }
+        }
+        // eval / Function constructor
+        if (/\beval\s*\(/.test(code)) context.warnings.push({ file: rel, type: "eval_usage", label: "eval() call" });
+        if (/new\s+Function\s*\(/.test(code)) context.warnings.push({ file: rel, type: "function_constructor", label: "new Function() call" });
+        // SQL injection risk (string concat in queries)
+        if (/\.(query|exec|prepare)\s*\(\s*['"`].*\$\{/.test(code) || /\.(query|exec)\s*\(\s*.*\+\s*(?:req|args|params|body)/i.test(code)) {
+          context.warnings.push({ file: rel, type: "sql_injection_risk", label: "String concatenation in SQL query" });
+        }
+        // Unvalidated redirect
+        if (/res\.redirect\s*\(\s*(?:req\.|args\.|params\.)/.test(code)) {
+          context.warnings.push({ file: rel, type: "open_redirect", label: "Unvalidated redirect from user input" });
+        }
+      } catch {}
+    }
+  };
+  scanForDangers(serverDir);
+
+  // Sanitize: strip any actual secret values that might have leaked into context
+  const contextStr = JSON.stringify(context);
+  const { redact } = require("../security/secret-redactor");
+  const sanitized = JSON.parse(redact(contextStr));
+
   // Save
   const outPath = path.join(cwd, CONTEXT_PATH);
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
-  fs.writeFileSync(outPath, JSON.stringify(context, null, 2), "utf-8");
+  fs.writeFileSync(outPath, JSON.stringify(sanitized, null, 2), "utf-8");
 
-  return context;
+  return sanitized;
 }
 
 /**

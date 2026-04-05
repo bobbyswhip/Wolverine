@@ -213,11 +213,13 @@ class WolverineRunner {
 
     // Scan server context (routes, DB, config, deps) for agent knowledge
     try {
-      const { scan, load } = require("./server-context");
+      const { scan } = require("./server-context");
       const ctx = scan(this.cwd);
       if (ctx) {
         const routes = ctx.routes.reduce((s, r) => s + r.endpoints.length, 0);
+        const warns = (ctx.warnings || []).length;
         console.log(chalk.gray(`  🗺️  Server context: ${routes} routes, ${ctx.structure.length} files, ${ctx.envVars.length} env vars`));
+        if (warns > 0) console.log(chalk.yellow(`  ⚠️  ${warns} security warning(s) — run wolverine --init for details`));
       }
     } catch {}
 

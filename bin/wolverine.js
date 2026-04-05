@@ -70,7 +70,20 @@ if (args.includes("--init")) {
   console.log(chalk.gray(`     Database: ${ctx.database.type || "none"}${ctx.database.tables.length > 0 ? ` (${ctx.database.tables.length} tables)` : ""}`));
   console.log(chalk.gray(`     Env vars: ${ctx.envVars.length}`));
   console.log(chalk.gray(`     Files: ${ctx.structure.length}`));
-  console.log(chalk.gray(`     Saved to: .wolverine/server-context.json\n`));
+  console.log(chalk.gray(`     Saved to: .wolverine/server-context.json`));
+  if (ctx.warnings && ctx.warnings.length > 0) {
+    console.log(chalk.yellow(`\n  ⚠️  Security warnings (${ctx.warnings.length}):`));
+    const seen = new Set();
+    for (const w of ctx.warnings) {
+      const key = `${w.file}:${w.type}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      console.log(chalk.yellow(`     ${w.file}: ${w.label}`));
+    }
+  } else {
+    console.log(chalk.green(`     No security warnings`));
+  }
+  console.log("");
   process.exit(0);
 }
 
