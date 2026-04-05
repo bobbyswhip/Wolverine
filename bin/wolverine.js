@@ -38,6 +38,7 @@ ${chalk.bold("Options:")}
   --workers <n>    Force specific worker count
   --info           Show system info and exit
   --init           Scan server/ and build context map (routes, DB, config, deps)
+  --restart        Full restart (kills parent + children, re-launches fresh)
   --x402-info      Show x402 payment configuration
 
 ${chalk.bold("Configuration:")}
@@ -119,6 +120,56 @@ if (args.includes("--init")) {
   }
   console.log("");
   process.exit(0);
+}
+
+// --restart: full framework restart (kills parent + all children, re-launches)
+if (args.includes("--restart")) {
+  const fs = require("fs");
+  const { execSync, spawn } = require("child_process");
+  const pidPath = path.resolve(process.cwd(), ".wolverine", "wolverine.pid");
+
+  // Find and kill the running wolverine process
+  let killed = false;
+  if (fs.existsSync(pidPath)) {
+    const pid = parseInt(fs.readFileSync(pidPath, "utf-8").trim(), 10);
+    if (pid) {
+      try {
+        process.kill(pid, "SIGTERM");
+        console.log(chalk.yellow(`  🔄 Killed wolverine process ${pid}`));
+        killed = true;
+      } catch (e) {
+        if (e.code !== "ESRCH") console.log(chalk.gray(`  ⚠️  Could not kill PID ${pid}: ${e.message}`));
+      }
+    }
+  }
+
+  // Also kill any lingering child processes
+  try {
+    if (process.platform === "win32") {
+      execSync('taskkill /F /IM node.exe /FI "WINDOWTITLE eq wolverine*" 2>nul', { stdio: "ignore" });
+    } else {
+      execSync("pkill -f 'wolverine.js --single' 2>/dev/null; pkill -f 'error-hook.js' 2>/dev/null", { stdio: "ignore" });
+    }
+  } catch {}
+
+  // Wait for processes to die
+  const wait = killed ? 3000 : 1000;
+  setTimeout(() => {
+    // Find the script path from the old PID file's sibling args, or use default
+    const scriptPath = args[args.indexOf("--restart") + 1] || "server/index.js";
+
+    console.log(chalk.blue(`  🚀 Restarting: wolverine --single ${scriptPath}`));
+    const child = spawn(process.execPath, [__filename, "--single", scriptPath], {
+      cwd: process.cwd(),
+      detached: true,
+      stdio: "ignore",
+      env: process.env,
+    });
+    child.unref();
+    console.log(chalk.green(`  ✅ Wolverine restarted (PID ${child.pid})`));
+    process.exit(0);
+  }, wait);
+  return;
 }
 
 // --update: safe framework update
