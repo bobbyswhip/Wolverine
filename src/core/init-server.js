@@ -77,7 +77,7 @@ function ensureX402Deps(cwd) {
   console.log(chalk.blue("  📦 Installing x402 payment dependencies..."));
   try {
     const { execSync } = require("child_process");
-    execSync("npm install @coinbase/x402 x402 viem --no-save --ignore-engines 2>/dev/null", {
+    execSync("npm install @coinbase/x402 @x402/core @x402/evm x402 viem --no-save --ignore-engines 2>/dev/null", {
       cwd,
       stdio: "pipe",
       timeout: 60000,
