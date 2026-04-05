@@ -130,11 +130,11 @@ async function x402Plugin(fastify, opts) {
       return;
     }
 
-    // Payment present — verify
+    // Payment present — verify via facilitator or direct signature check
     const verified = await _verifyPayment(paymentSig, price);
     if (verified.valid) {
       reply.header("Payment-Response", JSON.stringify(verified.receipt || {}));
-      request.x402 = { paid: true, amount: price, receipt: verified.receipt, txHash: verified.txHash };
+      request.x402 = { paid: true, amount: price, receipt: verified.receipt, txHash: verified.txHash, from: verified.from };
       return; // continue to route handler
     }
 
@@ -152,45 +152,114 @@ async function x402Plugin(fastify, opts) {
 }
 
 async function _verifyPayment(paymentSig, price) {
+  // Decode the payment signature (base64 JSON payload from frontend)
+  let payload;
   try {
-    // Try @x402/core if available
-    const { HTTPFacilitatorClient } = require("@x402/core/server");
-    const facilitator = new HTTPFacilitatorClient({ url: _facilitatorUrl });
-    const result = await facilitator.verify({
+    payload = JSON.parse(Buffer.from(paymentSig, "base64").toString());
+  } catch {
+    // Not base64 — might be raw x402 format, try facilitator
+    return _verifyViaFacilitator(paymentSig, price);
+  }
+
+  // Direct verification: validate the EIP-3009 TransferWithAuthorization signature
+  if (payload.payload?.authorization && payload.payload?.signature) {
+    const auth = payload.payload.authorization;
+    const sig = payload.payload.signature;
+
+    // Verify the amount matches the price
+    const expectedUsdc = Math.round(parseFloat(price.replace("$", "")) * 1e6);
+    const actualUsdc = parseInt(auth.value, 16) || parseInt(auth.value, 10) || 0;
+    if (actualUsdc < expectedUsdc * 0.99) { // 1% tolerance for rounding
+      return { valid: false, reason: "Amount mismatch" };
+    }
+
+    // Verify payTo matches
+    if (auth.to?.toLowerCase() !== _payTo?.toLowerCase()) {
+      return { valid: false, reason: "Wrong recipient" };
+    }
+
+    // Verify not expired
+    if (auth.validBefore && auth.validBefore < Math.floor(Date.now() / 1000)) {
+      return { valid: false, reason: "Payment expired" };
+    }
+
+    // Recover signer from EIP-712 typed data signature
+    try {
+      const { ethers } = require("ethers");
+      const domain = {
+        name: "USD Coin",
+        version: "2",
+        chainId: 8453,
+        verifyingContract: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      };
+      const types = {
+        TransferWithAuthorization: [
+          { name: "from", type: "address" },
+          { name: "to", type: "address" },
+          { name: "value", type: "uint256" },
+          { name: "validAfter", type: "uint256" },
+          { name: "validBefore", type: "uint256" },
+          { name: "nonce", type: "bytes32" },
+        ],
+      };
+      const message = {
+        from: auth.from,
+        to: auth.to,
+        value: auth.value,
+        validAfter: auth.validAfter,
+        validBefore: auth.validBefore,
+        nonce: auth.nonce,
+      };
+
+      const recoveredAddress = ethers.verifyTypedData(domain, types, message, sig);
+      if (recoveredAddress.toLowerCase() !== auth.from.toLowerCase()) {
+        return { valid: false, reason: "Signature mismatch" };
+      }
+
+      // Signature valid — the user authorized this USDC transfer
+      return {
+        valid: true,
+        from: auth.from,
+        receipt: { authorization: auth, signature: sig, verified: "direct" },
+        txHash: null, // on-chain tx happens when we call transferWithAuthorization
+      };
+    } catch (err) {
+      return { valid: false, reason: "Signature verification error: " + err.message };
+    }
+  }
+
+  // Unknown format — try facilitator
+  return _verifyViaFacilitator(paymentSig, price);
+}
+
+async function _verifyViaFacilitator(paymentSig, price) {
+  try {
+    const https = require("https");
+    const http = require("http");
+    const url = new (require("url").URL)(_facilitatorUrl + "/verify");
+    const body = JSON.stringify({
       paymentSignature: paymentSig,
       routeConfig: { accepts: [{ scheme: "exact", price, network: _network, payTo: _payTo }] },
     });
-    return { valid: result.valid, receipt: result.receipt, txHash: result.txHash };
-  } catch {
-    // Fallback: raw HTTP to facilitator
-    try {
-      const https = require("https");
-      const http = require("http");
-      const url = new (require("url").URL)(_facilitatorUrl + "/verify");
-      const body = JSON.stringify({
-        paymentSignature: paymentSig,
-        routeConfig: { accepts: [{ scheme: "exact", price, network: _network, payTo: _payTo }] },
-      });
-      return new Promise((resolve) => {
-        const client = url.protocol === "https:" ? https : http;
-        const req = client.request({
-          hostname: url.hostname, port: url.port, path: url.pathname, method: "POST",
-          headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
-          timeout: 10000,
-        }, (res) => {
-          let data = "";
-          res.on("data", (c) => data += c);
-          res.on("end", () => {
-            try { const p = JSON.parse(data); resolve({ valid: p.valid || p.success, receipt: p, txHash: p.txHash }); }
-            catch { resolve({ valid: false }); }
-          });
+    return new Promise((resolve) => {
+      const client = url.protocol === "https:" ? https : http;
+      const req = client.request({
+        hostname: url.hostname, port: url.port, path: url.pathname, method: "POST",
+        headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
+        timeout: 10000,
+      }, (res) => {
+        let data = "";
+        res.on("data", (c) => data += c);
+        res.on("end", () => {
+          try { const p = JSON.parse(data); resolve({ valid: p.valid || p.success, receipt: p, txHash: p.txHash }); }
+          catch { resolve({ valid: false }); }
         });
-        req.on("error", () => resolve({ valid: false }));
-        req.write(body);
-        req.end();
       });
-    } catch { return { valid: false }; }
-  }
+      req.on("error", () => resolve({ valid: false }));
+      req.write(body);
+      req.end();
+    });
+  } catch { return { valid: false }; }
 }
 
 x402Plugin[Symbol.for("skip-override")] = true;
