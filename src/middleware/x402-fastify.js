@@ -270,7 +270,9 @@ async function _selfSettle(paymentSig, price) {
 
   // Verify amount
   const expectedUsdc = Math.round(parseFloat(price.replace("$", "")) * 1e6);
-  const actualUsdc = parseInt(auth.value, 16) || parseInt(auth.value, 10) || 0;
+  // Value comes as decimal string (e.g. "1000000" for $1) or hex (legacy "0xf4240")
+  const valStr = String(auth.value);
+  const actualUsdc = valStr.startsWith("0x") ? parseInt(valStr, 16) : parseInt(valStr, 10) || 0;
   if (actualUsdc < expectedUsdc * 0.99) {
     return { valid: false, reason: "amount_mismatch" };
   }
