@@ -43,10 +43,10 @@ async function x402Plugin(fastify, opts) {
     } catch {}
   }
 
-  // Initialize facilitator from @coinbase/x402
+  // Initialize facilitator from @coinbase/x402 (ESM packages, need dynamic import)
   try {
-    const { facilitator } = require("@coinbase/x402");
-    const { useFacilitator } = require("x402/verify");
+    const { facilitator } = await import("@coinbase/x402");
+    const { useFacilitator } = await import("x402/verify");
     _facilitatorClient = useFacilitator(facilitator);
     console.log(`  💰 x402: facilitator loaded (@coinbase/x402)`);
   } catch (err) {
@@ -98,7 +98,7 @@ async function x402Plugin(fastify, opts) {
     const paymentHeader = request.headers["x-payment"] || request.headers["payment-signature"];
 
     // Build payment requirements (v1 format matching @coinbase/x402)
-    const { getAddress } = require("viem");
+    const { getAddress } = await import("viem");
     const paymentRequirements = {
       scheme: "exact",
       network: _network,
@@ -130,7 +130,7 @@ async function x402Plugin(fastify, opts) {
     // Decode payment
     let decodedPayment;
     try {
-      const { exact } = require("x402/schemes");
+      const { exact } = await import("x402/schemes");
       const libraryDecoded = exact.evm.decodePayment(paymentHeader);
 
       // Parse raw payload for metadata
@@ -186,7 +186,7 @@ async function x402Plugin(fastify, opts) {
       const decodedPayment = { x402Version: raw.x402Version || 1, scheme: raw.scheme || "exact", network: raw.network || _network, payload: libraryDecoded.payload };
 
       const userValue = decodedPayment.payload.authorization.value;
-      const { getAddress } = require("viem");
+      const { getAddress } = await import("viem");
       const requirements = {
         scheme: "exact", network: _network, maxAmountRequired: userValue,
         resource: `${request.method} ${request.url}`, description: "", mimeType: "application/json",
