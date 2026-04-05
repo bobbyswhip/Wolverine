@@ -5,9 +5,7 @@
     "env": "development"
   },
 
-  "_docs_models": "Each task wolverine performs uses a specific model role. You can mix providers freely — provider is auto-detected from the model name (claude-* → Anthropic, gpt-* → OpenAI). Using the same model across roles maximizes prompt cache hits and reduces cost. View per-role cost, speed, and token analytics on the wolverine dashboard at localhost:3001/analytics",
   "models": {
-    "_docs": "reasoning: deep error analysis & root cause diagnosis | coding: generates code fixes (fast path, no tools) | chat: summaries & brain compression | tool: agent tool-calling during complex heals | classifier: error type classification | audit: security & injection scanning | compacting: context window compression | research: deep investigation & web research",
     "reasoning": "claude-sonnet-4-6",
     "coding": "claude-sonnet-4-6",
     "chat": "claude-sonnet-4-6",
@@ -18,23 +16,19 @@
     "research": "claude-sonnet-4-6"
   },
 
-  "_docs_embedding": "Vector embedding model for the brain's memory system. Used to store and recall past fixes. text-embedding-3-small is the default (requires OPENAI_API_KEY). wolverine-embedding-1 routes through wolverine credits at 2x markup.",
   "embedding": "text-embedding-3-small",
 
-  "_docs_server": "port: server listen port (must be 3000 for wolverine) | maxRetries: consecutive crash restarts before giving up | maxMemoryMB: OOM threshold — process killed and healed if exceeded",
   "server": {
     "port": 3000,
     "maxRetries": 3,
     "maxMemoryMB": 512
   },
 
-  "_docs_telemetry": "Heartbeat reports server health (memory, CPU, routes, repair stats) to the dashboard every heartbeatIntervalMs. Disable if running fully offline.",
   "telemetry": {
     "enabled": true,
     "heartbeatIntervalMs": 60000
   },
 
-  "_docs_rateLimiting": "AI call budget to prevent runaway costs. maxCallsPerWindow: total AI calls allowed in windowMs. minGapMs: minimum delay between calls. maxTokensPerHour: hard token ceiling across all models.",
   "rateLimiting": {
     "maxCallsPerWindow": 32,
     "windowMs": 100000,
@@ -42,7 +36,6 @@
     "maxTokensPerHour": 1000000
   },
 
-  "_docs_healthCheck": "Probes server liveness. intervalMs: check frequency. timeoutMs: max wait for response. failThreshold: consecutive failures before triggering heal. startDelayMs: grace period after boot before first check.",
   "healthCheck": {
     "intervalMs": 15000,
     "timeoutMs": 5000,
@@ -50,14 +43,12 @@
     "startDelayMs": 10000
   },
 
-  "_docs_errorMonitor": "Tracks caught 500 errors per route. defaultThreshold: how many 500s on one route before triggering a heal. windowMs: error counting window. cooldownMs: minimum time between heals on the same route.",
   "errorMonitor": {
     "defaultThreshold": 1,
     "windowMs": 30000,
     "cooldownMs": 60000
   },
 
-  "_docs_autoUpdate": "Auto-updates wolverine framework from git. Only updates src/ and bin/ — never touches your server/ code. Checks every intervalMs.",
   "autoUpdate": {
     "enabled": false,
     "intervalMs": 300000
@@ -68,7 +59,6 @@
     "cors": ["http://localhost:3000"]
   },
 
-  "_docs_dashboard": "Dashboard serves on port+1 (default 3001). Configure WOLVERINE_ADMIN_KEY in .env.local for the agent command interface.",
   "dashboard": {},
 
   "cors": {

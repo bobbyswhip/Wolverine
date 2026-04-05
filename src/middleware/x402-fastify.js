@@ -160,8 +160,6 @@ async function x402Plugin(fastify, opts) {
     // Verify via facilitator
     try {
       console.log(`  💰 x402 verify: from=${decodedPayment.payload?.authorization?.from} value=${decodedPayment.payload?.authorization?.value} network=${decodedPayment.network}`);
-      console.log(`  💰 x402 payload: ${JSON.stringify(decodedPayment).slice(0, 300)}`);
-      console.log(`  💰 x402 requirements: ${JSON.stringify(actualRequirements).slice(0, 300)}`);
       const verifyResult = await _facilitatorClient.verify(decodedPayment, actualRequirements);
       if (!verifyResult.isValid) {
         console.log(`  ⚠️ x402 verify failed: ${verifyResult.invalidReason} ${verifyResult.invalidMessage || ""}`);
