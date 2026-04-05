@@ -66,10 +66,10 @@ async function x402Plugin(fastify, opts) {
     console.log(`  💰 x402: payments to ${_payTo.slice(0, 6)}...${_payTo.slice(-4)} on ${_network}`);
   }
 
-  // ── Route-level x402 hook ──
-  fastify.addHook("onRequest", async (request, reply) => {
-    // Check if this route has x402 config
-    const routeConfig = request.routeOptions?.config?.x402 || request.context?.config?.x402;
+  // ── Route-level x402 hook (preHandler so body is parsed for variable pricing) ──
+  fastify.addHook("preHandler", async (request, reply) => {
+    // Check if this route has x402 config (Fastify v4: context.config, v5: routeOptions.config)
+    const routeConfig = request.routeOptions?.config?.x402 || request.routeConfig?.x402 || request.context?.config?.x402;
     if (!routeConfig) return; // Not an x402 route
     if (!_payTo) {
       reply.code(500).send({ error: "x402 not configured — no wallet address" });
