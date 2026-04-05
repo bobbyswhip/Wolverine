@@ -44,6 +44,15 @@ const INJECTION_PATTERNS = [
   // Vault key material leak — CRITICAL: block heal entirely
   { pattern: /0x[0-9a-fA-F]{64}/i, label: "key-leak-critical" },
   { pattern: /master\.key|eth\.vault|\.wolverine\/vault/i, label: "vault-path-leak" },
+  // Bash sandbox escape vectors — error messages crafted to make AI write escaping commands
+  { pattern: /cd\s+\/(?!tmp)\w/i, label: "bash-escape" },
+  { pattern: />\s*\/(?!tmp|dev\/null)\w/i, label: "bash-escape" },
+  { pattern: /curl.*-[dF]\s*@/i, label: "bash-exfil" },
+  { pattern: /wget.*--post-file/i, label: "bash-exfil" },
+  { pattern: /nc\s+-[lp]/i, label: "bash-reverse-shell" },
+  { pattern: /bash\s+-i/i, label: "bash-reverse-shell" },
+  { pattern: /\/dev\/tcp\//i, label: "bash-reverse-shell" },
+  { pattern: /mkfifo|mknod.*\/tmp/i, label: "bash-reverse-shell" },
 ];
 
 /**
