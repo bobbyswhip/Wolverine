@@ -120,6 +120,22 @@ function classifyError(errorMessage, fullStderr) {
   if (/typeerror|referenceerror|rangeerror/.test(msg)) {
     return "runtime";
   }
+  // Disk full
+  if (/enospc/.test(msg)) {
+    return "disk_full";
+  }
+  // Too many open files
+  if (/emfile|enfile/.test(msg)) {
+    return "file_descriptors";
+  }
+  // Connection issues (DB, Redis, external services)
+  if (/econnrefused|econnreset|etimedout/.test(msg) && !/eaddrinuse/.test(msg)) {
+    return "connection";
+  }
+  // TLS/SSL certificate errors
+  if (/cert_|certificate|self.signed|unable_to_verify/.test(msg)) {
+    return "certificate";
+  }
   return "unknown";
 }
 

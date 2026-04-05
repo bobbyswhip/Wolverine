@@ -187,10 +187,19 @@ async function routes(fastify) {
 
       if (b.alerts && Array.isArray(b.alerts)) {
         for (const alert of b.alerts) {
-          await pool.query(
-            "INSERT INTO alerts (server_id, type, message, severity) VALUES ($1, $2, $3, $4)",
-            [serverId, alert.type || "unknown", (alert.error || alert.message || "").slice(0, 500), alert.severity || "medium"]
+          const msg = (alert.error || alert.message || "").slice(0, 500);
+          const type = alert.type || "unknown";
+          // Dedup: skip if same server + type + message already exists in last 24h
+          const dupe = await pool.query(
+            "SELECT 1 FROM alerts WHERE server_id = $1 AND type = $2 AND message = $3 AND created_at > NOW() - INTERVAL '24 hours' LIMIT 1",
+            [serverId, type, msg]
           );
+          if (dupe.rows.length === 0) {
+            await pool.query(
+              "INSERT INTO alerts (server_id, type, message, severity) VALUES ($1, $2, $3, $4)",
+              [serverId, type, msg, alert.severity || "medium"]
+            );
+          }
         }
       }
 

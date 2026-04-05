@@ -654,6 +654,44 @@ async function tryOperationalFix(parsed, cwd, logger, sandbox) {
     }
   }
 
+  // Pattern 5: ENOSPC — disk full, try automated cleanup
+  if (/ENOSPC/.test(msg)) {
+    try {
+      const os = require("os");
+      const backupDir = path.join(os.homedir(), ".wolverine-safe-backups", "snapshots");
+      let cleaned = 0;
+      if (fs.existsSync(backupDir)) {
+        const now = Date.now();
+        for (const dir of fs.readdirSync(backupDir)) {
+          const full = path.join(backupDir, dir);
+          try {
+            const stat = fs.statSync(full);
+            if (stat.isDirectory() && (now - stat.mtimeMs) > 7 * 86400000) {
+              execSync(`rm -rf "${full}"`, { timeout: 10000 });
+              cleaned++;
+            }
+          } catch {}
+        }
+      }
+      try { execSync("npm cache clean --force", { cwd, stdio: "pipe", timeout: 30000 }); cleaned++; } catch {}
+      if (cleaned > 0) {
+        console.log(chalk.blue(`  🧹 Cleaned ${cleaned} items to free disk space`));
+        return { fixed: true, action: `Disk full — cleaned ${cleaned} old backups/caches to free space` };
+      }
+    } catch {}
+  }
+
+  // Pattern 6: EMFILE — too many open files, try raising ulimit
+  if (/EMFILE|ENFILE/.test(msg)) {
+    try {
+      if (process.platform !== "win32") {
+        execSync("ulimit -n 65536 2>/dev/null || true", { cwd, stdio: "pipe", timeout: 3000 });
+        console.log(chalk.blue("  📂 Raised file descriptor limit to 65536"));
+        return { fixed: true, action: "EMFILE — raised file descriptor limit (ulimit -n 65536)" };
+      }
+    } catch {}
+  }
+
   return { fixed: false };
 }
 

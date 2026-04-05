@@ -358,6 +358,90 @@ const TOOL_DEFINITIONS = [
       },
     },
   },
+  // ── ADVANCED DIAGNOSTICS ──
+  {
+    type: "function",
+    function: {
+      name: "verify_node_modules",
+      description: "Verify node_modules integrity against package-lock.json. Detects corruption, missing packages, broken bin links.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "inspect_certificate",
+      description: "Inspect SSL/TLS certificate for a host or local file. Shows expiry, subject, SAN list, chain validity.",
+      parameters: {
+        type: "object",
+        properties: {
+          host: { type: "string", description: "Hostname to check (e.g. api.example.com)" },
+          port: { type: "number", description: "Port (default: 443)" },
+        },
+        required: ["host"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "inspect_cache",
+      description: "Check Redis/cache server health: connectivity, auth, memory usage, connected clients.",
+      parameters: {
+        type: "object",
+        properties: {
+          host: { type: "string", description: "Redis host (default: 127.0.0.1)" },
+          port: { type: "number", description: "Redis port (default: 6379)" },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "disk_cleanup",
+      description: "Find and optionally clean safe-to-delete files (old backups, caches, logs) to free disk space. Dry run by default.",
+      parameters: {
+        type: "object",
+        properties: {
+          dry_run: { type: "boolean", description: "If true (default), only report what would be cleaned" },
+        },
+        required: [],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "check_file_descriptors",
+      description: "Check open file descriptor count, limits, and identify potential FD leaks (EMFILE prevention).",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "check_event_loop",
+      description: "Scan server code for event loop blocking patterns (readFileSync, execSync, large JSON.parse) and check active handles.",
+      parameters: { type: "object", properties: {}, required: [] },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "check_websocket",
+      description: "Test a WebSocket endpoint by performing a real handshake. Reports connection success, upgrade status, latency.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "WebSocket URL (ws:// or wss://)" },
+          timeout_ms: { type: "number", description: "Connection timeout (default: 5000)" },
+        },
+        required: ["url"],
+      },
+    },
+  },
   // ── TASK MANAGEMENT ──
   {
     type: "function",
@@ -645,6 +729,13 @@ class AgentEngine {
       case "restart_service": return this._restartService(args);
       case "check_network": return this._checkNetwork(args);
       case "inspect_env":   return this._inspectEnv(args);
+      case "verify_node_modules": return this._verifyNodeModules(args);
+      case "inspect_certificate": return this._inspectCertificate(args);
+      case "inspect_cache": return this._inspectCache(args);
+      case "disk_cleanup":  return this._diskCleanup(args);
+      case "check_file_descriptors": return this._checkFileDescriptors(args);
+      case "check_event_loop": return this._checkEventLoop(args);
+      case "check_websocket": return this._checkWebsocket(args);
       case "done":          return this._done(args);
       // Legacy aliases
       case "list_files":    return this._globFiles({ pattern: (args.dir || ".") + "/*" + (args.pattern || "") });
@@ -1242,6 +1333,268 @@ class AgentEngine {
       `Total env vars: ${keys.length}`,
     ];
     return { content: lines.join("\n") };
+  }
+
+  // ── ADVANCED DIAGNOSTICS ──
+
+  _verifyNodeModules() {
+    try {
+      const lockPath = path.join(this.cwd, "package-lock.json");
+      const pkgPath = path.join(this.cwd, "package.json");
+      if (!fs.existsSync(lockPath)) return { content: "No package-lock.json found. Run: npm install" };
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+      const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+      const missing = [];
+      const broken = [];
+      for (const [name] of Object.entries(deps)) {
+        const modPath = path.join(this.cwd, "node_modules", name);
+        if (!fs.existsSync(modPath)) { missing.push(name); continue; }
+        const modPkg = path.join(modPath, "package.json");
+        if (!fs.existsSync(modPkg)) { broken.push(name + " (no package.json)"); continue; }
+      }
+      // Check .bin links
+      const binDir = path.join(this.cwd, "node_modules", ".bin");
+      let brokenBins = 0;
+      if (fs.existsSync(binDir)) {
+        for (const bin of fs.readdirSync(binDir)) {
+          const target = path.join(binDir, bin);
+          try { fs.readlinkSync(target); } catch { brokenBins++; }
+        }
+      }
+      const rec = missing.length > 5 || broken.length > 3 ? "rm -rf node_modules && npm install" : missing.length > 0 ? "npm install" : "ok";
+      const lines = [
+        `Dependencies: ${Object.keys(deps).length}`,
+        `Missing from disk: ${missing.length > 0 ? missing.join(", ") : "none"}`,
+        `Broken packages: ${broken.length > 0 ? broken.join(", ") : "none"}`,
+        `Broken .bin links: ${brokenBins}`,
+        `Recommendation: ${rec}`,
+      ];
+      return { content: lines.join("\n") };
+    } catch (e) { return { content: `Error: ${e.message}` }; }
+  }
+
+  _inspectCertificate(args) {
+    try {
+      const tls = require("tls");
+      const host = args.host;
+      const port = args.port || 443;
+      return new Promise((resolve) => {
+        const socket = tls.connect({ host, port, servername: host, rejectUnauthorized: false, timeout: 5000 }, () => {
+          const cert = socket.getPeerCertificate();
+          const validTo = new Date(cert.valid_to);
+          const daysLeft = Math.round((validTo - Date.now()) / 86400000);
+          const lines = [
+            `Subject: ${cert.subject?.CN || "unknown"}`,
+            `Issuer: ${cert.issuer?.O || cert.issuer?.CN || "unknown"}`,
+            `Valid: ${cert.valid_from} → ${cert.valid_to}`,
+            `Days until expiry: ${daysLeft}${daysLeft < 30 ? " ⚠️ EXPIRING SOON" : daysLeft < 0 ? " ❌ EXPIRED" : ""}`,
+            `SAN: ${(cert.subjectaltname || "").replace(/DNS:/g, "").split(",").map(s => s.trim()).join(", ") || "none"}`,
+            `Self-signed: ${cert.issuer?.CN === cert.subject?.CN ? "yes" : "no"}`,
+            `Authorized: ${socket.authorized}`,
+            socket.authorizationError ? `TLS error: ${socket.authorizationError}` : "",
+          ].filter(Boolean);
+          socket.destroy();
+          resolve({ content: lines.join("\n") });
+        });
+        socket.on("error", (e) => { resolve({ content: `TLS error for ${host}:${port}: ${e.message}` }); });
+        socket.setTimeout(5000, () => { socket.destroy(); resolve({ content: `Timeout connecting to ${host}:${port}` }); });
+      });
+    } catch (e) { return { content: `Error: ${e.message}` }; }
+  }
+
+  _inspectCache(args) {
+    try {
+      const host = args.host || "127.0.0.1";
+      const port = args.port || 6379;
+      const net = require("net");
+      return new Promise((resolve) => {
+        const client = net.createConnection({ host, port, timeout: 3000 }, () => {
+          let buf = "";
+          client.on("data", (d) => { buf += d.toString(); });
+          client.write("PING\r\nINFO memory\r\nINFO clients\r\nINFO keyspace\r\n");
+          setTimeout(() => {
+            client.destroy();
+            const pong = buf.includes("+PONG");
+            const memMatch = buf.match(/used_memory_human:(\S+)/);
+            const clientMatch = buf.match(/connected_clients:(\d+)/);
+            const lines = [
+              `Reachable: ${pong ? "yes" : "no"}`,
+              `Auth required: ${buf.includes("NOAUTH") ? "yes (failed)" : "no"}`,
+              `Memory: ${memMatch ? memMatch[1] : "unknown"}`,
+              `Connected clients: ${clientMatch ? clientMatch[1] : "unknown"}`,
+            ];
+            resolve({ content: lines.join("\n") });
+          }, 1500);
+        });
+        client.on("error", (e) => { resolve({ content: `Redis ${host}:${port} error: ${e.message}` }); });
+        client.setTimeout(3000, () => { client.destroy(); resolve({ content: `Redis ${host}:${port} timeout` }); });
+      });
+    } catch (e) { return { content: `Error: ${e.message}` }; }
+  }
+
+  _diskCleanup(args) {
+    try {
+      const dryRun = args.dry_run !== false;
+      const os = require("os");
+      const targets = [];
+      let reclaimable = 0;
+      // Old wolverine backups
+      const backupDir = path.join(os.homedir(), ".wolverine-safe-backups", "snapshots");
+      if (fs.existsSync(backupDir)) {
+        const now = Date.now();
+        for (const dir of fs.readdirSync(backupDir)) {
+          const full = path.join(backupDir, dir);
+          try {
+            const stat = fs.statSync(full);
+            const ageDays = (now - stat.mtimeMs) / 86400000;
+            if (ageDays > 7 && stat.isDirectory()) {
+              let size = 0;
+              const walk = (d) => { for (const f of fs.readdirSync(d)) { const p = path.join(d, f); const s = fs.statSync(p); if (s.isDirectory()) walk(p); else size += s.size; } };
+              walk(full);
+              const mb = Math.round(size / 1048576);
+              targets.push({ path: `~/.wolverine-safe-backups/snapshots/${dir}`, size_mb: mb, reason: `${Math.round(ageDays)}d old backup` });
+              reclaimable += mb;
+            }
+          } catch {}
+        }
+      }
+      // npm cache
+      const cacheDir = path.join(this.cwd, "node_modules", ".cache");
+      if (fs.existsSync(cacheDir)) {
+        try {
+          let size = 0;
+          const walk = (d) => { for (const f of fs.readdirSync(d)) { const p = path.join(d, f); try { const s = fs.statSync(p); if (s.isDirectory()) walk(p); else size += s.size; } catch {} } };
+          walk(cacheDir);
+          const mb = Math.round(size / 1048576);
+          if (mb > 1) { targets.push({ path: "node_modules/.cache/", size_mb: mb, reason: "build cache" }); reclaimable += mb; }
+        } catch {}
+      }
+      // Clean if not dry run
+      if (!dryRun && targets.length > 0) {
+        for (const t of targets) {
+          try { execSync(`rm -rf "${t.path.replace("~", os.homedir())}"`, { timeout: 10000 }); } catch {}
+        }
+      }
+      const diskFree = Math.round(parseInt(execSync("df -m . | tail -1 | awk '{print $4}'", { encoding: "utf-8", cwd: this.cwd, timeout: 3000 }).trim() || "0", 10));
+      const lines = [
+        `Disk free: ${diskFree}MB`,
+        `Reclaimable: ${reclaimable}MB (${targets.length} targets)`,
+        dryRun ? "Mode: DRY RUN (pass dry_run=false to clean)" : `Cleaned ${targets.length} targets`,
+        ...targets.map(t => `  ${t.path} (${t.size_mb}MB) — ${t.reason}`),
+      ];
+      return { content: lines.join("\n") };
+    } catch (e) { return { content: `Error: ${e.message}` }; }
+  }
+
+  _checkFileDescriptors() {
+    try {
+      if (process.platform === "win32") return { content: "FD check not available on Windows" };
+      const pid = process.pid;
+      const fdDir = `/proc/${pid}/fd`;
+      let count = 0;
+      try { count = fs.readdirSync(fdDir).length; } catch {}
+      let limits = "";
+      try { limits = execSync(`cat /proc/${pid}/limits | grep 'open files'`, { encoding: "utf-8", timeout: 3000 }).trim(); } catch {}
+      const softMatch = limits.match(/(\d+)\s+(\d+)/);
+      const soft = softMatch ? parseInt(softMatch[1]) : 0;
+      const hard = softMatch ? parseInt(softMatch[2]) : 0;
+      const pct = soft > 0 ? Math.round(count / soft * 100) : 0;
+      const lines = [
+        `Open FDs: ${count}`,
+        `Soft limit: ${soft}`,
+        `Hard limit: ${hard}`,
+        `Usage: ${pct}%${pct > 80 ? " ⚠️ HIGH — risk of EMFILE" : pct > 50 ? " — moderate" : " — ok"}`,
+      ];
+      // Find top consumers
+      try {
+        const top = execSync(`ls -la /proc/${pid}/fd 2>/dev/null | tail -20 | awk '{print $NF}' | sort | uniq -c | sort -rn | head -10`, { encoding: "utf-8", timeout: 3000 }).trim();
+        if (top) lines.push("Top FD targets:", top);
+      } catch {}
+      return { content: lines.join("\n") };
+    } catch (e) { return { content: `Error: ${e.message}` }; }
+  }
+
+  _checkEventLoop() {
+    try {
+      // Static analysis: find blocking patterns in server code
+      const patterns = [
+        { regex: /readFileSync\s*\(/g, name: "fs.readFileSync" },
+        { regex: /writeFileSync\s*\(/g, name: "fs.writeFileSync" },
+        { regex: /execSync\s*\(/g, name: "child_process.execSync" },
+        { regex: /pbkdf2Sync\s*\(/g, name: "crypto.pbkdf2Sync" },
+        { regex: /JSON\.parse\s*\(\s*fs\./g, name: "JSON.parse(fs.read...)" },
+        { regex: /\.forEach\s*\(\s*(async\s*)?\(/g, name: "forEach (blocks with async)" },
+      ];
+      const serverDir = path.join(this.cwd, "server");
+      const findings = [];
+      const walk = (dir) => {
+        if (!fs.existsSync(dir)) return;
+        for (const f of fs.readdirSync(dir)) {
+          if (f === "node_modules" || f.startsWith(".")) continue;
+          const full = path.join(dir, f);
+          const stat = fs.statSync(full);
+          if (stat.isDirectory()) { walk(full); continue; }
+          if (!f.endsWith(".js")) continue;
+          const code = fs.readFileSync(full, "utf-8");
+          for (const p of patterns) {
+            const matches = code.match(p.regex);
+            if (matches) {
+              findings.push(`${path.relative(this.cwd, full)}: ${matches.length}x ${p.name}`);
+            }
+          }
+        }
+      };
+      walk(serverDir);
+      const handles = process._getActiveHandles?.()?.length || "unknown";
+      const requests = process._getActiveRequests?.()?.length || "unknown";
+      const lines = [
+        `Active handles: ${handles}`,
+        `Active requests: ${requests}`,
+        findings.length > 0 ? `\nBlocking patterns found (${findings.length}):` : "No blocking patterns found in server/",
+        ...findings.slice(0, 20),
+      ];
+      return { content: lines.join("\n") };
+    } catch (e) { return { content: `Error: ${e.message}` }; }
+  }
+
+  _checkWebsocket(args) {
+    try {
+      const url = args.url;
+      const timeout = args.timeout_ms || 5000;
+      const urlObj = new (require("url").URL)(url);
+      const isSecure = urlObj.protocol === "wss:";
+      const client = isSecure ? require("https") : require("http");
+      return new Promise((resolve) => {
+        const req = client.request({
+          hostname: urlObj.hostname,
+          port: urlObj.port || (isSecure ? 443 : 80),
+          path: urlObj.pathname + urlObj.search,
+          method: "GET",
+          headers: {
+            "Upgrade": "websocket",
+            "Connection": "Upgrade",
+            "Sec-WebSocket-Key": require("crypto").randomBytes(16).toString("base64"),
+            "Sec-WebSocket-Version": "13",
+          },
+          timeout,
+        }, (res) => {
+          resolve({ content: `HTTP ${res.statusCode} (expected 101 for WS upgrade)\nHeaders: ${JSON.stringify(res.headers, null, 2).slice(0, 500)}` });
+          res.resume();
+        });
+        req.on("upgrade", (res, socket) => {
+          const lines = [
+            `WebSocket upgrade: SUCCESS (101)`,
+            `Protocol: ${res.headers["sec-websocket-protocol"] || "none"}`,
+            `Latency: connected`,
+          ];
+          socket.destroy();
+          resolve({ content: lines.join("\n") });
+        });
+        req.on("error", (e) => { resolve({ content: `WebSocket error for ${url}: ${e.message}` }); });
+        req.on("timeout", () => { req.destroy(); resolve({ content: `WebSocket timeout for ${url} (${timeout}ms)` }); });
+        req.end();
+      });
+    } catch (e) { return { content: `Error: ${e.message}` }; }
   }
 
   _done(args) {
