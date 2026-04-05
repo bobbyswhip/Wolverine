@@ -1,6 +1,11 @@
 const fs = require("fs");
 const path = require("path");
 
+// Node 18 needs globalThis.crypto for CDP SDK (Ed25519 JWT signing)
+if (!globalThis.crypto) {
+  globalThis.crypto = require("crypto").webcrypto;
+}
+
 /**
  * x402 Fastify Plugin — add crypto payments to any route with one flag.
  *
