@@ -16,7 +16,7 @@ const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
 let _payTo = null;
 let _network = "eip155:8453";
-let _facilitatorUrl = "https://x402.org/facilitator";
+let _facilitatorUrl = "https://www.x402.org/facilitator";
 
 async function x402Plugin(fastify, opts) {
   _network = opts.network || _network;
@@ -44,8 +44,8 @@ async function x402Plugin(fastify, opts) {
   if (!opts.facilitator) {
     const isTestnet = _network.includes("84532") || _network.includes("11155");
     _facilitatorUrl = isTestnet
-      ? "https://x402.org/facilitator"
-      : "https://x402.org/facilitator"; // CDP production requires auth — use x402.org for both
+      ? "https://www.x402.org/facilitator"
+      : "https://www.x402.org/facilitator"; // www. avoids 308 redirect from x402.org
   }
 
   if (_payTo) {
