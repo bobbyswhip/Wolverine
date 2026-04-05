@@ -4,38 +4,35 @@ const path = require("path");
 /**
  * x402 Fastify Plugin — add crypto payments to any route with one flag.
  *
- * Uses the official @x402/core SDK for payment verification and settlement
- * via the CDP facilitator. Compatible with x402 Bazaar for API discovery.
+ * Uses @coinbase/x402 facilitator + x402/verify for payment verification
+ * and on-chain settlement. Matches the working pattern from blockaid-scanner.
  *
  * Two modes:
  *   Fixed price:    { x402: { price: "$0.01" } }
  *   Variable price: { x402: { variable: true, min: "$1", max: "$10000" } }
  */
 
-// Node 18 needs globalThis.crypto for @x402/evm
+// Node 18 needs globalThis.crypto
 if (!globalThis.crypto) {
   globalThis.crypto = require("crypto").webcrypto;
 }
 
-const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+const USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+const USDC_EIP712 = { name: "USD Coin", version: "2" };
 
 let _payTo = null;
-let _network = "eip155:8453";
-let _facilitatorUrl = "https://api.cdp.coinbase.com/platform/v2/x402";
-let _x402Server = null; // x402ResourceServer instance
+let _network = "base"; // v1 format, not CAIP-2
+let _facilitatorClient = null;
 
 async function x402Plugin(fastify, opts) {
-  _network = opts.network || _network;
-  _facilitatorUrl = opts.facilitator || _facilitatorUrl;
   _payTo = opts.payTo || null;
 
   // Load from settings.json
   try {
     const settingsPath = path.join(process.cwd(), "server", "config", "settings.json");
     const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
-    if (settings.x402?.network) _network = settings.x402.network;
-    if (settings.x402?.facilitator) _facilitatorUrl = settings.x402.facilitator;
     if (settings.x402?.payTo) _payTo = settings.x402.payTo;
+    if (settings.x402?.network) _network = settings.x402.network;
   } catch {}
 
   // Auto-detect payTo from vault
@@ -46,44 +43,18 @@ async function x402Plugin(fastify, opts) {
     } catch {}
   }
 
-  if (_payTo) {
-    console.log(`  💰 x402: payments to ${_payTo.slice(0, 6)}...${_payTo.slice(-4)} on ${_network}`);
-    console.log(`  💰 x402: facilitator ${_facilitatorUrl}`);
+  // Initialize facilitator from @coinbase/x402
+  try {
+    const { facilitator } = require("@coinbase/x402");
+    const { useFacilitator } = require("x402/verify");
+    _facilitatorClient = useFacilitator(facilitator);
+    console.log(`  💰 x402: facilitator loaded (@coinbase/x402)`);
+  } catch (err) {
+    console.log(`  ⚠️ x402: facilitator init failed (${err.message}) — install @coinbase/x402 x402`);
   }
 
-  // Initialize x402 SDK server with CDP facilitator
-  try {
-    const { x402ResourceServer, HTTPFacilitatorClient } = require("@x402/core/server");
-    const { ExactEvmScheme } = require("@x402/evm/exact/server");
-
-    const facilitatorConfig = { url: _facilitatorUrl };
-
-    // Add CDP auth if keys are available
-    if (process.env.CDP_API_KEY_ID && process.env.CDP_API_KEY_SECRET) {
-      facilitatorConfig.createAuthHeaders = async () => {
-        const { getAuthHeaders } = await import("@coinbase/cdp-sdk/auth");
-        const endpoints = ["verify", "settle", "supported"];
-        const result = {};
-        for (const ep of endpoints) {
-          const headers = await getAuthHeaders({
-            apiKeyId: process.env.CDP_API_KEY_ID,
-            apiKeySecret: process.env.CDP_API_KEY_SECRET,
-            requestMethod: "POST",
-            requestHost: `https://${new URL(_facilitatorUrl).host}`,
-            requestPath: `${new URL(_facilitatorUrl).pathname}/${ep}`,
-          });
-          result[ep] = headers;
-        }
-        return result;
-      };
-    }
-
-    const client = new HTTPFacilitatorClient(facilitatorConfig);
-    _x402Server = new x402ResourceServer(client);
-    _x402Server.register("eip155:*", new ExactEvmScheme());
-    console.log(`  💰 x402: SDK initialized (ExactEvmScheme)`);
-  } catch (err) {
-    console.log(`  ⚠️ x402: SDK init failed (${err.message}) — using direct verification`);
+  if (_payTo) {
+    console.log(`  💰 x402: payments to ${_payTo.slice(0, 6)}...${_payTo.slice(-4)} on ${_network}`);
   }
 
   // ── Route-level x402 hook ──
@@ -94,17 +65,18 @@ async function x402Plugin(fastify, opts) {
       reply.code(500).send({ error: "x402 not configured — no wallet address" });
       return;
     }
+    if (!_facilitatorClient) {
+      reply.code(500).send({ error: "x402 facilitator not loaded — install @coinbase/x402 x402" });
+      return;
+    }
 
-    // Determine the price
+    // Determine dollar amount
     let dollarAmount;
     if (routeConfig.variable) {
       const field = routeConfig.priceField || "dollars";
       const raw = request.body?.[field] || request.query?.[field];
       if (!raw) {
-        reply.code(400).send({
-          error: `${field} required`,
-          x402: { variable: true, min: routeConfig.min || "$1", max: routeConfig.max || "$10000" },
-        });
+        reply.code(400).send({ error: `${field} required`, x402: { variable: true, min: routeConfig.min || "$1", max: routeConfig.max || "$10000" } });
         return;
       }
       dollarAmount = parseFloat(String(raw).replace("$", ""));
@@ -119,113 +91,128 @@ async function x402Plugin(fastify, opts) {
       if (!dollarAmount) { reply.code(500).send({ error: "x402 route missing price config" }); return; }
     }
 
-    const usdcAmount = String(Math.round(dollarAmount * 1e6));
+    const usdcAtomicAmount = String(Math.round(dollarAmount * 1e6));
     const price = "$" + dollarAmount.toFixed(2);
-    const paymentHeader = request.headers["payment-signature"] || request.headers["x-payment"];
 
-    // No payment — return 402 with payment requirements
-    if (!paymentHeader) {
-      const paymentRequirements = {
-        scheme: "exact",
-        network: _network,
-        amount: usdcAmount,
-        asset: USDC_BASE,
-        payTo: _payTo,
-        maxTimeoutSeconds: 300,
-        extra: { name: "USD Coin", version: "2" },
-      };
-      const paymentRequired = {
-        x402Version: 2,
-        error: "Payment Required",
-        resource: {
-          url: `${request.method} ${request.url}`,
-          description: routeConfig.description || `Payment for ${request.method} ${request.url}`,
-          mimeType: "application/json",
-        },
-        accepts: [paymentRequirements],
-      };
+    // Check for payment header (X-PAYMENT for v1 compat, payment-signature for v2)
+    const paymentHeader = request.headers["x-payment"] || request.headers["payment-signature"];
 
-      const encoded = Buffer.from(JSON.stringify(paymentRequired)).toString("base64");
-      reply
-        .code(402)
-        .header("Payment-Required", encoded)
-        .send({
-          error: "Payment Required",
-          price,
-          network: _network,
-          payTo: _payTo,
-          protocol: "x402",
-          x402Version: 2,
-          ...(routeConfig.variable ? { variable: true, min: routeConfig.min, max: routeConfig.max, priceField: routeConfig.priceField || "dollars" } : {}),
-        });
-      return;
-    }
-
-    // Payment present — decode
-    let paymentPayload;
-    try {
-      paymentPayload = JSON.parse(Buffer.from(paymentHeader, "base64").toString());
-    } catch {
-      reply.code(400).send({ error: "Invalid payment encoding" });
-      return;
-    }
-
-    if (!paymentPayload.x402Version) paymentPayload.x402Version = 2;
-
+    // Build payment requirements (v1 format matching @coinbase/x402)
+    const { getAddress } = require("viem");
     const paymentRequirements = {
       scheme: "exact",
       network: _network,
-      amount: usdcAmount,
-      asset: USDC_BASE,
-      payTo: _payTo,
+      maxAmountRequired: usdcAtomicAmount,
+      resource: `${request.method} ${request.url}`,
+      description: routeConfig.description || `Payment for ${request.method} ${request.url}`,
+      mimeType: "application/json",
+      payTo: getAddress(_payTo),
       maxTimeoutSeconds: 300,
-      extra: { name: "USD Coin", version: "2" },
+      asset: getAddress(USDC_ADDRESS),
+      extra: USDC_EIP712,
     };
 
-    if (!paymentPayload.accepted) paymentPayload.accepted = paymentRequirements;
-
-    // Use x402 SDK if available
-    if (_x402Server) {
-      try {
-        // Verify via facilitator
-        const verifyResult = await _x402Server.verifyPayment(paymentPayload, paymentRequirements);
-        if (!verifyResult.isValid) {
-          reply.code(402).send({ error: "Payment verification failed", reason: verifyResult.invalidReason, price, payTo: _payTo });
-          return;
-        }
-
-        // Settle via facilitator (executes on-chain transfer)
-        const settleResult = await _x402Server.settlePayment(paymentPayload, paymentRequirements);
-        if (!settleResult.success) {
-          reply.code(402).send({ error: "Payment settlement failed", reason: settleResult.errorReason, price, payTo: _payTo });
-          return;
-        }
-
-        const txHash = settleResult.transaction || null;
-        const payer = settleResult.payer || verifyResult.payer || paymentPayload.payload?.authorization?.from || null;
-
-        request.x402 = { paid: true, amount: price, receipt: settleResult, txHash, from: payer };
-        _logPayment({ route: request.url, method: request.method, amount: price, from: payer, txHash, verified: true, settled: "facilitator", timestamp: Date.now() });
-        return;
-      } catch (err) {
-        console.log(`  ⚠️ x402 SDK error: ${err.message}`);
-        reply.code(402).send({ error: "Payment processing failed", reason: err.message, price, payTo: _payTo });
-        return;
-      }
+    // No payment — return 402
+    if (!paymentHeader) {
+      reply.code(402).send({
+        x402Version: 1,
+        error: "Payment Required",
+        accepts: [paymentRequirements],
+        price,
+        network: _network,
+        payTo: _payTo,
+        protocol: "x402",
+        ...(routeConfig.variable ? { variable: true, min: routeConfig.min, max: routeConfig.max, priceField: routeConfig.priceField || "dollars" } : {}),
+      });
+      return;
     }
 
-    // Fallback: direct verification (no on-chain settlement)
-    reply.code(500).send({ error: "x402 SDK not available — install @x402/core @x402/evm" });
+    // Decode payment
+    let decodedPayment;
+    try {
+      const { exact } = require("x402/schemes");
+      const libraryDecoded = exact.evm.decodePayment(paymentHeader);
+
+      // Parse raw payload for metadata
+      const raw = JSON.parse(Buffer.from(paymentHeader, "base64").toString("utf-8"));
+
+      decodedPayment = {
+        x402Version: raw.x402Version || 1,
+        scheme: raw.scheme || "exact",
+        network: raw.network || _network,
+        payload: libraryDecoded.payload,
+      };
+    } catch (err) {
+      reply.code(402).send({ error: "Invalid payment format: " + err.message, accepts: [paymentRequirements] });
+      return;
+    }
+
+    // For variable pricing, use user's actual payment value as maxAmountRequired
+    const userValue = decodedPayment.payload.authorization.value;
+    const actualRequirements = { ...paymentRequirements, maxAmountRequired: userValue };
+
+    // Verify via facilitator
+    try {
+      const verifyResult = await _facilitatorClient.verify(decodedPayment, actualRequirements);
+      if (!verifyResult.isValid) {
+        console.log(`  ⚠️ x402 verify failed: ${verifyResult.invalidReason}`);
+        reply.code(402).send({ error: verifyResult.invalidReason || "Payment verification failed", accepts: [paymentRequirements], payer: verifyResult.payer });
+        return;
+      }
+    } catch (err) {
+      console.log(`  ⚠️ x402 verify error: ${err.message}`);
+      reply.code(402).send({ error: "Payment verification failed: " + err.message, accepts: [paymentRequirements] });
+      return;
+    }
+
+    // Payment verified — attach info to request
+    const payer = decodedPayment.payload.authorization.from;
+    request.x402 = { paid: true, amount: price, from: payer, value: userValue, verified: true };
+
+    // Log payment
+    _logPayment({ route: request.url, method: request.method, amount: price, from: payer, verified: true, timestamp: Date.now() });
   });
 
-  // ── Public pricing endpoint ──
+  // Settlement hook — settle AFTER successful handler response
+  fastify.addHook("onSend", async (request, reply, payload) => {
+    if (!request.x402?.paid || !_facilitatorClient) return payload;
+    if (reply.statusCode >= 400) return payload;
+
+    try {
+      const paymentHeader = request.headers["x-payment"] || request.headers["payment-signature"];
+      const { exact } = require("x402/schemes");
+      const raw = JSON.parse(Buffer.from(paymentHeader, "base64").toString("utf-8"));
+      const libraryDecoded = exact.evm.decodePayment(paymentHeader);
+      const decodedPayment = { x402Version: raw.x402Version || 1, scheme: raw.scheme || "exact", network: raw.network || _network, payload: libraryDecoded.payload };
+
+      const userValue = decodedPayment.payload.authorization.value;
+      const { getAddress } = require("viem");
+      const requirements = {
+        scheme: "exact", network: _network, maxAmountRequired: userValue,
+        resource: `${request.method} ${request.url}`, description: "", mimeType: "application/json",
+        payTo: getAddress(_payTo), maxTimeoutSeconds: 300, asset: getAddress(USDC_ADDRESS), extra: USDC_EIP712,
+      };
+
+      const settleResult = await _facilitatorClient.settle(decodedPayment, requirements);
+      if (settleResult.success) {
+        request.x402.txHash = settleResult.transaction;
+        request.x402.settled = true;
+        console.log(`  💰 x402 settled: ${settleResult.transaction || "confirmed"} (${request.x402.amount} from ${request.x402.from?.slice(0, 10)})`);
+        // Update payment log
+        _logPayment({ route: request.url, method: request.method, amount: request.x402.amount, from: request.x402.from, txHash: settleResult.transaction, verified: true, settled: true, timestamp: Date.now() });
+      } else {
+        console.log(`  ⚠️ x402 settle failed: ${settleResult.errorReason || "unknown"}`);
+      }
+    } catch (err) {
+      console.log(`  ⚠️ x402 settle error: ${err.message}`);
+    }
+    return payload;
+  });
+
+  // Public info endpoint
   fastify.get("/x402/info", async () => ({
-    payTo: _payTo,
-    network: _network,
-    facilitator: _facilitatorUrl,
-    protocol: "x402",
-    x402Version: 2,
-    sdkLoaded: !!_x402Server,
+    payTo: _payTo, network: _network, protocol: "x402", x402Version: 1,
+    facilitatorLoaded: !!_facilitatorClient,
     docs: "https://docs.cdp.coinbase.com/x402/welcome",
   }));
 }
