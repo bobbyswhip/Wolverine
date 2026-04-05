@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Wolverine is a self-healing Node.js server framework. It wraps a server process, catches crashes AND caught 500 errors, diagnoses them with AI (OpenAI or Anthropic), generates fixes, verifies them, and restarts — automatically. Published as `wolverine-ai` on npm (v4.7.0). 31 agent tools, 7 skills, ~50 injection patterns, adaptive rate limiter, encrypted vault.
+Wolverine is a self-healing Node.js server framework. It wraps a server process, catches crashes AND caught 500 errors, diagnoses them with AI (OpenAI or Anthropic), generates fixes, verifies them, and restarts — automatically. Published as `wolverine-ai` on npm (v5.1.0). 32 agent tools, 7 skills, ~50 injection patterns, adaptive rate limiter, encrypted vault, x402 paid APIs.
 
 ## Commands
 
@@ -126,6 +126,7 @@ Heartbeats every 60s. Stable instance ID (persisted to `.wolverine/instance-id`)
 - **Both API keys needed for hybrid mode** — OPENAI_API_KEY for embeddings.
 - **Unified billing:** All wolverine provider calls route through billing proxy (`WOLVERINE_INFERENCE_URL`). `WOLVERINE_API_KEY` (billed, priority) vs `WOLVERINE_GPU_KEY` (direct, admin). Inference proxy deducts credits from `api_credits` + syncs to `credit_accounts`. Billing errors (402) stop heal immediately.
 - **Vault:** Encrypted key storage in `.wolverine/vault/`. AES-256-GCM. Private keys never as JS strings. Agent cannot access vault files (sandbox-blocked). Injection detector blocks heal on key_leak. Backed up in every snapshot. Rollback-protected.
+- **x402 Paid APIs:** Turn any route into a USDC-paid API with one flag: `{ config: { x402: { price: "$0.10" } } }`. Variable pricing for credit purchases: `{ x402: { variable: true, priceField: "dollars" } }`. Plugin: `src/middleware/x402-fastify.js`. Vault wallet is auto-detected as payTo. Payment verified via EIP-3009 signature or x402 facilitator. CLI: `wolverine --x402-info`.
 - **Auto-update: selective git checkout** — only updates `src/`, `bin/`, `package.json`. Never touches `server/`.
 - **Rollback protects:** `settings.json`, `db.js`, `.env.local` never overwritten.
 
