@@ -174,49 +174,28 @@ async function x402Plugin(fastify, opts) {
       return;
     }
 
-    // Payment verified — attach info to request
+    // Settle via facilitator BEFORE handler runs — USDC must move before granting access
     const payer = decodedPayment.payload.authorization.from;
-    request.x402 = { paid: true, amount: price, from: payer, value: userValue, verified: true };
-
-    // Log payment
-    _logPayment({ route: request.url, method: request.method, amount: price, from: payer, verified: true, timestamp: Date.now() });
-  });
-
-  // Settlement hook — settle AFTER successful handler response
-  fastify.addHook("onSend", async (request, reply, payload) => {
-    if (!request.x402?.paid || !_facilitatorClient) return payload;
-    if (reply.statusCode >= 400) return payload;
-
     try {
-      const paymentHeader = request.headers["x-payment"] || request.headers["payment-signature"];
-      const raw = JSON.parse(Buffer.from(paymentHeader, "base64").toString("utf-8"));
-      const decodedPayment = { x402Version: raw.x402Version || 1, scheme: raw.scheme || "exact", network: raw.network || _network, payload: raw.payload };
-
-      const userValue = decodedPayment.payload.authorization.value;
-      const { getAddress } = await import("viem");
-      const proto = request.headers["x-forwarded-proto"] || "https";
-      const host = request.headers["x-forwarded-host"] || request.headers.host || "localhost";
-      const requirements = {
-        scheme: "exact", network: _network, maxAmountRequired: userValue,
-        resource: `${proto}://${host}${request.url}`, description: "", mimeType: "application/json",
-        payTo: getAddress(_payTo), maxTimeoutSeconds: 60, asset: getAddress(USDC_ADDRESS), extra: USDC_EIP712,
-      };
-
-      const settleResult = await _facilitatorClient.settle(decodedPayment, requirements);
-      if (settleResult.success) {
-        request.x402.txHash = settleResult.transaction;
-        request.x402.settled = true;
-        console.log(`  💰 x402 settled: ${settleResult.transaction || "confirmed"} (${request.x402.amount} from ${request.x402.from?.slice(0, 10)})`);
-        // Update payment log
-        _logPayment({ route: request.url, method: request.method, amount: request.x402.amount, from: request.x402.from, txHash: settleResult.transaction, verified: true, settled: true, timestamp: Date.now() });
-      } else {
+      const settleResult = await _facilitatorClient.settle(decodedPayment, actualRequirements);
+      if (!settleResult.success) {
         console.log(`  ⚠️ x402 settle failed: ${settleResult.errorReason || "unknown"}`);
+        reply.code(402).send({ error: "Payment settlement failed", reason: settleResult.errorReason });
+        return;
       }
+      const txHash = settleResult.transaction || null;
+      console.log(`  💰 x402 settled: ${txHash || "confirmed"} (${price} from ${payer?.slice(0, 10)})`);
+
+      request.x402 = { paid: true, amount: price, from: payer, value: userValue, verified: true, settled: true, txHash };
+      _logPayment({ route: request.url, method: request.method, amount: price, from: payer, txHash, verified: true, settled: true, timestamp: Date.now() });
     } catch (err) {
       console.log(`  ⚠️ x402 settle error: ${err.message}`);
+      reply.code(402).send({ error: "Payment settlement failed: " + err.message });
+      return;
     }
-    return payload;
   });
+
+  // No onSend settle needed — settlement happens in preHandler before handler runs
 
   // Public info endpoint
   fastify.get("/x402/info", async () => ({
