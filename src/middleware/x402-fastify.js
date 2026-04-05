@@ -186,6 +186,10 @@ async function _verifyPayment(paymentSig, price) {
     // Recover signer from EIP-712 typed data signature
     try {
       const { ethers } = require("ethers");
+      // Normalize all addresses to proper EIP-55 checksum format
+      const fromAddr = ethers.getAddress(auth.from);
+      const toAddr = ethers.getAddress(auth.to);
+
       const domain = {
         name: "USD Coin",
         version: "2",
@@ -203,8 +207,8 @@ async function _verifyPayment(paymentSig, price) {
         ],
       };
       const message = {
-        from: auth.from,
-        to: auth.to,
+        from: fromAddr,
+        to: toAddr,
         value: auth.value,
         validAfter: auth.validAfter,
         validBefore: auth.validBefore,
@@ -212,7 +216,7 @@ async function _verifyPayment(paymentSig, price) {
       };
 
       const recoveredAddress = ethers.verifyTypedData(domain, types, message, sig);
-      if (recoveredAddress.toLowerCase() !== auth.from.toLowerCase()) {
+      if (recoveredAddress.toLowerCase() !== fromAddr.toLowerCase()) {
         return { valid: false, reason: "Signature mismatch" };
       }
 
