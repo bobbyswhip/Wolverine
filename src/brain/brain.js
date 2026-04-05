@@ -138,8 +138,12 @@ const SEED_DOCS = [
     metadata: { topic: "prompt-caching" },
   },
   {
-    text: "Platform telemetry: lightweight background process, zero-config. Default platform: api.wolverinenode.xyz. Auto-registers on first run (retries every 60s until platform responds), saves key to .wolverine/platform-key. Heartbeat payload matches PLATFORM.md spec: instanceId, server (name/port/uptime/status/pid), process (memoryMB/cpuPercent), routes, repairs, usage (tokens/cost/calls/byCategory), brain, backups. Offline-resilient: queues up to 1440 heartbeats locally, drains on reconnect. No chalk dependency, cached version/key in memory, minimal IO. Opt out: WOLVERINE_TELEMETRY=false. Override URL: WOLVERINE_PLATFORM_URL.",
+    text: "Platform telemetry: lightweight background process, zero-config. Default platform: api.wolverinenode.xyz. Auto-registers on first run, heartbeats every 60s. Offline-resilient: queues up to 1440 heartbeats locally, drains on reconnect. Opt out: WOLVERINE_TELEMETRY=false.",
     metadata: { topic: "platform-telemetry" },
+  },
+  {
+    text: "Server context scanner (wolverine --init): scans server/ directory on every startup to build .wolverine/server-context.json. Extracts routes (HTTP methods + paths from fastify/express), middleware stack, database type + tables, config structure, dependencies, env vars used (process.env.X patterns), and full file tree. Context summary auto-injected into agent's heal prompt so it knows the server's route map, DB schema, and dependencies without re-scanning. Manual scan: wolverine --init. Auto-scan: runs silently on every boot. The context is read-only — never modified by the agent.",
+    metadata: { topic: "server-context" },
   },
   {
     text: "Telemetry architecture: 4 files, ~250 lines total. heartbeat.js sends one HTTP POST every 60s (5s timeout, non-blocking). register.js auto-registers and caches key in memory + disk. queue.js appends to JSONL file only on failure, trims lazily. telemetry.js collects from subsystems using optional chaining (no crashes if subsystem missing). All secrets redacted before sending. Response bodies drained immediately (res.resume). No blocking, no delays, no busy waits.",

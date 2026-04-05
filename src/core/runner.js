@@ -211,6 +211,16 @@ class WolverineRunner {
       console.log(chalk.yellow(`  ⚠️  Vault init failed (non-fatal): ${err.message}`));
     }
 
+    // Scan server context (routes, DB, config, deps) for agent knowledge
+    try {
+      const { scan, load } = require("./server-context");
+      const ctx = scan(this.cwd);
+      if (ctx) {
+        const routes = ctx.routes.reduce((s, r) => s + r.endpoints.length, 0);
+        console.log(chalk.gray(`  🗺️  Server context: ${routes} routes, ${ctx.structure.length} files, ${ctx.envVars.length} env vars`));
+      }
+    } catch {}
+
     // Log redactor stats
     const redactorStats = this.redactor.getStats();
     console.log(chalk.gray(`  🔐 Secret redactor: ${redactorStats.trackedSecrets} secrets tracked from ${redactorStats.envFiles} env file(s)`));

@@ -16,6 +16,7 @@ npm run demo:list                # List demo scenarios
 npm run demo -- 01               # Run specific demo
 npx wolverine server/index.js    # CLI entry point
 wolverine --info                 # System detection
+wolverine --init                 # Scan server/ and build context map
 wolverine --update               # Safe framework upgrade
 wolverine --backup "reason"      # Create server snapshot
 wolverine --list-backups         # Show all snapshots

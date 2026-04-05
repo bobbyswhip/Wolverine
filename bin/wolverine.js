@@ -27,6 +27,7 @@ ${chalk.bold("Options:")}
   --single         Force single-worker mode (no clustering)
   --workers <n>    Force specific worker count
   --info           Show system info and exit
+  --init           Scan server/ and build context map (routes, DB, config, deps)
 
 ${chalk.bold("Configuration:")}
   server/config/settings.json    Models, telemetry, limits, health checks
@@ -51,6 +52,25 @@ if (args.includes("--info")) {
   console.log(chalk.gray(`  Disk: ${info.disk.totalGB}GB total, ${info.disk.freeGB}GB free (${info.disk.usedPercent}% used)`));
   console.log(chalk.gray(`  Memory: ${info.memory.totalGB}GB total, ${info.memory.freeGB}GB free (${info.memory.usedPercent}% used)`));
   console.log("");
+  process.exit(0);
+}
+
+// --init: scan server/ and build context map
+if (args.includes("--init")) {
+  const { scan } = require("../src/core/server-context");
+  console.log(chalk.blue("\n  🔍 Scanning server/ directory...\n"));
+  const ctx = scan(process.cwd());
+  if (!ctx) {
+    console.log(chalk.yellow("  No server/ directory found."));
+    process.exit(1);
+  }
+  console.log(chalk.green(`  ✅ Server context built:`));
+  console.log(chalk.gray(`     Routes: ${ctx.routes.reduce((s, r) => s + r.endpoints.length, 0)}`));
+  console.log(chalk.gray(`     Middleware: ${ctx.middleware.length}`));
+  console.log(chalk.gray(`     Database: ${ctx.database.type || "none"}${ctx.database.tables.length > 0 ? ` (${ctx.database.tables.length} tables)` : ""}`));
+  console.log(chalk.gray(`     Env vars: ${ctx.envVars.length}`));
+  console.log(chalk.gray(`     Files: ${ctx.structure.length}`));
+  console.log(chalk.gray(`     Saved to: .wolverine/server-context.json\n`));
   process.exit(0);
 }
 

@@ -208,6 +208,12 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
   }
 
   let brainContext = "";
+  // Inject server context (routes, DB, config, deps) if available
+  try {
+    const { getSummary } = require("./server-context");
+    const serverCtx = getSummary(cwd);
+    if (serverCtx) brainContext += serverCtx + "\n\n";
+  } catch {}
   // Inject relevant skill context (claw-code: pre-enrich prompt with matched tools)
   if (skills) {
     const skillCtx = skills.buildContext(parsed.errorMessage);
