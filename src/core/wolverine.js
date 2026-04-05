@@ -380,10 +380,6 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
             const patchResults = applyPatch(repair.changes, cwd, sandbox);
             if (!patchResults.every(r => r.success)) throw new Error("Patch failed");
 
-            // Track code generation as "coding" — the AI produced code changes
-            const codeTokens = repair.changes.reduce((s, c) => s + ((c.new || "").length / 4), 0);
-            _trackOp(getModel("coding"), "coding", 0, Math.round(codeTokens), "patch_apply", 0, true);
-
             for (const r of patchResults) console.log(chalk.green(`  ✅ Patched: ${r.file}`));
           }
 

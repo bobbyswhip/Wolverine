@@ -67,6 +67,8 @@ class DashboardServer {
       if (req.url === "/api/process") return this._handleProcess(req, res);
       if (req.url === "/api/routes") return this._handleRoutes(req, res);
       if (req.url === "/api/usage/history") return this._handleUsageHistory(req, res);
+      if (req.url === "/api/vault") return this._handleVault(req, res);
+      if (req.url === "/api/x402") return this._handleX402(req, res);
       if (req.url === "/api/auth/verify" && req.method === "POST") return this._handleAuthVerify(req, res);
       if (req.url === "/api/command" && req.method === "POST") return this._handleCommand(req, res);
       if (req.url.startsWith("/api/backups/") && req.url.endsWith("/rollback") && req.method === "POST") return this._handleRollback(req, res);
@@ -1048,6 +1050,82 @@ ${context ? "\nBrain:\n" + context : ""}`,
     res.end(JSON.stringify(this.brain ? this.brain.getStats() : {}));
   }
 
+  async _handleVault(req, res) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    try {
+      const { getVaultStatus, getWalletAddress } = require("../vault/wallet-ops");
+      const status = getVaultStatus();
+      let address = null;
+      let balances = { usdc: null, eth: null };
+
+      if (status.initialized) {
+        try { address = await getWalletAddress(); } catch {}
+        // Fetch on-chain balances from Base network
+        if (address) {
+          try {
+            const https = require("https");
+            const rpc = "https://mainnet.base.org";
+            const fetchRpc = (method, params) => new Promise((resolve) => {
+              const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method, params });
+              const req = https.request(rpc, { method: "POST", headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }, timeout: 5000 }, (res) => {
+                let data = ""; res.on("data", c => data += c);
+                res.on("end", () => { try { resolve(JSON.parse(data).result); } catch { resolve(null); } });
+              });
+              req.on("error", () => resolve(null));
+              req.on("timeout", () => { req.destroy(); resolve(null); });
+              req.write(body); req.end();
+            });
+
+            // ETH balance
+            const ethHex = await fetchRpc("eth_getBalance", [address, "latest"]);
+            if (ethHex) balances.eth = (parseInt(ethHex, 16) / 1e18).toFixed(6);
+
+            // USDC balance (ERC-20 balanceOf)
+            const usdcContract = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+            const balanceOfSig = "0x70a08231000000000000000000000000" + address.slice(2).toLowerCase();
+            const usdcHex = await fetchRpc("eth_call", [{ to: usdcContract, data: balanceOfSig }, "latest"]);
+            if (usdcHex) balances.usdc = (parseInt(usdcHex, 16) / 1e6).toFixed(2);
+          } catch {}
+        }
+      }
+
+      res.end(JSON.stringify({ ...status, address, balances }));
+    } catch (err) {
+      res.end(JSON.stringify({ initialized: false, error: err.message }));
+    }
+  }
+
+  _handleX402(req, res) {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    // Read x402 payment log from .wolverine/x402-payments.json
+    const fs = require("fs");
+    const path = require("path");
+    const logPath = path.join(process.cwd(), ".wolverine", "x402-payments.json");
+    let payments = [];
+    try { payments = JSON.parse(fs.readFileSync(logPath, "utf-8")); } catch {}
+
+    const totalRevenue = payments.reduce((s, p) => s + (parseFloat(p.amount?.replace("$", "")) || 0), 0);
+    const successfulPayments = payments.filter(p => p.verified);
+    const recentPayments = payments.slice(-50).reverse();
+
+    // Group by route
+    const byRoute = {};
+    for (const p of payments) {
+      const route = p.route || "unknown";
+      if (!byRoute[route]) byRoute[route] = { calls: 0, revenue: 0 };
+      byRoute[route].calls++;
+      byRoute[route].revenue += parseFloat(p.amount?.replace("$", "")) || 0;
+    }
+
+    res.end(JSON.stringify({
+      totalPayments: payments.length,
+      successfulPayments: successfulPayments.length,
+      totalRevenue: totalRevenue.toFixed(2),
+      recentPayments,
+      byRoute,
+    }));
+  }
+
   _handleDashboard(req, res) {
     res.writeHead(200, { "Content-Type": "text/html" });
     res.end(DASHBOARD_HTML.replace(/__PORT__/g, String(this.port)));
@@ -1164,6 +1242,10 @@ main{overflow-y:auto;padding:24px}
   <a data-panel="analytics">📊 Analytics</a>
   <a data-panel="processes">⚙️ Processes</a>
   <div class="sep"></div>
+  <div class="label">Wallet</div>
+  <a data-panel="vault">🔐 Vault</a>
+  <a data-panel="x402">💳 x402 Payments</a>
+  <div class="sep"></div>
   <div class="label">Agent</div>
   <a data-panel="command">💬 Command</a>
   <div class="sep"></div>
@@ -1182,6 +1264,14 @@ main{overflow-y:auto;padding:24px}
     <div class="stat-card roll"><div class="stat-val" id="s-rollbacks">0</div><div class="stat-lbl">Rollbacks</div></div>
     <div class="stat-card brain"><div class="stat-val" id="s-memories">0</div><div class="stat-lbl">Memories</div></div>
     <div class="stat-card up"><div class="stat-val" id="s-uptime">0s</div><div class="stat-lbl">Uptime</div></div>
+  </div>
+  <div class="stats" style="grid-template-columns:repeat(6,1fr);margin-bottom:24px">
+    <div class="stat-card" style="border-top:3px solid var(--green)"><div class="stat-val" id="ov-mem">—</div><div class="stat-lbl">Memory</div></div>
+    <div class="stat-card" style="border-top:3px solid var(--yellow)"><div class="stat-val" id="ov-cpu">—</div><div class="stat-lbl">CPU</div></div>
+    <div class="stat-card" style="border-top:3px solid var(--blue)"><div class="stat-val" id="ov-routes">—</div><div class="stat-lbl">Routes</div></div>
+    <div class="stat-card" style="border-top:3px solid var(--purple)"><div class="stat-val" id="ov-cost">$0</div><div class="stat-lbl">AI Cost</div></div>
+    <div class="stat-card" style="border-top:3px solid #50fa7b"><div class="stat-val" id="ov-usdc">—</div><div class="stat-lbl">USDC</div></div>
+    <div class="stat-card" style="border-top:3px solid var(--accent)"><div class="stat-val" id="ov-x402">$0</div><div class="stat-lbl">x402 Revenue</div></div>
   </div>
   <div class="row2">
     <div class="card"><h3>Recent Events</h3><div class="ev-list" id="ov-events" style="max-height:400px"></div></div>
@@ -1231,6 +1321,56 @@ main{overflow-y:auto;padding:24px}
     <div class="card"><h3>CPU Over Time</h3><div id="a-cpu-chart" style="height:150px"></div></div>
   </div>
   <div class="card"><h3>Route Response Times</h3><div id="a-route-list"><div class="empty">Waiting for first probe cycle...</div></div></div>
+</div>
+<div class="panel" id="p-vault">
+  <div class="stats" style="grid-template-columns:repeat(4,1fr)">
+    <div class="stat-card heal"><div class="stat-val" id="v-status">—</div><div class="stat-lbl">Vault Status</div></div>
+    <div class="stat-card up"><div class="stat-val" id="v-usdc">—</div><div class="stat-lbl">USDC Balance</div></div>
+    <div class="stat-card brain"><div class="stat-val" id="v-eth">—</div><div class="stat-lbl">ETH Balance</div></div>
+    <div class="stat-card roll"><div class="stat-val" id="v-x402-rev">$0</div><div class="stat-lbl">x402 Revenue</div></div>
+  </div>
+  <div class="row2">
+    <div class="card">
+      <h3>Wallet Details</h3>
+      <div id="v-details"><div class="empty">Loading vault...</div></div>
+    </div>
+    <div class="card">
+      <h3>Vault Security</h3>
+      <div id="v-security"><div class="empty">Loading...</div></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Setup Guide</h3>
+    <div style="font-size:.82rem;color:var(--text2);line-height:1.7;padding:8px 0">
+      <div class="mrow"><span style="color:var(--accent);font-family:monospace">wolverine --init-vault</span><span class="vals">Initialize encrypted wallet (AES-256-GCM)</span></div>
+      <div class="mrow"><span style="color:var(--accent);font-family:monospace">wolverine --x402-info</span><span class="vals">Show wallet address &amp; x402 configuration</span></div>
+      <div class="mrow"><span style="color:var(--text2)">Vault path</span><span class="vals">.wolverine/vault/ (auto-backed up in every snapshot)</span></div>
+      <div class="mrow"><span style="color:var(--text2)">Network</span><span class="vals">Base (eip155:8453) — USDC payments</span></div>
+      <div class="mrow"><span style="color:var(--text2)">Protocol</span><span class="vals"><a href="https://docs.cdp.coinbase.com/x402/welcome" style="color:var(--blue);text-decoration:none">x402</a> — server-to-server USDC payments</span></div>
+    </div>
+  </div>
+</div>
+<div class="panel" id="p-x402">
+  <div class="stats" style="grid-template-columns:repeat(4,1fr)">
+    <div class="stat-card heal"><div class="stat-val" id="x-total">0</div><div class="stat-lbl">Total Payments</div></div>
+    <div class="stat-card up"><div class="stat-val" id="x-success">0</div><div class="stat-lbl">Verified</div></div>
+    <div class="stat-card roll"><div class="stat-val" id="x-revenue">$0</div><div class="stat-lbl">Total Revenue</div></div>
+    <div class="stat-card brain"><div class="stat-val" id="x-routes">0</div><div class="stat-lbl">Paid Routes</div></div>
+  </div>
+  <div class="row2">
+    <div class="card">
+      <h3>Revenue by Route</h3>
+      <div id="x-by-route"><div class="empty">No x402 payments yet</div></div>
+    </div>
+    <div class="card">
+      <h3>Revenue Chart</h3>
+      <div id="x-chart" style="height:160px"><div class="empty">Chart appears after payments</div></div>
+    </div>
+  </div>
+  <div class="card">
+    <h3>Recent Payments</h3>
+    <div id="x-recent"><div class="empty">No payments recorded yet. Add x402 config to any route:<br><code style="color:var(--accent);font-size:.78rem">{ config: { x402: { price: "$0.01" } } }</code></div></div>
+  </div>
 </div>
 <div class="panel" id="p-command">
   <div id="cmd-auth" class="auth-gate">
@@ -1570,6 +1710,76 @@ async function refresh(){
         }).join('');
       }
     }
+    // Vault + x402
+    const [vault,x402]=await Promise.all([fetch(B+'/api/vault').then(r=>r.json()).catch(()=>({})),fetch(B+'/api/x402').then(r=>r.json()).catch(()=>({}))]);
+    // Vault panel
+    if(vault){
+      $('v-status').textContent=vault.initialized?'Active':'Not Init';
+      $('v-status').style.color=vault.initialized?'var(--green)':'var(--text2)';
+      $('v-usdc').textContent=vault.balances?.usdc!=null?'$'+vault.balances.usdc:'—';
+      $('v-eth').textContent=vault.balances?.eth!=null?vault.balances.eth:'—';
+      // Overview row
+      $('ov-usdc').textContent=vault.balances?.usdc!=null?'$'+vault.balances.usdc:'—';
+
+      if(vault.address){
+        const short=vault.address.slice(0,6)+'...'+vault.address.slice(-4);
+        $('v-details').innerHTML=[
+          '<div class="mrow"><span>Address</span><span class="vals" style="font-family:monospace;color:var(--blue)">'+vault.address+'</span></div>',
+          '<div class="mrow"><span>Short</span><span class="vals"><b>'+short+'</b></span></div>',
+          '<div class="mrow"><span>USDC (Base)</span><span class="vals"><b style="color:var(--green)">$'+(vault.balances?.usdc||'0.00')+'</b></span></div>',
+          '<div class="mrow"><span>ETH (Base)</span><span class="vals"><b>'+(vault.balances?.eth||'0.000000')+' ETH</b></span></div>',
+          '<div class="mrow"><span>Network</span><span class="vals">Base (eip155:8453)</span></div>',
+        ].join('');
+      }else{
+        $('v-details').innerHTML='<div class="empty">Vault not initialized. Run <code style="color:var(--accent)">wolverine --init-vault</code></div>';
+      }
+      $('v-security').innerHTML=[
+        '<div class="mrow"><span>Encryption</span><span class="vals">'+(vault.initialized?'<span style="color:var(--green)">AES-256-GCM</span>':'<span style="color:var(--text2)">N/A</span>')+'</span></div>',
+        '<div class="mrow"><span>Master Key</span><span class="vals">'+(vault.masterKeyExists?'<span style="color:var(--green)">✓ Present</span>':'<span style="color:var(--red)">✗ Missing</span>')+'</span></div>',
+        '<div class="mrow"><span>ETH Vault</span><span class="vals">'+(vault.ethVaultExists?'<span style="color:var(--green)">✓ Encrypted</span>':'<span style="color:var(--text2)">✗ Not created</span>')+'</span></div>',
+        '<div class="mrow"><span>Agent Access</span><span class="vals"><span style="color:var(--green)">Blocked</span> (sandbox-protected)</span></div>',
+        '<div class="mrow"><span>Backup</span><span class="vals">Included in every snapshot</span></div>',
+      ].join('');
+    }
+    // x402 panel
+    if(x402){
+      $('x-total').textContent=x402.totalPayments||0;
+      $('x-success').textContent=x402.successfulPayments||0;
+      $('x-revenue').textContent='$'+(x402.totalRevenue||'0.00');
+      $('v-x402-rev').textContent='$'+(x402.totalRevenue||'0.00');
+      $('ov-x402').textContent='$'+(x402.totalRevenue||'0.00');
+      const routes=x402.byRoute||{};
+      const routeKeys=Object.keys(routes);
+      $('x-routes').textContent=routeKeys.length;
+      if(routeKeys.length>0){
+        $('x-by-route').innerHTML=routeKeys.sort((a,b)=>routes[b].revenue-routes[a].revenue).map(r=>'<div class="mrow"><span class="ep">'+esc(r)+'</span><span class="vals"><b style="color:var(--green)">$'+routes[r].revenue.toFixed(2)+'</b> &middot; '+routes[r].calls+' calls</span></div>').join('');
+      }
+      const recent=x402.recentPayments||[];
+      if(recent.length>0){
+        $('x-recent').innerHTML=recent.slice(0,20).map(p=>{
+          const icon=p.verified?'✅':'⏳';
+          return '<div class="mrow" style="flex-wrap:wrap"><span>'+icon+' <span class="ep">'+esc(p.route||'?')+'</span></span><span class="vals"><b style="color:var(--green)">'+(p.amount||'?')+'</b> USDC &middot; '+(p.from?p.from.slice(0,6)+'...'+p.from.slice(-4):'?')+'</span><div style="width:100%;font-size:.7rem;color:var(--text2)">'+new Date(p.timestamp).toLocaleString()+'</div></div>';
+        }).join('');
+        // Revenue chart
+        if(recent.length>1){
+          const max=Math.max(...recent.map(p=>parseFloat(p.amount?.replace('$','')||0)))||1;
+          const w=$('x-chart').offsetWidth||500,h=150;
+          const bw=Math.max(6,Math.floor(w/recent.length)-2);
+          let svg='<svg width="'+w+'" height="'+h+'">';
+          recent.reverse().forEach((p,i)=>{
+            const amt=parseFloat(p.amount?.replace('$','')||0);
+            const bh=Math.max(2,Math.round((amt/max)*h*0.85));
+            const c=p.verified?'#50fa7b':'var(--yellow)';
+            svg+='<rect x="'+(i*(bw+2))+'" y="'+(h-bh)+'" width="'+bw+'" height="'+bh+'" fill="'+c+'" rx="2"><title>'+p.amount+' from '+(p.from||'?').slice(0,10)+'</title></rect>';
+          });
+          svg+='</svg>';$('x-chart').innerHTML=svg;
+        }
+      }
+    }
+    // Overview: server health
+    if(proc&&proc.current){$('ov-mem').textContent=proc.current.rss+'MB';$('ov-cpu').textContent=proc.current.cpu+'%';}
+    if(routeData&&routeData.summary)$('ov-routes').textContent=(routeData.summary.healthy||0)+'/'+(routeData.summary.totalRoutes||0);
+    if(usage&&usage.session)$('ov-cost').textContent='$'+(usage.session.totalCostUsd||0).toFixed(4);
   }catch(e){}
 }
 

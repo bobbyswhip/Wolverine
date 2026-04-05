@@ -656,7 +656,7 @@ ${backupSourceCode ? `## Last Known Working Version\n\`\`\`javascript\n${backupS
 "changes" is for code edits (optional, use for actual code fixes).
 Include both if needed, or just one.`;
 
-  const result = await aiCall({ model, systemPrompt, userPrompt, maxTokens: 2048, category: "reasoning" });
+  const result = await aiCall({ model, systemPrompt, userPrompt, maxTokens: 2048, category: "coding" });
   const content = (result.content || "").trim();
 
   // Guard: cap length before regex extraction to prevent catastrophic backtracking

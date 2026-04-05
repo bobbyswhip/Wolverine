@@ -5,6 +5,7 @@
 
 # Claude
 .claude/
+CLAUDE.md
 
 # Runtime state
 .wolverine/
@@ -30,4 +31,10 @@ dist/
 .DS_Store
 Thumbs.db
 
+# Dev files
+demo-current.js
+server/ec2/
+server/lib/gpu-fleet.js
 
+# Lock file (users generate their own)
+package-lock.json
