@@ -159,10 +159,11 @@ async function x402Plugin(fastify, opts) {
 
     // Verify via facilitator
     try {
+      console.log(`  💰 x402 verify: from=${decodedPayment.payload?.authorization?.from} value=${decodedPayment.payload?.authorization?.value} network=${decodedPayment.network}`);
       const verifyResult = await _facilitatorClient.verify(decodedPayment, actualRequirements);
       if (!verifyResult.isValid) {
-        console.log(`  ⚠️ x402 verify failed: ${verifyResult.invalidReason}`);
-        reply.code(402).send({ error: verifyResult.invalidReason || "Payment verification failed", accepts: [paymentRequirements], payer: verifyResult.payer });
+        console.log(`  ⚠️ x402 verify failed: ${verifyResult.invalidReason} ${verifyResult.invalidMessage || ""}`);
+        reply.code(402).send({ error: verifyResult.invalidReason || "Payment verification failed", message: verifyResult.invalidMessage, accepts: [paymentRequirements], payer: verifyResult.payer });
         return;
       }
     } catch (err) {
