@@ -187,15 +187,15 @@ async function x402Plugin(fastify, opts) {
     // Use x402 SDK if available
     if (_x402Server) {
       try {
-        // Verify
-        const verifyResult = await _x402Server.verify(paymentPayload, paymentRequirements);
+        // Verify via facilitator
+        const verifyResult = await _x402Server.verifyPayment(paymentPayload, paymentRequirements);
         if (!verifyResult.isValid) {
           reply.code(402).send({ error: "Payment verification failed", reason: verifyResult.invalidReason, price, payTo: _payTo });
           return;
         }
 
-        // Settle
-        const settleResult = await _x402Server.settle(paymentPayload, paymentRequirements);
+        // Settle via facilitator (executes on-chain transfer)
+        const settleResult = await _x402Server.settlePayment(paymentPayload, paymentRequirements);
         if (!settleResult.success) {
           reply.code(402).send({ error: "Payment settlement failed", reason: settleResult.errorReason, price, payTo: _payTo });
           return;
