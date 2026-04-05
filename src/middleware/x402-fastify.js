@@ -207,66 +207,60 @@ async function x402Plugin(fastify, opts) {
 
 /**
  * Call the x402 facilitator — matches the exact format from @x402/core HTTPFacilitatorClient.
+ * Uses fetch() for automatic redirect following (x402.org → www.x402.org).
  *
  * POST {facilitatorUrl}/verify or /settle
  * Body: { x402Version, paymentPayload, paymentRequirements }
  */
 async function _facilitatorCall(endpoint, paymentPayload, paymentRequirements) {
   try {
-    const https = require("https");
-    const http = require("http");
-    const url = new (require("url").URL)(_facilitatorUrl + endpoint);
+    const url = _facilitatorUrl + endpoint;
     const body = JSON.stringify({
       x402Version: paymentPayload.x402Version || 2,
       paymentPayload,
       paymentRequirements,
     });
 
-    return new Promise((resolve) => {
-      const client = url.protocol === "https:" ? https : http;
-      const req = client.request({
-        hostname: url.hostname,
-        port: url.port,
-        path: url.pathname,
-        method: "POST",
-        headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
-        timeout: 30000,
-      }, (res) => {
-        let data = "";
-        res.on("data", (c) => data += c);
-        res.on("end", () => {
-          try {
-            const parsed = JSON.parse(data);
-            if (res.statusCode >= 200 && res.statusCode < 300) {
-              // Verify: check isValid. Settle: check success.
-              if (endpoint === "/verify" && parsed.isValid === false) {
-                resolve({ ok: false, reason: parsed.invalidReason || "verification_rejected", data: parsed });
-              } else if (endpoint === "/settle" && parsed.success === false) {
-                resolve({ ok: false, reason: parsed.errorReason || "settlement_rejected", data: parsed });
-              } else {
-                resolve({ ok: true, data: parsed });
-              }
-            } else {
-              // Error response
-              const reason = parsed.invalidReason || parsed.errorReason || parsed.error || `facilitator_${res.statusCode}`;
-              console.log(`  ⚠️ x402 facilitator ${endpoint} ${res.statusCode}: ${reason}`);
-              resolve({ ok: false, reason, data: parsed });
-            }
-          } catch {
-            resolve({ ok: false, reason: `facilitator_parse_error_${res.statusCode}` });
-          }
-        });
-      });
-      req.on("error", (err) => {
-        console.log(`  ⚠️ x402 facilitator ${endpoint} error: ${err.message}`);
-        resolve({ ok: false, reason: "facilitator_unavailable: " + err.message });
-      });
-      req.on("timeout", () => { req.destroy(); resolve({ ok: false, reason: "facilitator_timeout" }); });
-      req.write(body);
-      req.end();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 30000);
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body,
+      redirect: "follow",
+      signal: controller.signal,
     });
+
+    clearTimeout(timeout);
+    const text = await response.text();
+    let parsed;
+    try { parsed = JSON.parse(text); } catch {
+      console.log(`  ⚠️ x402 facilitator ${endpoint} ${response.status}: unparseable response`);
+      return { ok: false, reason: `facilitator_parse_error_${response.status}` };
+    }
+
+    if (!response.ok) {
+      const reason = parsed.invalidReason || parsed.errorReason || parsed.error || `facilitator_${response.status}`;
+      console.log(`  ⚠️ x402 facilitator ${endpoint} ${response.status}: ${reason}`);
+      return { ok: false, reason, data: parsed };
+    }
+
+    // Verify: check isValid. Settle: check success.
+    if (endpoint === "/verify" && parsed.isValid === false) {
+      console.log(`  ⚠️ x402 verify rejected: ${parsed.invalidReason || "unknown"}`);
+      return { ok: false, reason: parsed.invalidReason || "verification_rejected", data: parsed };
+    }
+    if (endpoint === "/settle" && parsed.success === false) {
+      console.log(`  ⚠️ x402 settle rejected: ${parsed.errorReason || "unknown"}`);
+      return { ok: false, reason: parsed.errorReason || "settlement_rejected", data: parsed };
+    }
+
+    return { ok: true, data: parsed };
   } catch (err) {
-    return { ok: false, reason: "facilitator_error: " + err.message };
+    const reason = err.name === "AbortError" ? "facilitator_timeout" : "facilitator_unavailable: " + err.message;
+    console.log(`  ⚠️ x402 facilitator ${endpoint}: ${reason}`);
+    return { ok: false, reason };
   }
 }
 
