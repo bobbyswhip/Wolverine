@@ -38,6 +38,7 @@ ${chalk.bold("Options:")}
   --workers <n>    Force specific worker count
   --info           Show system info and exit
   --init           Scan server/ and build context map (routes, DB, config, deps)
+  --x402-price     Set x402 price: wolverine --x402-price "POST /api" "$0.01"
 
 ${chalk.bold("Configuration:")}
   server/config/settings.json    Models, telemetry, limits, health checks
@@ -66,6 +67,22 @@ if (args.includes("--info")) {
 }
 
 // --init: scan server/ and build context map
+// --x402-price: set route pricing live
+if (args.includes("--x402-price")) {
+  const idx = args.indexOf("--x402-price");
+  const route = args[idx + 1];
+  const price = args[idx + 2];
+  if (!route || !price) {
+    console.log(chalk.red('  Usage: wolverine --x402-price "POST /v1/chat/completions" "$0.001"'));
+    process.exit(1);
+  }
+  const { setPrice } = require("../src/middleware/x402-fastify");
+  const result = setPrice(route, price);
+  console.log(chalk.green(`  ✅ x402 price updated: ${result.route} → ${result.price}`));
+  console.log(chalk.gray("     Change is live — no restart needed."));
+  process.exit(0);
+}
+
 if (args.includes("--init")) {
   const { scan } = require("../src/core/server-context");
   console.log(chalk.blue("\n  🔍 Scanning server/ directory...\n"));

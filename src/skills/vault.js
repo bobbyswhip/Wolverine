@@ -10,8 +10,8 @@
  */
 
 const SKILL_NAME = "vault";
-const SKILL_DESCRIPTION = "Secure Ethereum wallet — sign transactions, get address, check balance. Private key encrypted at rest, never exposed in code or errors.";
-const SKILL_KEYWORDS = ["wallet", "ethereum", "eth", "sign", "transaction", "vault", "private key", "address", "crypto", "blockchain", "send", "transfer"];
+const SKILL_DESCRIPTION = "Secure Ethereum wallet + x402 payments — sign transactions, get address, manage paid API routes. Private key encrypted at rest via AES-256-GCM, never exposed in code or errors. x402 support: set prices on routes, receive USDC on Base network.";
+const SKILL_KEYWORDS = ["wallet", "ethereum", "eth", "sign", "transaction", "vault", "private key", "address", "crypto", "blockchain", "send", "transfer", "x402", "payment", "usdc", "base", "price", "paid", "api"];
 const SKILL_USAGE = `
   vault.status()           — check if vault is initialized, show address
   vault.address()          — get the wallet's Ethereum address
@@ -61,8 +61,31 @@ async function execute(action, params = {}) {
       return { signedTransaction: signed };
     }
 
+    // x402 payment actions
+    case "x402_pricing":
+      try {
+        const { getPricing } = require("../middleware/x402-fastify");
+        return getPricing();
+      } catch { return { error: "x402 middleware not loaded" }; }
+
+    case "x402_set_price": {
+      if (!params.route || !params.price) return { error: "route and price required" };
+      try {
+        const { setPrice } = require("../middleware/x402-fastify");
+        return setPrice(params.route, params.price);
+      } catch { return { error: "x402 middleware not loaded" }; }
+    }
+
+    case "x402_remove_price": {
+      if (!params.route) return { error: "route required" };
+      try {
+        const { removePrice } = require("../middleware/x402-fastify");
+        return removePrice(params.route);
+      } catch { return { error: "x402 middleware not loaded" }; }
+    }
+
     default:
-      return { error: `Unknown vault action: ${action}. Use: status, address, sign_tx, sign_message, public_key` };
+      return { error: `Unknown vault action: ${action}. Use: status, address, sign_tx, sign_message, public_key, x402_pricing, x402_set_price, x402_remove_price` };
   }
 }
 

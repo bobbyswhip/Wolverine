@@ -1,6 +1,6 @@
 {
   "name": "wolverine-ai",
-  "version": "4.9.0",
+  "version": "5.0.0",
   "description": "Self-healing Node.js server framework powered by AI. Catches crashes, diagnoses errors, generates fixes, verifies, and restarts — automatically.",
   "main": "src/index.js",
   "bin": {
@@ -66,7 +66,8 @@
     "ethers": "^6.0.0",
     "ioredis": "^5.0.0",
     "pg": "^8.0.0",
-    "stripe": "^18.0.0"
+    "stripe": "^18.0.0",
+    "viem": "^2.0.0"
   },
   "engines": {
     "node": ">=18.0.0"
