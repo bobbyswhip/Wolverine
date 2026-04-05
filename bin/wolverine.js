@@ -246,8 +246,11 @@ if (args.includes("--backups")) {
 const scriptPath = args.find(a => !a.startsWith("--")) || "server/index.js";
 
 // Initialize server/ from template if it doesn't exist (first run)
-const { initServer } = require("../src/core/init-server");
+const { initServer, ensureX402Deps } = require("../src/core/init-server");
 initServer(process.cwd(), scriptPath);
+
+// Ensure x402 payment deps are installed (if vault exists)
+ensureX402Deps(process.cwd());
 
 // System detection (for analytics + dashboard, NOT for forking)
 // Wolverine runs as a single process manager. If users want clustering,

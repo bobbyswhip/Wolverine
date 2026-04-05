@@ -55,4 +55,38 @@ function _copyDir(src, dest) {
   }
 }
 
-module.exports = { initServer };
+/**
+ * Ensure x402 payment dependencies are installed.
+ * Called on startup — checks if @coinbase/x402 is resolvable.
+ * Auto-installs if vault is initialized (user wants x402).
+ */
+function ensureX402Deps(cwd) {
+  // Check if x402 packages are needed
+  const vaultPath = path.join(cwd, ".wolverine", "vault", "eth.vault");
+  const hasVault = fs.existsSync(vaultPath);
+  if (!hasVault) return; // No vault = no x402 needed
+
+  // Check if already installed
+  try {
+    require.resolve("@coinbase/x402");
+    require.resolve("x402");
+    return; // Already installed
+  } catch {}
+
+  // Auto-install x402 deps
+  console.log(chalk.blue("  📦 Installing x402 payment dependencies..."));
+  try {
+    const { execSync } = require("child_process");
+    execSync("npm install @coinbase/x402 x402 viem --no-save --ignore-engines 2>/dev/null", {
+      cwd,
+      stdio: "pipe",
+      timeout: 60000,
+    });
+    console.log(chalk.green("  ✅ x402 dependencies installed"));
+  } catch (err) {
+    console.log(chalk.yellow(`  ⚠️ x402 dep install failed: ${err.message?.slice(0, 80)}`));
+    console.log(chalk.gray("    Run manually: npm install @coinbase/x402 x402 viem"));
+  }
+}
+
+module.exports = { initServer, ensureX402Deps };
