@@ -101,6 +101,7 @@ async function x402Plugin(fastify, opts) {
         asset: USDC_BASE,
         payTo: _payTo,
         maxTimeoutSeconds: 300,
+        extra: { name: "USD Coin", version: "2" }, // EIP-712 domain params for USDC
       };
       const paymentRequired = {
         x402Version: 2,
@@ -137,6 +138,7 @@ async function x402Plugin(fastify, opts) {
       asset: USDC_BASE,
       payTo: _payTo,
       maxTimeoutSeconds: 300,
+      extra: { name: "USD Coin", version: "2" },
     };
 
     // Decode the payment payload
