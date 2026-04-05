@@ -44,15 +44,45 @@ const INJECTION_PATTERNS = [
   // Vault key material leak — CRITICAL: block heal entirely
   { pattern: /0x[0-9a-fA-F]{64}/i, label: "key-leak-critical" },
   { pattern: /master\.key|eth\.vault|\.wolverine\/vault/i, label: "vault-path-leak" },
-  // Bash sandbox escape vectors — error messages crafted to make AI write escaping commands
+  // Bash sandbox escape — mirrors BLOCKED_COMMANDS + _detectSandboxEscape from agent-engine
+  // Destructive system commands
+  { pattern: /\brm\s+-rf\s+[/\\]/i, label: "destructive-bash" },
+  { pattern: /\brmdir\s+[/\\]/i, label: "destructive-bash" },
+  { pattern: /\bformat\s+[a-z]:/i, label: "destructive-bash" },
+  { pattern: /\bmkfs\b/i, label: "destructive-bash" },
+  { pattern: /\bdd\s+if=/i, label: "destructive-bash" },
+  { pattern: /\b(shutdown|reboot|halt)\b/i, label: "destructive-bash" },
+  // Git destructive operations
+  { pattern: /\bgit\s+push\s+--force/i, label: "destructive-git" },
+  { pattern: /\bgit\s+reset\s+--hard/i, label: "destructive-git" },
+  { pattern: /\bnpm\s+publish\b/i, label: "destructive-npm" },
+  // Pipe to shell / code execution
+  { pattern: /\bcurl\b.*\|\s*(?:bash|sh)\b/i, label: "bash-pipe-exec" },
+  { pattern: /\bwget\b.*\|\s*(?:bash|sh)\b/i, label: "bash-pipe-exec" },
+  // Data exfiltration via bash
+  { pattern: /curl.*\$\(/i, label: "bash-exfil" },
+  { pattern: /curl.*-[dF]\s*@/i, label: "bash-exfil" },
+  { pattern: /curl.*--data-binary\s*@/i, label: "bash-exfil" },
+  { pattern: /wget.*--post-file/i, label: "bash-exfil" },
+  { pattern: /cat\s+\.env/i, label: "bash-secret-read" },
+  // Sandbox escape — writes outside project directory
   { pattern: /cd\s+\/(?!tmp)\w/i, label: "bash-escape" },
   { pattern: />\s*\/(?!tmp|dev\/null)\w/i, label: "bash-escape" },
-  { pattern: /curl.*-[dF]\s*@/i, label: "bash-exfil" },
-  { pattern: /wget.*--post-file/i, label: "bash-exfil" },
-  { pattern: /nc\s+-[lp]/i, label: "bash-reverse-shell" },
-  { pattern: /bash\s+-i/i, label: "bash-reverse-shell" },
+  { pattern: /\btee\s+\/(?!tmp)\w/i, label: "bash-escape" },
+  { pattern: /\bcp\s+.*\s+\/(?!tmp)\w/i, label: "bash-escape" },
+  { pattern: /\bmv\s+.*\s+\/(?!tmp)\w/i, label: "bash-escape" },
+  // Writes to framework source (src/)
+  { pattern: />\s*src\//i, label: "bash-src-write" },
+  { pattern: /\bcp\s+.*\s+src\//i, label: "bash-src-write" },
+  { pattern: /\btee\s+.*src\//i, label: "bash-src-write" },
+  { pattern: /\bmv\s+.*\s+src\//i, label: "bash-src-write" },
+  // Reverse shell patterns
+  { pattern: /\bnc\s+-[lpe]/i, label: "bash-reverse-shell" },
+  { pattern: /\bbash\s+-i\b/i, label: "bash-reverse-shell" },
   { pattern: /\/dev\/tcp\//i, label: "bash-reverse-shell" },
-  { pattern: /mkfifo|mknod.*\/tmp/i, label: "bash-reverse-shell" },
+  { pattern: /\bmkfifo\b/i, label: "bash-reverse-shell" },
+  { pattern: /\bpython[23]?\s+-c\s+['"]import\s+(socket|os|subprocess)/i, label: "bash-reverse-shell" },
+  { pattern: /\bperl\s+-e\s+['"].*socket/i, label: "bash-reverse-shell" },
 ];
 
 /**
