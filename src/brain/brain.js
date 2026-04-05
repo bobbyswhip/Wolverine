@@ -118,7 +118,7 @@ const SEED_DOCS = [
     metadata: { topic: "heal-escalation" },
   },
   {
-    text: "Process manager: wolverine monitors memory (RSS/heap) every 10s, detects memory leaks (N consecutive growth samples → auto-restart), enforces memory limit (default 512MB), tracks CPU%, probes all routes every 30s, detects response time degradation trends (stable/degrading/improving). Analytics dashboard shows memory/CPU charts and per-route health.",
+    text: "Process manager: wolverine monitors memory (RSS/heap) every 10s, detects memory leaks (N consecutive growth samples → auto-restart), enforces memory limit (default 512MB), tracks CPU%, probes all routes every 30s, detects response time degradation trends (stable/degrading/improving). Adaptive rate limiter: auto-injected via error-hook.js into Fastify/Express. Three zones based on CPU + memory: GREEN (<70%) = full throughput, YELLOW (70-85%) = shed 30% of requests, RED (>85%) = reject non-essential with 503 + Retry-After. Always allows health checks and wolverine internal routes. Reserves 200MB for heal tools. Enable: WOLVERINE_ADAPTIVE_LIMIT=true (default). Disable: WOLVERINE_ADAPTIVE_LIMIT=false. Response includes X-Wolverine-Zone header.",
     metadata: { topic: "process-manager" },
   },
   {

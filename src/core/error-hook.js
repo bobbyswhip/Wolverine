@@ -72,6 +72,28 @@ Module._load = function (request, parent, isMain) {
 };
 
 function _hookFastify(fastify) {
+  // Adaptive rate limiter — auto-protects based on CPU/memory pressure
+  if (process.env.WOLVERINE_ADAPTIVE_LIMIT !== "false") {
+    try {
+      const { getLimiter } = require("../monitor/adaptive-limiter");
+      const limiter = getLimiter();
+      fastify.addHook("onRequest", function (request, reply, done) {
+        if (!limiter.shouldAllow(request.url, request.headers)) {
+          const status = limiter.getStatus();
+          reply.code(503).header("Retry-After", "5").header("X-Wolverine-Zone", status.zone).send({
+            error: "Service temporarily unavailable",
+            zone: status.zone,
+            cpu: status.cpuAvg + "%",
+            memory: status.memAvg + "%",
+            retry_after: 5,
+          });
+          return;
+        }
+        done();
+      });
+    } catch {}
+  }
+
   // Wrap setErrorHandler so our IPC reporting runs BEFORE the user's handler
   const origSetError = fastify.setErrorHandler;
   let customErrorHandlerSet = false;
@@ -107,6 +129,24 @@ function _hookFastify(fastify) {
 }
 
 function _hookExpress(app) {
+  // Adaptive rate limiter for Express
+  if (process.env.WOLVERINE_ADAPTIVE_LIMIT !== "false") {
+    try {
+      const { getLimiter } = require("../monitor/adaptive-limiter");
+      const limiter = getLimiter();
+      app.use(function _wolverineAdaptiveLimiter(req, res, next) {
+        if (!limiter.shouldAllow(req.url, req.headers)) {
+          const status = limiter.getStatus();
+          res.status(503).set("Retry-After", "5").set("X-Wolverine-Zone", status.zone).json({
+            error: "Service temporarily unavailable", zone: status.zone, retry_after: 5,
+          });
+          return;
+        }
+        next();
+      });
+    } catch {}
+  }
+
   // Wrap app.listen to inject error middleware AFTER all user middleware
   const originalListen = app.listen;
   app.listen = function (...args) {
