@@ -132,20 +132,21 @@ async function x402Plugin(fastify, opts) {
       return;
     }
 
-    // Decode payment
+    // Decode payment — parse raw payload directly (matching working project pattern)
     let decodedPayment;
     try {
-      const { exact } = await import("x402/schemes");
-      const libraryDecoded = exact.evm.decodePayment(paymentHeader);
-
-      // Parse raw payload for metadata
       const raw = JSON.parse(Buffer.from(paymentHeader, "base64").toString("utf-8"));
+
+      // Validate required fields
+      if (!raw.payload?.authorization || !raw.payload?.signature) {
+        throw new Error("Missing authorization or signature");
+      }
 
       decodedPayment = {
         x402Version: raw.x402Version || 1,
         scheme: raw.scheme || "exact",
         network: raw.network || _network,
-        payload: libraryDecoded.payload,
+        payload: raw.payload,
       };
     } catch (err) {
       reply.code(402).send({ error: "Invalid payment format: " + err.message, accepts: [paymentRequirements] });
@@ -185,10 +186,8 @@ async function x402Plugin(fastify, opts) {
 
     try {
       const paymentHeader = request.headers["x-payment"] || request.headers["payment-signature"];
-      const { exact } = require("x402/schemes");
       const raw = JSON.parse(Buffer.from(paymentHeader, "base64").toString("utf-8"));
-      const libraryDecoded = exact.evm.decodePayment(paymentHeader);
-      const decodedPayment = { x402Version: raw.x402Version || 1, scheme: raw.scheme || "exact", network: raw.network || _network, payload: libraryDecoded.payload };
+      const decodedPayment = { x402Version: raw.x402Version || 1, scheme: raw.scheme || "exact", network: raw.network || _network, payload: raw.payload };
 
       const userValue = decodedPayment.payload.authorization.value;
       const { getAddress } = await import("viem");
