@@ -1,91 +1,60 @@
-const path = require("path");
 const fs = require("fs");
+const path = require("path");
 
 /**
- * x402 Payment Middleware for Fastify — monetize any API route with USDC on Base.
+ * x402 Fastify Plugin — add crypto payments to any route with one flag.
  *
- * Implements the x402 protocol (HTTP 402 Payment Required) for Fastify.
- * No official @x402/fastify exists, so we build directly on @x402/core.
+ * Makes it dead simple to accept USDC payments on Base network.
+ * The developer marks a route with x402 config, and the middleware
+ * handles the 402 → payment → verification → callback flow.
  *
- * Usage in server/index.js:
- *   fastify.register(require('wolverine-ai/src/middleware/x402-fastify'), {
- *     payTo: '0xYourAddress',  // or auto from vault
- *     network: 'eip155:8453',  // Base mainnet
- *   });
+ * Two modes:
+ *   Fixed price:    { x402: { price: "$0.01" } }
+ *   Variable price: { x402: { variable: true, min: "$1", max: "$10000" } }
  *
- * Route pricing in settings.json:
- *   "x402": {
- *     "enabled": true,
- *     "routes": {
- *       "POST /v1/chat/completions": { "price": "$0.001" },
- *       "GET /api/premium": { "price": "$0.01" }
+ * Example — fixed price route:
+ *   fastify.get("/premium-data", { config: { x402: { price: "$0.10" } } }, handler)
+ *
+ * Example — variable price (credit purchase):
+ *   fastify.post("/buy-credits", {
+ *     config: {
+ *       x402: {
+ *         variable: true,
+ *         min: "$1",
+ *         max: "$10000",
+ *         priceField: "dollars",  // reads amount from request body
+ *       }
  *     }
- *   }
+ *   }, async (req, reply) => {
+ *     // req.x402.paid === true, req.x402.amount === "$5.00"
+ *     addCredits(req.x402.amount);
+ *     return { credits: newBalance };
+ *   })
  *
- * Live price updates:
- *   PUT /x402/price { route: "POST /v1/chat/completions", price: "$0.002" }
- *   wolverine --x402-price "POST /v1/chat/completions" "$0.002"
+ * The payment receipt is in req.x402 after verification:
+ *   { paid: true, amount: "$5.00", receipt: {...}, txHash: "0x..." }
  */
 
-// In-memory route pricing — survives hot updates without restart
-let _routePricing = {};
 let _payTo = null;
-let _network = "eip155:8453"; // Base mainnet default
+let _network = "eip155:8453";
 let _facilitatorUrl = "https://x402.org/facilitator";
-let _initialized = false;
 
-/**
- * Get current route pricing (for external access).
- */
-function getPricing() { return { ..._routePricing }; }
+async function x402Plugin(fastify, opts) {
+  // Config
+  _network = opts.network || _network;
+  _facilitatorUrl = opts.facilitator || _facilitatorUrl;
+  _payTo = opts.payTo || null;
 
-/**
- * Update a single route's price live — no restart needed.
- */
-function setPrice(routeKey, price) {
-  if (!price.startsWith("$")) price = "$" + price;
-  _routePricing[routeKey] = { price };
-  // Persist to settings.json
-  _persistPricing();
-  return { route: routeKey, price };
-}
-
-/**
- * Remove pricing from a route (make it free).
- */
-function removePrice(routeKey) {
-  delete _routePricing[routeKey];
-  _persistPricing();
-  return { route: routeKey, price: "free" };
-}
-
-function _persistPricing() {
+  // Load from settings.json
   try {
     const settingsPath = path.join(process.cwd(), "server", "config", "settings.json");
-    if (fs.existsSync(settingsPath)) {
-      const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
-      if (!settings.x402) settings.x402 = {};
-      settings.x402.routes = {};
-      for (const [route, cfg] of Object.entries(_routePricing)) {
-        settings.x402.routes[route] = { price: cfg.price };
-      }
-      const tmp = settingsPath + ".tmp";
-      fs.writeFileSync(tmp, JSON.stringify(settings, null, 2), "utf-8");
-      fs.renameSync(tmp, settingsPath);
-    }
+    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
+    if (settings.x402?.network) _network = settings.x402.network;
+    if (settings.x402?.facilitator) _facilitatorUrl = settings.x402.facilitator;
+    if (settings.x402?.payTo) _payTo = settings.x402.payTo;
   } catch {}
-}
 
-/**
- * Fastify plugin — registers x402 payment middleware.
- */
-async function x402Plugin(fastify, opts) {
-  // Load config
-  _payTo = opts.payTo || null;
-  _network = opts.network || "eip155:8453";
-  _facilitatorUrl = opts.facilitator || "https://x402.org/facilitator";
-
-  // Auto-detect payTo from vault if not provided
+  // Auto-detect payTo from vault
   if (!_payTo) {
     try {
       const { getWalletAddress } = require("../vault/wallet-ops");
@@ -93,188 +62,130 @@ async function x402Plugin(fastify, opts) {
     } catch {}
   }
 
-  // Load route pricing from settings.json
-  try {
-    const settingsPath = path.join(process.cwd(), "server", "config", "settings.json");
-    if (fs.existsSync(settingsPath)) {
-      const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"));
-      if (settings.x402?.routes) {
-        for (const [route, cfg] of Object.entries(settings.x402.routes)) {
-          _routePricing[route] = { price: cfg.price };
-        }
-      }
-      if (settings.x402?.network) _network = settings.x402.network;
-      if (settings.x402?.facilitator) _facilitatorUrl = settings.x402.facilitator;
-    }
-  } catch {}
-
-  if (!_payTo) {
-    console.log("  ⚠️  x402: no payTo address (set in settings.json or init vault)");
-    return;
+  if (_payTo) {
+    console.log(`  💰 x402: payments to ${_payTo.slice(0, 6)}...${_payTo.slice(-4)} on ${_network}`);
   }
 
-  _initialized = true;
-  const routeCount = Object.keys(_routePricing).length;
-  if (routeCount > 0) {
-    console.log(`  💰 x402: ${routeCount} paid route(s), receiving at ${_payTo.slice(0, 6)}...${_payTo.slice(-4)}`);
-  }
-
-  // ── Main payment gate — onRequest hook ──
+  // ── Route-level x402 hook ──
   fastify.addHook("onRequest", async (request, reply) => {
-    if (!_initialized || Object.keys(_routePricing).length === 0) return;
+    // Check if this route has x402 config
+    const routeConfig = request.routeOptions?.config?.x402 || request.context?.config?.x402;
+    if (!routeConfig) return; // Not an x402 route
+    if (!_payTo) {
+      reply.code(500).send({ error: "x402 not configured — no wallet address" });
+      return;
+    }
 
-    const routeKey = `${request.method} ${request.url.split("?")[0]}`;
-    const routeConfig = _routePricing[routeKey];
-    if (!routeConfig) return; // Free route
+    // Determine the price
+    let price;
+    if (routeConfig.variable) {
+      // Variable pricing — read amount from request body or query
+      const field = routeConfig.priceField || "dollars";
+      const raw = request.body?.[field] || request.query?.[field];
+      if (!raw) {
+        reply.code(400).send({
+          error: `${field} required`,
+          x402: { variable: true, min: routeConfig.min || "$1", max: routeConfig.max || "$10000" },
+        });
+        return;
+      }
+      const amount = parseFloat(String(raw).replace("$", ""));
+      const min = parseFloat((routeConfig.min || "$1").replace("$", ""));
+      const max = parseFloat((routeConfig.max || "$10000").replace("$", ""));
+      if (isNaN(amount) || amount < min || amount > max) {
+        reply.code(400).send({ error: `Amount must be $${min}-$${max}` });
+        return;
+      }
+      price = "$" + amount.toFixed(2);
+    } else {
+      price = routeConfig.price;
+      if (!price) { reply.code(500).send({ error: "x402 route missing price config" }); return; }
+    }
 
     const paymentSig = request.headers["payment-signature"];
 
     // No payment — return 402 with payment instructions
     if (!paymentSig) {
-      const paymentRequired = {
+      const instructions = {
         accepts: [{
           scheme: "exact",
-          price: routeConfig.price,
+          price,
           network: _network,
           payTo: _payTo,
         }],
-        description: `Payment required for ${routeKey}`,
+        description: routeConfig.description || `Payment for ${request.method} ${request.url}`,
         mimeType: "application/json",
       };
-
       reply
         .code(402)
-        .header("Payment-Required", JSON.stringify(paymentRequired))
-        .header("X-402-Version", "1.0")
+        .header("Payment-Required", JSON.stringify(instructions))
         .send({
           error: "Payment Required",
-          price: routeConfig.price,
+          price,
           network: _network,
           payTo: _payTo,
           protocol: "x402",
+          ...(routeConfig.variable ? { variable: true, min: routeConfig.min, max: routeConfig.max, priceField: routeConfig.priceField || "dollars" } : {}),
         });
       return;
     }
 
-    // Payment present — verify via facilitator
-    try {
-      const verified = await _verifyPayment(paymentSig, routeConfig);
-      if (verified.valid) {
-        // Payment good — add receipt header and continue
-        reply.header("Payment-Response", JSON.stringify(verified.receipt || {}));
-        request.x402 = { paid: true, amount: routeConfig.price, txHash: verified.txHash };
-        return; // continue to route handler
-      }
-    } catch {}
-
-    // Verification failed
-    reply.code(402).send({
-      error: "Payment verification failed",
-      price: routeConfig.price,
-      network: _network,
-      payTo: _payTo,
-    });
-  });
-
-  // ── Live price management API ──
-  fastify.put("/x402/price", async (request, reply) => {
-    // Admin only
-    const token = request.headers.authorization?.replace("Bearer ", "");
-    let settings = {};
-    try { settings = JSON.parse(fs.readFileSync(path.join(process.cwd(), "server", "config", "settings.json"), "utf-8")); } catch {}
-    if (token !== settings.platform?.apiKey) {
-      return reply.code(403).send({ error: "Admin only" });
+    // Payment present — verify
+    const verified = await _verifyPayment(paymentSig, price);
+    if (verified.valid) {
+      reply.header("Payment-Response", JSON.stringify(verified.receipt || {}));
+      request.x402 = { paid: true, amount: price, receipt: verified.receipt, txHash: verified.txHash };
+      return; // continue to route handler
     }
 
-    const { route, price } = request.body || {};
-    if (!route || !price) return reply.code(400).send({ error: "route and price required" });
-    const result = setPrice(route, price);
-    return { updated: true, ...result };
+    reply.code(402).send({ error: "Payment verification failed", price, payTo: _payTo });
   });
 
-  fastify.delete("/x402/price", async (request, reply) => {
-    const token = request.headers.authorization?.replace("Bearer ", "");
-    let settings = {};
-    try { settings = JSON.parse(fs.readFileSync(path.join(process.cwd(), "server", "config", "settings.json"), "utf-8")); } catch {}
-    if (token !== settings.platform?.apiKey) {
-      return reply.code(403).send({ error: "Admin only" });
-    }
-
-    const { route } = request.body || {};
-    if (!route) return reply.code(400).send({ error: "route required" });
-    return removePrice(route);
-  });
-
-  fastify.get("/x402/pricing", async () => {
-    return {
-      payTo: _payTo,
-      network: _network,
-      routes: _routePricing,
-    };
-  });
+  // ── Public pricing endpoint ──
+  fastify.get("/x402/info", async () => ({
+    payTo: _payTo,
+    network: _network,
+    facilitator: _facilitatorUrl,
+    protocol: "x402",
+    docs: "https://docs.cdp.coinbase.com/x402/welcome",
+  }));
 }
 
-/**
- * Verify a payment signature via the facilitator.
- */
-async function _verifyPayment(paymentSig, routeConfig) {
+async function _verifyPayment(paymentSig, price) {
   try {
-    // Try @x402/core facilitator client if available
+    // Try @x402/core if available
     const { HTTPFacilitatorClient } = require("@x402/core/server");
-    const { ExactEvmScheme } = require("@x402/evm/exact/server");
-
     const facilitator = new HTTPFacilitatorClient({ url: _facilitatorUrl });
     const result = await facilitator.verify({
       paymentSignature: paymentSig,
-      routeConfig: {
-        accepts: [{
-          scheme: "exact",
-          price: routeConfig.price,
-          network: _network,
-          payTo: _payTo,
-        }],
-      },
+      routeConfig: { accepts: [{ scheme: "exact", price, network: _network, payTo: _payTo }] },
     });
     return { valid: result.valid, receipt: result.receipt, txHash: result.txHash };
   } catch {
-    // Fallback: manual HTTP verification to facilitator
+    // Fallback: raw HTTP to facilitator
     try {
       const https = require("https");
       const http = require("http");
       const url = new (require("url").URL)(_facilitatorUrl + "/verify");
       const body = JSON.stringify({
         paymentSignature: paymentSig,
-        routeConfig: {
-          accepts: [{
-            scheme: "exact",
-            price: routeConfig.price,
-            network: _network,
-            payTo: _payTo,
-          }],
-        },
+        routeConfig: { accepts: [{ scheme: "exact", price, network: _network, payTo: _payTo }] },
       });
-
       return new Promise((resolve) => {
         const client = url.protocol === "https:" ? https : http;
         const req = client.request({
-          hostname: url.hostname,
-          port: url.port,
-          path: url.pathname,
-          method: "POST",
+          hostname: url.hostname, port: url.port, path: url.pathname, method: "POST",
           headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
           timeout: 10000,
         }, (res) => {
           let data = "";
           res.on("data", (c) => data += c);
           res.on("end", () => {
-            try {
-              const parsed = JSON.parse(data);
-              resolve({ valid: parsed.valid || parsed.success, receipt: parsed, txHash: parsed.txHash });
-            } catch { resolve({ valid: false }); }
+            try { const p = JSON.parse(data); resolve({ valid: p.valid || p.success, receipt: p, txHash: p.txHash }); }
+            catch { resolve({ valid: false }); }
           });
         });
         req.on("error", () => resolve({ valid: false }));
-        req.on("timeout", () => { req.destroy(); resolve({ valid: false }); });
         req.write(body);
         req.end();
       });
@@ -282,9 +193,5 @@ async function _verifyPayment(paymentSig, routeConfig) {
   }
 }
 
-x402Plugin[Symbol.for("skip-override")] = true; // Fastify plugin compat
-
+x402Plugin[Symbol.for("skip-override")] = true;
 module.exports = x402Plugin;
-module.exports.getPricing = getPricing;
-module.exports.setPrice = setPrice;
-module.exports.removePrice = removePrice;

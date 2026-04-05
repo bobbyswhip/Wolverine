@@ -61,31 +61,8 @@ async function execute(action, params = {}) {
       return { signedTransaction: signed };
     }
 
-    // x402 payment actions
-    case "x402_pricing":
-      try {
-        const { getPricing } = require("../middleware/x402-fastify");
-        return getPricing();
-      } catch { return { error: "x402 middleware not loaded" }; }
-
-    case "x402_set_price": {
-      if (!params.route || !params.price) return { error: "route and price required" };
-      try {
-        const { setPrice } = require("../middleware/x402-fastify");
-        return setPrice(params.route, params.price);
-      } catch { return { error: "x402 middleware not loaded" }; }
-    }
-
-    case "x402_remove_price": {
-      if (!params.route) return { error: "route required" };
-      try {
-        const { removePrice } = require("../middleware/x402-fastify");
-        return removePrice(params.route);
-      } catch { return { error: "x402 middleware not loaded" }; }
-    }
-
     default:
-      return { error: `Unknown vault action: ${action}. Use: status, address, sign_tx, sign_message, public_key, x402_pricing, x402_set_price, x402_remove_price` };
+      return { error: `Unknown vault action: ${action}. Use: status, address, sign_tx, sign_message, public_key` };
   }
 }
 

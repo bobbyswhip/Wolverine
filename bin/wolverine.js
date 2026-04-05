@@ -38,7 +38,7 @@ ${chalk.bold("Options:")}
   --workers <n>    Force specific worker count
   --info           Show system info and exit
   --init           Scan server/ and build context map (routes, DB, config, deps)
-  --x402-price     Set x402 price: wolverine --x402-price "POST /api" "$0.01"
+  --x402-info      Show x402 payment configuration
 
 ${chalk.bold("Configuration:")}
   server/config/settings.json    Models, telemetry, limits, health checks
@@ -67,20 +67,27 @@ if (args.includes("--info")) {
 }
 
 // --init: scan server/ and build context map
-// --x402-price: set route pricing live
-if (args.includes("--x402-price")) {
-  const idx = args.indexOf("--x402-price");
-  const route = args[idx + 1];
-  const price = args[idx + 2];
-  if (!route || !price) {
-    console.log(chalk.red('  Usage: wolverine --x402-price "POST /v1/chat/completions" "$0.001"'));
-    process.exit(1);
-  }
-  const { setPrice } = require("../src/middleware/x402-fastify");
-  const result = setPrice(route, price);
-  console.log(chalk.green(`  ✅ x402 price updated: ${result.route} → ${result.price}`));
-  console.log(chalk.gray("     Change is live — no restart needed."));
-  process.exit(0);
+// --x402-info: show payment configuration
+if (args.includes("--x402-info")) {
+  (async () => {
+    let payTo = "not configured";
+    try {
+      const { getWalletAddress } = require("../src/vault/wallet-ops");
+      payTo = await getWalletAddress();
+    } catch {}
+    console.log(chalk.blue("\n  💰 x402 Payment Configuration\n"));
+    console.log(chalk.gray(`     Wallet:      ${payTo}`));
+    console.log(chalk.gray(`     Network:     Base (eip155:8453)`));
+    console.log(chalk.gray(`     Token:       USDC`));
+    console.log(chalk.gray(`     Protocol:    x402 (HTTP 402 Payment Required)`));
+    console.log(chalk.gray(`     Facilitator: x402.org`));
+    console.log(chalk.gray(`\n     Add to any Fastify route:`));
+    console.log(chalk.cyan(`       { config: { x402: { price: "$0.10" } } }`));
+    console.log(chalk.gray(`\n     Variable pricing (credit purchases):`));
+    console.log(chalk.cyan(`       { config: { x402: { variable: true, min: "$1", max: "$10000", priceField: "dollars" } } }\n`));
+    process.exit(0);
+  })();
+  return;
 }
 
 if (args.includes("--init")) {
