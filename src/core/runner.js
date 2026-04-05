@@ -710,14 +710,16 @@ class WolverineRunner {
     }
     this._healInProgress = true;
 
-    // #8: Safety timeout — if heal hangs, force-release the lock after 6 minutes
+    // Safety timeout — must be strictly greater than heal()'s 5-min timeout to avoid concurrent heals
+    const HEAL_TIMEOUT_MS = parseInt(process.env.WOLVERINE_HEAL_TIMEOUT_MS, 10) || 300000;
+    const safetyMs = HEAL_TIMEOUT_MS + 30000; // heal timeout + 30s grace
     const healTimeout = setTimeout(() => {
       if (this._healInProgress) {
-        console.log(chalk.red(`  ⚠️  _healFromError safety timeout (6min) — releasing heal lock`));
+        console.log(chalk.red(`  ⚠️  _healFromError safety timeout (${Math.round(safetyMs / 60000)}min) — releasing heal lock`));
         this._healInProgress = false;
         this._healStatus = null;
       }
-    }, 360000);
+    }, safetyMs);
 
     console.log(chalk.yellow(`\n🐺 Wolverine healing caught error on ${routePath}...`));
     this._healStatus = { active: true, route: routePath, error: errorDetails?.message?.slice(0, 200), phase: "diagnosing", startedAt: Date.now() };

@@ -249,27 +249,35 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
     } catch {}
   }
 
-  // 7. Classify error complexity — CLASSIFIER_MODEL determines strategy
+  // 7. Classify error complexity — regex first (fast, free), AI only when uncertain
   let errorComplexity = "moderate";
-  try {
-    const classifyResult = await aiCall({
-      model: getModel("classifier"),
-      systemPrompt: "You classify Node.js errors. Respond with ONLY one word: SIMPLE, MODERATE, or COMPLEX.",
-      userPrompt: `Classify this error:\n${parsed.errorMessage}\n\nFile: ${parsed.filePath || "unknown"}\nType: ${parsed.errorType || "unknown"}`,
-      maxTokens: 10,
-      category: "classifier",
-    });
-    const word = (classifyResult.content || "").trim().toUpperCase();
-    if (word.includes("SIMPLE")) errorComplexity = "simple";
-    else if (word.includes("COMPLEX")) errorComplexity = "complex";
-    else errorComplexity = "moderate";
-    console.log(chalk.gray(`  🏷️  Classifier: ${errorComplexity}`));
-  } catch {
-    // Fallback to regex classification
-    if (/TypeError|ReferenceError|SyntaxError|Cannot find module/.test(parsed.errorMessage)) errorComplexity = "simple";
-    else if (/ECONNREFUSED|timeout|ENOENT|EACCES/.test(parsed.errorMessage)) errorComplexity = "moderate";
-    else errorComplexity = "complex";
-    console.log(chalk.gray(`  🏷️  Classifier (fallback): ${errorComplexity}`));
+  const isObviouslySimple = /TypeError|ReferenceError|SyntaxError|Cannot find module|Cannot read prop/.test(parsed.errorMessage);
+  const isObviouslyModerate = /ECONNREFUSED|timeout|ENOENT|EACCES|EADDRINUSE|ENOSPC|EMFILE/.test(parsed.errorMessage);
+  if (isObviouslySimple) {
+    errorComplexity = "simple";
+    console.log(chalk.gray(`  🏷️  Classifier (fast): simple`));
+  } else if (isObviouslyModerate) {
+    errorComplexity = "moderate";
+    console.log(chalk.gray(`  🏷️  Classifier (fast): moderate`));
+  } else {
+    // Uncertain — use AI classifier
+    try {
+      const classifyResult = await aiCall({
+        model: getModel("classifier"),
+        systemPrompt: "You classify Node.js errors. Respond with ONLY one word: SIMPLE, MODERATE, or COMPLEX.",
+        userPrompt: `Classify this error:\n${parsed.errorMessage}\n\nFile: ${parsed.filePath || "unknown"}\nType: ${parsed.errorType || "unknown"}`,
+        maxTokens: 10,
+        category: "classifier",
+      });
+      const word = (classifyResult.content || "").trim().toUpperCase();
+      if (word.includes("SIMPLE")) errorComplexity = "simple";
+      else if (word.includes("COMPLEX")) errorComplexity = "complex";
+      else errorComplexity = "moderate";
+      console.log(chalk.gray(`  🏷️  Classifier (AI): ${errorComplexity}`));
+    } catch {
+      errorComplexity = "complex"; // unknown = treat as complex to be safe
+      console.log(chalk.gray(`  🏷️  Classifier (fallback): complex`));
+    }
   }
 
   // 7b. Research — look up past fixes AND search for solutions
@@ -687,13 +695,15 @@ async function tryOperationalFix(parsed, cwd, logger, sandbox) {
     } catch {}
   }
 
-  // Pattern 6: EMFILE — too many open files, try raising ulimit
+  // Pattern 6: EMFILE — too many open files
   if (/EMFILE|ENFILE/.test(msg)) {
+    // Close stale file handles by clearing node_modules/.cache and restarting
     try {
-      if (process.platform !== "win32") {
-        execSync("ulimit -n 65536 2>/dev/null || true", { cwd, stdio: "pipe", timeout: 3000 });
-        console.log(chalk.blue("  📂 Raised file descriptor limit to 65536"));
-        return { fixed: true, action: "EMFILE — raised file descriptor limit (ulimit -n 65536)" };
+      const cachePath = path.join(cwd, "node_modules", ".cache");
+      if (fs.existsSync(cachePath)) {
+        execSync(`rm -rf "${cachePath}"`, { timeout: 10000 });
+        console.log(chalk.blue("  📂 Cleared node_modules/.cache to reduce open FDs"));
+        return { fixed: true, action: "EMFILE — cleared build cache to reduce open file descriptors. Consider increasing ulimit -n in your system profile." };
       }
     } catch {}
   }

@@ -544,6 +544,16 @@ function _detectSandboxEscape(cmd, cwd) {
     return "curl uploading local file (potential data exfiltration)";
   }
 
+  // 6. Environment variable dumping to file/network (staging attack via /tmp)
+  if (/\b(env|printenv|set)\s*>/.test(c) || /\b(env|printenv)\s*\|/.test(c)) {
+    return "Environment variable dump detected (exfiltration risk)";
+  }
+
+  // 7. Reading secrets and piping to network
+  if (/cat\s+.*\.(env|key|pem|crt)\s*\|/.test(c) || /cat\s+.*secret.*\|/.test(c)) {
+    return "Reading sensitive file and piping to output";
+  }
+
   return null; // safe
 }
 
@@ -1075,6 +1085,10 @@ class AgentEngine {
           /^192\.168\./,
           /^fd[0-9a-f]{2}:/i,
           /^::1$/,
+          /^0\.0\.0\.0$/,
+          /^0\./,
+          /^\[::1\]$/,
+          /^metadata\.google\.internal$/i,
         ];
         if (privatePatterns.some(p => p.test(hostname))) {
           resolve({ content: `BLOCKED: Cannot fetch private/internal address "${hostname}"` });

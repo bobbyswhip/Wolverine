@@ -4,6 +4,16 @@ const path = require("path");
 const dotenv = require("dotenv");
 const chalk = require("chalk");
 
+// Global error handlers — prevent parent process death from unhandled errors
+process.on("uncaughtException", (err) => {
+  console.error(chalk.red(`\n  ⚠️  Uncaught exception (wolverine survived): ${err.message}`));
+  console.error(chalk.gray(`  ${err.stack?.split("\n")[1]?.trim() || ""}`));
+});
+process.on("unhandledRejection", (reason) => {
+  const msg = reason instanceof Error ? reason.message : String(reason);
+  console.error(chalk.red(`\n  ⚠️  Unhandled rejection (wolverine survived): ${msg}`));
+});
+
 // Load secrets
 dotenv.config({ path: path.resolve(process.cwd(), ".env.local") });
 dotenv.config({ path: path.resolve(process.cwd(), ".env") });
