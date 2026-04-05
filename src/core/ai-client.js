@@ -659,6 +659,11 @@ Include both if needed, or just one.`;
   const result = await aiCall({ model, systemPrompt, userPrompt, maxTokens: 2048, category: "reasoning" });
   const content = (result.content || "").trim();
 
+  // Guard: cap length before regex extraction to prevent catastrophic backtracking
+  if (content.length > 50000) {
+    throw new Error("AI response too large for regex extraction (>50K chars)");
+  }
+
   // Strip thinking tags (Gemma), markdown fences, and any prefix text
   let cleaned = content
     .replace(/<\|channel>.*?<channel\|>/gs, "")

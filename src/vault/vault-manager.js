@@ -16,9 +16,9 @@ const path = require("path");
  * - Survives git pull, npm install, auto-update (lives in .wolverine/)
  */
 
-const VAULT_DIR = () => path.join(process.cwd(), ".wolverine", "vault");
-const MASTER_KEY_PATH = () => path.join(VAULT_DIR(), "master.key");
-const ETH_VAULT_PATH = () => path.join(VAULT_DIR(), "eth.vault");
+const VAULT_DIR = (projectRoot) => path.join(projectRoot || process.cwd(), ".wolverine", "vault");
+const MASTER_KEY_PATH = (projectRoot) => path.join(VAULT_DIR(projectRoot), "master.key");
+const ETH_VAULT_PATH = (projectRoot) => path.join(VAULT_DIR(projectRoot), "eth.vault");
 
 const ALGORITHM = "aes-256-gcm";
 const IV_LENGTH = 16;
@@ -28,26 +28,26 @@ const AUTH_TAG_LENGTH = 16;
  * Initialize the vault. Idempotent — creates keys only if missing.
  * Called during runner startup before any server code runs.
  */
-async function initVault() {
-  const vaultDir = VAULT_DIR();
+async function initVault(projectRoot) {
+  const vaultDir = VAULT_DIR(projectRoot);
   fs.mkdirSync(vaultDir, { recursive: true });
 
   let created = false;
 
   // Master encryption key
-  if (!fs.existsSync(MASTER_KEY_PATH())) {
+  if (!fs.existsSync(MASTER_KEY_PATH(projectRoot))) {
     const masterKey = crypto.randomBytes(32);
-    fs.writeFileSync(MASTER_KEY_PATH(), masterKey);
-    try { fs.chmodSync(MASTER_KEY_PATH(), 0o600); } catch {}
+    fs.writeFileSync(MASTER_KEY_PATH(projectRoot), masterKey);
+    try { fs.chmodSync(MASTER_KEY_PATH(projectRoot), 0o600); } catch {}
     masterKey.fill(0);
     created = true;
     console.log("  🔐 Vault: master encryption key generated");
   }
 
   // Ethereum private key (encrypted)
-  if (!fs.existsSync(ETH_VAULT_PATH())) {
+  if (!fs.existsSync(ETH_VAULT_PATH(projectRoot))) {
     const ethKey = crypto.randomBytes(32);
-    await encryptAndStore(ethKey);
+    await encryptAndStore(ethKey, { projectRoot });
     ethKey.fill(0);
     created = true;
     console.log("  🔐 Vault: ethereum wallet created");
@@ -59,18 +59,19 @@ async function initVault() {
 /**
  * Check if vault is fully initialized.
  */
-function isVaultInitialized() {
-  return fs.existsSync(MASTER_KEY_PATH()) && fs.existsSync(ETH_VAULT_PATH());
+function isVaultInitialized(projectRoot) {
+  return fs.existsSync(MASTER_KEY_PATH(projectRoot)) && fs.existsSync(ETH_VAULT_PATH(projectRoot));
 }
 
 /**
  * Encrypt a private key Buffer and write to eth.vault.
  * Wipes the master key from memory after use.
  */
-async function encryptAndStore(keyBuf) {
+async function encryptAndStore(keyBuf, options) {
+  const projectRoot = options?.projectRoot;
   let masterKey = null;
   try {
-    masterKey = fs.readFileSync(MASTER_KEY_PATH());
+    masterKey = fs.readFileSync(MASTER_KEY_PATH(projectRoot));
     const iv = crypto.randomBytes(IV_LENGTH);
     const cipher = crypto.createCipheriv(ALGORITHM, masterKey, iv);
     const encrypted = Buffer.concat([cipher.update(keyBuf), cipher.final()]);
@@ -83,13 +84,13 @@ async function encryptAndStore(keyBuf) {
       authTag: authTag.toString("hex"),
       ciphertext: encrypted.toString("hex"),
       created: new Date().toISOString(),
-      rotated: null,
+      rotated: options?.rotated || null,
     };
 
-    const tmpPath = ETH_VAULT_PATH() + ".tmp";
+    const tmpPath = ETH_VAULT_PATH(projectRoot) + ".tmp";
     fs.writeFileSync(tmpPath, JSON.stringify(vault, null, 2), "utf-8");
-    fs.renameSync(tmpPath, ETH_VAULT_PATH());
-    try { fs.chmodSync(ETH_VAULT_PATH(), 0o600); } catch {}
+    fs.renameSync(tmpPath, ETH_VAULT_PATH(projectRoot));
+    try { fs.chmodSync(ETH_VAULT_PATH(projectRoot), 0o600); } catch {}
   } finally {
     if (masterKey) masterKey.fill(0);
   }
@@ -99,15 +100,15 @@ async function encryptAndStore(keyBuf) {
  * Decrypt the Ethereum private key. Returns a Buffer.
  * CALLER MUST call .fill(0) on the returned Buffer when done.
  */
-function decryptPrivateKey() {
-  if (!isVaultInitialized()) {
+function decryptPrivateKey(projectRoot) {
+  if (!isVaultInitialized(projectRoot)) {
     throw new Error("vault not initialized");
   }
 
   let masterKey = null;
   try {
-    masterKey = fs.readFileSync(MASTER_KEY_PATH());
-    const vault = JSON.parse(fs.readFileSync(ETH_VAULT_PATH(), "utf-8"));
+    masterKey = fs.readFileSync(MASTER_KEY_PATH(projectRoot));
+    const vault = JSON.parse(fs.readFileSync(ETH_VAULT_PATH(projectRoot), "utf-8"));
 
     if (vault.version !== 1) throw new Error("unsupported vault version");
 
@@ -128,16 +129,11 @@ function decryptPrivateKey() {
  * Re-encrypt with a fresh IV. Defensive measure if key material was
  * potentially exposed in an error message.
  */
-async function rotateEncryption() {
+async function rotateEncryption(projectRoot) {
   let keyBuf = null;
   try {
-    keyBuf = decryptPrivateKey();
-    await encryptAndStore(keyBuf);
-
-    // Update rotated timestamp
-    const vault = JSON.parse(fs.readFileSync(ETH_VAULT_PATH(), "utf-8"));
-    vault.rotated = new Date().toISOString();
-    fs.writeFileSync(ETH_VAULT_PATH(), JSON.stringify(vault, null, 2), "utf-8");
+    keyBuf = decryptPrivateKey(projectRoot);
+    await encryptAndStore(keyBuf, { rotated: new Date().toISOString(), projectRoot });
   } finally {
     if (keyBuf) keyBuf.fill(0);
   }
@@ -147,11 +143,11 @@ async function rotateEncryption() {
  * Export vault contents for backup. Returns raw Buffers.
  * Caller MUST wipe masterKey after writing to backup.
  */
-function exportVaultForBackup() {
-  if (!isVaultInitialized()) return null;
+function exportVaultForBackup(projectRoot) {
+  if (!isVaultInitialized(projectRoot)) return null;
   return {
-    masterKey: fs.readFileSync(MASTER_KEY_PATH()),
-    vaultFile: fs.readFileSync(ETH_VAULT_PATH(), "utf-8"),
+    masterKey: fs.readFileSync(MASTER_KEY_PATH(projectRoot)),
+    vaultFile: fs.readFileSync(ETH_VAULT_PATH(projectRoot), "utf-8"),
   };
 }
 
@@ -159,18 +155,18 @@ function exportVaultForBackup() {
  * Import vault from backup. Only used during catastrophic recovery
  * when both vault files are missing.
  */
-function importVaultFromBackup(masterKeyBuf, vaultFileStr) {
-  const vaultDir = VAULT_DIR();
+function importVaultFromBackup(masterKeyBuf, vaultFileStr, projectRoot) {
+  const vaultDir = VAULT_DIR(projectRoot);
   fs.mkdirSync(vaultDir, { recursive: true });
 
-  fs.writeFileSync(MASTER_KEY_PATH(), masterKeyBuf);
-  try { fs.chmodSync(MASTER_KEY_PATH(), 0o600); } catch {}
+  fs.writeFileSync(MASTER_KEY_PATH(projectRoot), masterKeyBuf);
+  try { fs.chmodSync(MASTER_KEY_PATH(projectRoot), 0o600); } catch {}
 
-  fs.writeFileSync(ETH_VAULT_PATH(), vaultFileStr, "utf-8");
-  try { fs.chmodSync(ETH_VAULT_PATH(), 0o600); } catch {}
+  fs.writeFileSync(ETH_VAULT_PATH(projectRoot), vaultFileStr, "utf-8");
+  try { fs.chmodSync(ETH_VAULT_PATH(projectRoot), 0o600); } catch {}
 }
 
-function getVaultPath() { return VAULT_DIR(); }
+function getVaultPath(projectRoot) { return VAULT_DIR(projectRoot); }
 
 module.exports = {
   initVault,

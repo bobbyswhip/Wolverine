@@ -15,11 +15,14 @@ const path = require("path");
  */
 
 let _config = null;
+let _configRoot = null;
+
+function setConfigRoot(root) { _configRoot = root; }
 
 function loadConfig() {
   if (_config) return _config;
 
-  const configPath = path.join(process.cwd(), "server", "config", "settings.json");
+  const configPath = path.join(_configRoot || process.cwd(), "server", "config", "settings.json");
   let fileConfig = {};
   if (fs.existsSync(configPath)) {
     try {
@@ -109,6 +112,7 @@ function getConfig(dotPath) {
 }
 
 function resetConfig() { _config = null; }
+function resetConfigRoot() { _configRoot = null; }
 
 /**
  * Migrate old provider-based config to new flat models format.
@@ -153,4 +157,4 @@ function _migrateAndEnsureDefaults(fileConfig, configPath) {
   }
 }
 
-module.exports = { loadConfig, getConfig, resetConfig };
+module.exports = { loadConfig, getConfig, resetConfig, setConfigRoot, resetConfigRoot };

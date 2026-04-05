@@ -154,7 +154,7 @@ const SEED_DOCS = [
     metadata: { topic: "fastify" },
   },
   {
-    text: "npm package: wolverine-ai on npmjs.com (v3.7.7). Install: npm i wolverine-ai. CLI: npx wolverine server/index.js. 85 files, 190KB compressed. Includes src/, bin/, examples/. Server directory created from src/templates/server/ on first run (never overwritten). GitHub: https://github.com/bobbyswhip/Wolverine. Unified billing: all AI calls route through inference proxy with credit-based billing. WOLVERINE_API_KEY authenticates through billing proxy, WOLVERINE_GPU_KEY for direct GPU access. 3 providers: openai, anthropic, wolverine (self-hosted GPU via Vast.ai).",
+    text: "npm package: wolverine-ai on npmjs.com (latest). Install: npm i wolverine-ai. CLI: npx wolverine server/index.js. 85 files, 190KB compressed. Includes src/, bin/, examples/. Server directory created from src/templates/server/ on first run (never overwritten). GitHub: https://github.com/bobbyswhip/Wolverine. Unified billing: all AI calls route through inference proxy with credit-based billing. WOLVERINE_API_KEY authenticates through billing proxy, WOLVERINE_GPU_KEY for direct GPU access. 3 providers: openai, anthropic, wolverine (self-hosted GPU via Vast.ai).",
     metadata: { topic: "npm-package" },
   },
   {

@@ -1,12 +1,17 @@
+const fs = require("fs");
+const path = require("path");
+const os = require("os");
+const { execSync } = require("child_process");
 const chalk = require("chalk");
 const { parseError } = require("./error-parser");
-const { requestRepair, getClient, aiCall, _trackOp } = require("./ai-client");
+const { requestRepair, getClient, aiCall, _trackOp, getTrackerSnapshot } = require("./ai-client");
 const { getModel } = require("./models");
 const { applyPatch } = require("./patcher");
 const { verifyFix } = require("./verifier");
 const { Sandbox, SandboxViolationError } = require("../security/sandbox");
 const { RateLimiter } = require("../security/rate-limiter");
 const { detectInjection } = require("../security/injection-detector");
+const { redact, hasSecrets } = require("../security/secret-redactor");
 const { BackupManager } = require("../backup/backup-manager");
 const { AgentEngine } = require("../agent/agent-engine");
 const { ResearchAgent } = require("../agent/research-agent");
@@ -14,6 +19,7 @@ const { GoalLoop } = require("../agent/goal-loop");
 const { exploreAndFix, spawnParallel } = require("../agent/sub-agents");
 const { EVENT_TYPES } = require("../logger/event-logger");
 const { diagnose: diagnoseDeps } = require("../skills/deps");
+const { getSummary: getServerContextSummary } = require("./server-context");
 
 /**
  * The Wolverine healing engine — v3.
@@ -55,9 +61,7 @@ async function heal(opts) {
 async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupManager, logger, brain, mcp, skills, repairHistory, routeContext }) {
   const healStartTime = Date.now();
   // Snapshot token tracker at heal start — diff at end = FULL pipeline cost
-  const { getTrackerSnapshot } = require("./ai-client");
   const _snapshot = getTrackerSnapshot();
-  const { redact, hasSecrets } = require("../security/secret-redactor");
 
   // Guard: don't burn tokens on empty stderr (signal kills, clean shutdowns, etc.)
   if (!stderr || stderr.trim().length < 10) {
@@ -191,8 +195,6 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
   let backupSourceCode = "";
   if (hasFile && backupManager) {
     try {
-      const fs = require("fs");
-      const path = require("path");
       const stableBackups = backupManager.getAll().filter(b => b.status === "stable" || b.status === "verified");
       if (stableBackups.length > 0) {
         const latest = stableBackups[stableBackups.length - 1];
@@ -210,8 +212,7 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
   let brainContext = "";
   // Inject server context (routes, DB, config, deps) if available
   try {
-    const { getSummary } = require("./server-context");
-    const serverCtx = getSummary(cwd);
+    const serverCtx = getServerContextSummary(cwd);
     if (serverCtx) brainContext += serverCtx + "\n\n";
   } catch {}
   // Inject relevant skill context (claw-code: pre-enrich prompt with matched tools)
@@ -348,7 +349,6 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
 
           // Execute shell commands first (npm install, mkdir, etc.)
           if (repair.commands && Array.isArray(repair.commands)) {
-            const { execSync } = require("child_process");
             for (const cmd of repair.commands) {
               // Block dangerous commands
               if (/rm\s+-rf\s+[/\\]|format\s+c:|mkfs/i.test(cmd)) {
@@ -554,7 +554,6 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
  * Returns { fixed: boolean, action: string }
  */
 async function tryOperationalFix(parsed, cwd, logger, sandbox) {
-  const { execSync } = require("child_process");
   const msg = parsed.errorMessage || "";
 
   // Pattern 1: Dependency issues — use deps skill for structured diagnosis
@@ -581,8 +580,6 @@ async function tryOperationalFix(parsed, cwd, logger, sandbox) {
     || msg.match(/cannot find.*?'([^']+\.\w+)'/i);
   if (enoent) {
     const missingFile = enoent[1];
-    const fs = require("fs");
-    const path = require("path");
 
     // Only auto-create if it's inside the project and looks like a config/data file
     const rel = path.relative(cwd, missingFile).replace(/\\/g, "/");
@@ -639,7 +636,6 @@ async function tryOperationalFix(parsed, cwd, logger, sandbox) {
     const permFile = msg.match(/(?:EACCES|EPERM).*?'([^']+)'/);
     if (permFile) {
       try {
-        const fs = require("fs");
         fs.chmodSync(permFile[1], 0o755);
         console.log(chalk.blue(`  🔑 Fixed permissions on: ${permFile[1]}`));
         return { fixed: true, action: `Fixed permissions (chmod 755) on: ${permFile[1]}` };
@@ -671,7 +667,6 @@ async function tryOperationalFix(parsed, cwd, logger, sandbox) {
   // Pattern 5: ENOSPC — disk full, try automated cleanup
   if (/ENOSPC/.test(msg)) {
     try {
-      const os = require("os");
       const backupDir = path.join(os.homedir(), ".wolverine-safe-backups", "snapshots");
       let cleaned = 0;
       if (fs.existsSync(backupDir)) {
@@ -717,9 +712,6 @@ async function tryOperationalFix(parsed, cwd, logger, sandbox) {
  * Returns a JSON string with empty/default values, or null if can't infer.
  */
 function _inferJsonConfig(missingFile, cwd, parsed) {
-  const fs = require("fs");
-  const path = require("path");
-
   // Find which source file loads the missing config
   const basename = path.basename(missingFile);
   const sourceFile = parsed.filePath;
@@ -728,10 +720,18 @@ function _inferJsonConfig(missingFile, cwd, parsed) {
   // #17: Escape all regex special characters in basename to prevent regex injection
   const escapedBasename = basename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+  // #23: Guard against regex construction failure on unusual filenames
+  let configVarRegex;
+  try {
+    configVarRegex = new RegExp(`(?:const|let|var)\\s+(\\w+)\\s*=\\s*(?:require|JSON\\.parse).*${escapedBasename}`);
+  } catch {
+    return null;
+  }
+
   try {
     const source = fs.readFileSync(sourceFile, "utf-8");
     // Look for property accesses on the loaded config: config.apiUrl, config.timeout, etc.
-    const configVarMatch = source.match(new RegExp(`(?:const|let|var)\\s+(\\w+)\\s*=\\s*(?:require|JSON\\.parse).*${escapedBasename}`));
+    const configVarMatch = source.match(configVarRegex);
     if (!configVarMatch) return null;
 
     const varName = configVarMatch[1];

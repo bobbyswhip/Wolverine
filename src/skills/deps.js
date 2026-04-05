@@ -161,14 +161,19 @@ function findUnused(cwd) {
 
   // Scan all .js/.ts/.mjs/.cjs files for require/import statements
   const usedPackages = new Set();
+  let _fileCount = 0;
+  const FILE_SCAN_CAP = 5000;
   const scanDir = (dir) => {
+    if (_fileCount >= FILE_SCAN_CAP) return;
     let entries;
     try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
     for (const entry of entries) {
+      if (_fileCount >= FILE_SCAN_CAP) return;
       if (entry.name === "node_modules" || entry.name === ".git" || entry.name === ".wolverine") continue;
       const fullPath = path.join(dir, entry.name);
       if (entry.isDirectory()) { scanDir(fullPath); continue; }
       if (!/\.(js|ts|mjs|cjs|jsx|tsx)$/.test(entry.name)) continue;
+      _fileCount++;
       try {
         const content = fs.readFileSync(fullPath, "utf-8");
         // Match require("X") and import ... from "X"

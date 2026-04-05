@@ -121,7 +121,7 @@ const TOOL_DEFINITIONS = [
         type: "object",
         properties: {
           command: { type: "string", description: "Shell command to execute" },
-          timeout: { type: "number", description: "Timeout in ms (default: 10000)" },
+          timeout: { type: "number", description: "Timeout in ms (default: 30000, max: 60000)" },
         },
         required: ["command"],
       },
@@ -439,6 +439,22 @@ const TOOL_DEFINITIONS = [
           timeout_ms: { type: "number", description: "Connection timeout (default: 5000)" },
         },
         required: ["url"],
+      },
+    },
+  },
+  // ── ENVIRONMENT ──
+  {
+    type: "function",
+    function: {
+      name: "add_env_var",
+      description: "Append a key=value pair to .env.local. Only adds if the key does not already exist. Use for missing environment variable errors.",
+      parameters: {
+        type: "object",
+        properties: {
+          key: { type: "string", description: "Environment variable name (e.g. DATABASE_URL)" },
+          value: { type: "string", description: "Value to set" },
+        },
+        required: ["key", "value"],
       },
     },
   },
@@ -814,6 +830,7 @@ class AgentEngine {
       case "check_file_descriptors": return this._checkFileDescriptors(args);
       case "check_event_loop": return this._checkEventLoop(args);
       case "check_websocket": return this._checkWebsocket(args);
+      case "add_env_var":   return this._addEnvVar(args);
       case "done":          return this._done(args);
       // Legacy aliases
       case "list_files":    return this._globFiles({ pattern: (args.dir || ".") + "/*" + (args.pattern || "") });
@@ -1204,7 +1221,8 @@ class AgentEngine {
     try {
       let Database;
       try { Database = require("better-sqlite3"); } catch {
-        return { content: "better-sqlite3 not installed. Run: npm install better-sqlite3" };
+        // Fallback: try PostgreSQL via pg if available
+        return this._inspectDbPg(args);
       }
       const db = new Database(dbPath, { readonly: true });
       let result;
@@ -1234,6 +1252,55 @@ class AgentEngine {
       console.log(chalk.gray(`    🗃️ DB ${args.action}: ${args.db_path}`));
       return { content: redact(result) };
     } catch (e) { return { content: `DB error: ${e.message}` }; }
+  }
+
+  async _inspectDbPg(args) {
+    let pg;
+    try { pg = require("pg"); } catch {
+      return { content: "Neither better-sqlite3 nor pg is installed. Run: npm install better-sqlite3 (for SQLite) or npm install pg (for PostgreSQL)" };
+    }
+    // db_path is treated as a connection string or uses DATABASE_URL
+    const connectionString = args.db_path.startsWith("postgres")
+      ? args.db_path
+      : process.env.DATABASE_URL;
+    if (!connectionString) {
+      return { content: "PostgreSQL: no connection string. Set DATABASE_URL or pass a postgres:// URI as db_path." };
+    }
+    const client = new pg.Client({ connectionString, statement_timeout: 10000 });
+    try {
+      await client.connect();
+      let result;
+      if (args.action === "tables") {
+        const res = await client.query("SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename");
+        result = res.rows.map(r => r.tablename).join("\n") || "(no tables)";
+      } else if (args.action === "schema") {
+        const res = await client.query(`SELECT table_name, column_name, data_type, is_nullable FROM information_schema.columns WHERE table_schema = 'public' ORDER BY table_name, ordinal_position`);
+        const tables = {};
+        for (const row of res.rows) {
+          if (!tables[row.table_name]) tables[row.table_name] = [];
+          tables[row.table_name].push(`  ${row.column_name} ${row.data_type}${row.is_nullable === "NO" ? " NOT NULL" : ""}`);
+        }
+        result = Object.entries(tables).map(([t, cols]) => `TABLE ${t}:\n${cols.join("\n")}`).join("\n\n") || "(no tables)";
+      } else if (args.action === "query") {
+        if (!args.sql) return { content: "Error: sql required for query action" };
+        const upper = args.sql.trim().toUpperCase();
+        if (!upper.startsWith("SELECT") && !upper.startsWith("SHOW")) {
+          return { content: "BLOCKED: inspect_db only allows SELECT/SHOW for PostgreSQL. Use run_db_fix for writes." };
+        }
+        const res = await client.query(args.sql);
+        result = JSON.stringify(res.rows.slice(0, 50), null, 2);
+        if (res.rows.length > 50) result += `\n... (${res.rows.length} total rows, showing first 50)`;
+      } else {
+        result = "Unknown action. Use: tables, schema, or query";
+      }
+      const { redact } = require("../security/secret-redactor");
+      console.log(chalk.gray(`    🗃️ DB (pg) ${args.action}: ${args.db_path}`));
+      return { content: redact(result) };
+    } catch (e) {
+      return { content: `PostgreSQL error: ${e.message}` };
+    } finally {
+      try { await client.end(); } catch {}
+    }
   }
 
   _runDbFix(args) {
@@ -1750,6 +1817,35 @@ class AgentEngine {
       summary: args.summary,
       filesModified: args.files_modified,
     };
+  }
+
+  // ── Environment variable tool ──
+  // Controlled exception to _isProtectedPath: allows APPENDING to .env.local only.
+  _addEnvVar(args) {
+    const key = (args.key || "").trim();
+    const value = args.value || "";
+    if (!key || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
+      return { content: "Error: invalid env var name. Must match [A-Za-z_][A-Za-z0-9_]*" };
+    }
+    const envPath = path.resolve(this.cwd, ".env.local");
+    try {
+      // Check if key already exists
+      if (fs.existsSync(envPath)) {
+        const existing = fs.readFileSync(envPath, "utf-8");
+        const keyRegex = new RegExp(`^${key}=`, "m");
+        if (keyRegex.test(existing)) {
+          return { content: `${key} already exists in .env.local — not overwriting.` };
+        }
+      }
+      // Append the key=value pair
+      const line = `${key}=${value}\n`;
+      fs.appendFileSync(envPath, line, "utf-8");
+      console.log(chalk.green(`    🔑 Added ${key} to .env.local`));
+      if (this.logger) this.logger.info("agent.env_var_add", `Added ${key} to .env.local`);
+      return { content: `Successfully added ${key} to .env.local` };
+    } catch (err) {
+      return { content: `Error adding env var: ${err.message}` };
+    }
   }
 
   // ── Protected path guard ──

@@ -45,14 +45,30 @@ class WolverineRunner {
     this.child = null;
     this.running = false;
 
+    // Stability tracking
+    this._lastStartTime = null;
+    this._lastBackupId = null;
+    this._stabilityTimer = null;
+    this._stderrBuffer = "";
+    this._healInProgress = false;
+    this._healStatus = null; // { active, file, error, phase, startedAt, iteration }
+
+    this._initSubsystems(options);
+  }
+
+  /**
+   * Initialize all subsystems — extracted from constructor for readability.
+   */
+  _initSubsystems(options) {
     // Core subsystems
     this.sandbox = new Sandbox(this.cwd);
     this.redactor = initRedactor(this.cwd);
+    const cfg = loadConfig();
     this.rateLimiter = new RateLimiter({
-      maxCallsPerWindow: parseInt(process.env.WOLVERINE_RATE_MAX_CALLS, 10) || 10,
-      windowMs: parseInt(process.env.WOLVERINE_RATE_WINDOW_MS, 10) || 600000,
-      minGapMs: parseInt(process.env.WOLVERINE_RATE_MIN_GAP_MS, 10) || 5000,
-      maxTokensPerHour: parseInt(process.env.WOLVERINE_RATE_MAX_TOKENS_HOUR, 10) || 100000,
+      maxCallsPerWindow: cfg.rateLimiting.maxCallsPerWindow,
+      windowMs: cfg.rateLimiting.windowMs,
+      minGapMs: cfg.rateLimiting.minGapMs,
+      maxTokensPerHour: cfg.rateLimiting.maxTokensPerHour,
       maxGlobalHealsPerWindow: parseInt(process.env.WOLVERINE_RATE_MAX_GLOBAL_HEALS, 10) || 5,
       globalWindowMs: parseInt(process.env.WOLVERINE_RATE_GLOBAL_WINDOW_MS, 10) || 300000,
     });
@@ -68,14 +84,14 @@ class WolverineRunner {
     });
 
     // Health monitoring
-    const port = parseInt(process.env.PORT, 10) || 3000;
+    const port = cfg.server.port;
     this.healthMonitor = new HealthMonitor({
       port,
       path: options.healthPath || "/health",
-      intervalMs: parseInt(process.env.WOLVERINE_HEALTH_INTERVAL_MS, 10) || 15000,
-      timeoutMs: parseInt(process.env.WOLVERINE_HEALTH_TIMEOUT_MS, 10) || 5000,
-      failThreshold: parseInt(process.env.WOLVERINE_HEALTH_FAIL_THRESHOLD, 10) || 3,
-      startDelayMs: parseInt(process.env.WOLVERINE_HEALTH_START_DELAY_MS, 10) || 10000,
+      intervalMs: cfg.healthCheck.intervalMs,
+      timeoutMs: cfg.healthCheck.timeoutMs,
+      failThreshold: cfg.healthCheck.failThreshold,
+      startDelayMs: cfg.healthCheck.startDelayMs,
     });
 
     // Performance monitoring
@@ -89,6 +105,9 @@ class WolverineRunner {
     // Process monitor — heartbeat, memory, CPU, leak detection
     this.processMonitor = new ProcessMonitor({ logger: this.logger });
 
+    // Brain — semantic memory + project context
+    this.brain = new Brain(this.cwd);
+
     // Route prober — tests all routes periodically
     this.routeProber = new RouteProber({
       port,
@@ -98,9 +117,9 @@ class WolverineRunner {
 
     // Error monitor — detects caught 500 errors without process crash
     this.errorMonitor = new ErrorMonitor({
-      threshold: parseInt(process.env.WOLVERINE_ERROR_THRESHOLD, 10) || 1,
-      windowMs: parseInt(process.env.WOLVERINE_ERROR_WINDOW_MS, 10) || 30000,
-      cooldownMs: parseInt(process.env.WOLVERINE_ERROR_COOLDOWN_MS, 10) || 60000,
+      threshold: cfg.errorMonitor.threshold,
+      windowMs: cfg.errorMonitor.windowMs,
+      cooldownMs: cfg.errorMonitor.cooldownMs,
       logger: this.logger,
       onError: (routePath, errorDetails) => this._healFromError(routePath, errorDetails),
     });
@@ -110,9 +129,6 @@ class WolverineRunner {
       maxAttempts: parseInt(process.env.WOLVERINE_LOOP_MAX_ATTEMPTS, 10) || 3,
       windowMs: parseInt(process.env.WOLVERINE_LOOP_WINDOW_MS, 10) || 600000,
     });
-
-    // Brain — semantic memory + project context
-    this.brain = new Brain(this.cwd);
 
     // Skills — discoverable capabilities
     this.skills = new SkillRegistry();
@@ -143,14 +159,6 @@ class WolverineRunner {
       routeProber: this.routeProber,
       errorMonitor: this.errorMonitor,
     });
-
-    // Stability tracking
-    this._lastStartTime = null;
-    this._lastBackupId = null;
-    this._stabilityTimer = null;
-    this._stderrBuffer = "";
-    this._healInProgress = false;
-    this._healStatus = null; // { active, file, error, phase, startedAt, iteration }
   }
 
   async start() {
@@ -465,9 +473,10 @@ class WolverineRunner {
           this._healInProgress = false;
           return;
         }
-        // Release lock so _healAndRestart can acquire it
+        // Pass through directly — _healAndRestart checks _healInProgress internally,
+        // so release it just before the call to avoid a race window
         this._healInProgress = false;
-        await this._healAndRestart();
+        await this._healAndRestart({ skipHealLockCheck: true });
       } catch (err) {
         // #5: Prevent unhandled errors in health callback from crashing the parent
         console.log(chalk.red(`  ⚠️  Health callback error: ${err.message}`));
@@ -570,8 +579,8 @@ class WolverineRunner {
     this.errorMonitor.reset();
   }
 
-  async _healAndRestart() {
-    if (this._healInProgress) return;
+  async _healAndRestart(options) {
+    if (this._healInProgress && !options?.skipHealLockCheck) return;
     // #9: Bail if stop() was called during the window between crash and heal
     if (this._shuttingDown) return;
     this._healInProgress = true;
