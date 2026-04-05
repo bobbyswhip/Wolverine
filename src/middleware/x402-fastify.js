@@ -145,7 +145,8 @@ async function x402Plugin(fastify, opts) {
       return;
     }
 
-    // Payment present — send to facilitator for verification + on-chain settlement
+    // Payment present — verify and settle on-chain
+    // Try facilitator first (standard x402 SDK clients), then self-settle (wallet-signed payments)
     const routeAccepts = [{
       scheme: "exact",
       price,
@@ -153,29 +154,26 @@ async function x402Plugin(fastify, opts) {
       payTo: _payTo,
     }];
 
+    // Step 1: Try facilitator (works with @x402/fetch, @x402/evm SDK clients)
     const verified = await _settleViaFacilitator(paymentSig, routeAccepts);
     if (verified.valid) {
       reply.header("Payment-Response", JSON.stringify(verified.receipt || {}));
       request.x402 = { paid: true, amount: price, receipt: verified.receipt, txHash: verified.txHash, from: verified.from };
-      // Log payment for dashboard analytics
-      _logPayment({ route: request.url, method: request.method, amount: price, from: verified.from, txHash: verified.txHash, verified: true, timestamp: Date.now() });
+      _logPayment({ route: request.url, method: request.method, amount: price, from: verified.from, txHash: verified.txHash, verified: true, settled: "facilitator", timestamp: Date.now() });
       return; // continue to route handler
     }
 
-    // Facilitator rejected — try self-settlement as fallback
-    if (verified.reason === "facilitator_unavailable") {
-      const selfResult = await _selfSettle(paymentSig, price);
-      if (selfResult.valid) {
-        reply.header("Payment-Response", JSON.stringify(selfResult.receipt || {}));
-        request.x402 = { paid: true, amount: price, receipt: selfResult.receipt, txHash: selfResult.txHash, from: selfResult.from };
-        _logPayment({ route: request.url, method: request.method, amount: price, from: selfResult.from, txHash: selfResult.txHash, verified: true, settled: "self", timestamp: Date.now() });
-        return;
-      }
-      reply.code(402).send({ error: "Payment settlement failed", reason: selfResult.reason, price, payTo: _payTo });
+    // Step 2: Facilitator failed or rejected — self-settle via vault wallet
+    // This handles wallet-signed EIP-3009 payments (our own frontend, custom clients)
+    const selfResult = await _selfSettle(paymentSig, price);
+    if (selfResult.valid) {
+      reply.header("Payment-Response", JSON.stringify(selfResult.receipt || {}));
+      request.x402 = { paid: true, amount: price, receipt: selfResult.receipt, txHash: selfResult.txHash, from: selfResult.from };
+      _logPayment({ route: request.url, method: request.method, amount: price, from: selfResult.from, txHash: selfResult.txHash, verified: true, settled: "self", timestamp: Date.now() });
       return;
     }
 
-    reply.code(402).send({ error: "Payment verification failed", reason: verified.reason, price, payTo: _payTo });
+    reply.code(402).send({ error: "Payment settlement failed", reason: selfResult.reason, facilitatorReason: verified.reason, price, payTo: _payTo });
   });
 
   // ── Public pricing endpoint ──
