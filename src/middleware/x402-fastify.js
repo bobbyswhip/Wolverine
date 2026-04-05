@@ -16,7 +16,7 @@ const USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
 let _payTo = null;
 let _network = "eip155:8453";
-let _facilitatorUrl = "https://www.x402.org/facilitator";
+let _facilitatorUrl = "https://api.cdp.coinbase.com/platform/v2/x402";
 
 async function x402Plugin(fastify, opts) {
   _network = opts.network || _network;
@@ -42,10 +42,9 @@ async function x402Plugin(fastify, opts) {
 
   // Auto-select facilitator based on network
   if (!opts.facilitator) {
-    const isTestnet = _network.includes("84532") || _network.includes("11155");
-    _facilitatorUrl = isTestnet
-      ? "https://www.x402.org/facilitator"
-      : "https://www.x402.org/facilitator"; // www. avoids 308 redirect from x402.org
+    if (!process.env.CDP_API_KEY_ID) {
+      console.log(`  ⚠️ x402: CDP_API_KEY_ID not set — facilitator auth may fail`);
+    }
   }
 
   if (_payTo) {
@@ -224,9 +223,29 @@ async function _facilitatorCall(endpoint, paymentPayload, paymentRequirements) {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 30000);
 
+    // Build headers — add CDP JWT auth if using CDP facilitator
+    const headers = { "Content-Type": "application/json" };
+    if (url.includes("api.cdp.coinbase.com") && process.env.CDP_API_KEY_ID) {
+      try {
+        // Use dynamic import for @coinbase/cdp-sdk (ESM-only jose dependency)
+        const { generateJwt } = await import("@coinbase/cdp-sdk/auth");
+        const parsedUrl = new URL(url);
+        const jwt = await generateJwt({
+          apiKeyId: process.env.CDP_API_KEY_ID,
+          apiKeySecret: process.env.CDP_API_KEY_SECRET,
+          requestMethod: "POST",
+          requestHost: `https://${parsedUrl.host}`,
+          requestPath: parsedUrl.pathname,
+        });
+        headers["Authorization"] = `Bearer ${jwt}`;
+      } catch (authErr) {
+        console.log(`  ⚠️ x402 CDP auth failed: ${authErr.message}`);
+      }
+    }
+
     const response = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body,
       redirect: "follow",
       signal: controller.signal,
