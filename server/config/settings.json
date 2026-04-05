@@ -5,18 +5,20 @@
     "env": "development"
   },
 
+  // default model settings are provider grouped to show optimal prompt caching 
+  // it's still best to use a single model across all tools for maximum cache hits
   "models": {
-    "reasoning": "wolverine-test-1",
-    "coding": "wolverine-test-1",
-    "chat": "wolverine-test-1",
-    "tool": "wolverine-test-1",
-    "classifier": "wolverine-test-1",
-    "audit": "wolverine-test-1",
-    "compacting": "wolverine-test-1",
-    "research": "wolverine-test-1"
-  },
+      "reasoning": "claude-sonnet-4-6",     // best at deep analysis (725 t/s, 64.9% SWE)
+      "coding": "claude-sonnet-4-6",         // same model — shares Anthropic cache with reasoning
+      "chat": "gpt-5.4-mini",               // fastest for summaries (318 t/s, cheap)
+      "tool": "gpt-4o-mini",                // fastest tool parser (3652 t/s)
+      "classifier": "gpt-4o-mini",           // fastest classifier (3652 t/s) — shares OpenAI cache with tool
+      "audit": "wolverine-test-1",           // cheapest for security scan (self-hosted, $0)
+      "compacting": "wolverine-test-1",      // cheapest for text compression (self-hosted, $0)
+      "research": "claude-sonnet-4-6"        // best research — shares Anthropic cache with reasoning
+    },
 
-  "embedding": "wolverine-embedding-1",
+  "embedding": "wolverine-embedding-1",  // or use openAI emb-3-small
 
   "server": {
     "port": 3000,

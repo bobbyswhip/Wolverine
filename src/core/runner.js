@@ -284,7 +284,9 @@ class WolverineRunner {
     this._clearStabilityTimer();
     // Clear any pending heals — restart is a clean slate
     this._pendingErrorHeal = null;
-    this._healInProgress = false;
+    // #1: Don't clear _healInProgress here — only the heal function itself should clear it
+    // #6: Clear stale heal status so dashboard doesn't show phantom heals
+    this._healStatus = null;
 
     if (this.child) {
       const oldChild = this.child;
@@ -295,11 +297,9 @@ class WolverineRunner {
       const onExit = () => {
         if (spawned) return; // Prevent double-spawn from exit + force-kill timeout
         spawned = true;
+        // #7: Don't call _ensurePortFree() here — _spawn() already calls it
         // Give port time to fully release (TIME_WAIT)
-        setTimeout(() => {
-          this._ensurePortFree();
-          setTimeout(() => this._spawn(), 500);
-        }, 500);
+        setTimeout(() => this._spawn(), 500);
       };
 
       oldChild.removeAllListeners("exit");
@@ -314,7 +314,7 @@ class WolverineRunner {
         }
       }, 3000);
     } else {
-      this._ensurePortFree();
+      // #7: Don't call _ensurePortFree() here — _spawn() already calls it
       setTimeout(() => this._spawn(), 500);
     }
   }
@@ -394,7 +394,12 @@ class WolverineRunner {
       process.stderr.write(text);
     });
 
-    this._startStabilityTimer();
+    // #27: Only start stability timer if there's a backup to promote — don't clear
+    // an existing timer on every spawn (e.g., auto-update restart shouldn't reset
+    // the stability countdown for a previously healed backup)
+    if (this._lastBackupId) {
+      this._startStabilityTimer();
+    }
 
     // Start process monitor (memory, CPU, heartbeat)
     if (this.child && this.child.pid) {
@@ -418,32 +423,46 @@ class WolverineRunner {
     this.healthMonitor.stop();
     this.healthMonitor.reset();
     this.healthMonitor.start(async (reason) => {
-      if (this._healInProgress || !this.running) return;
-      console.log(chalk.red(`\n🚨 Health check triggered heal (reason: ${reason})`));
-      this.logger.error(EVENT_TYPES.HEALTH_UNRESPONSIVE, `Server unresponsive: ${reason}`, { reason });
-      this.healthMonitor.stop();
+      try {
+        if (this._healInProgress || !this.running) return;
+        // #26: Claim the heal lock immediately — prevents exit event from starting
+        // a concurrent heal between our check and the child kill below
+        this._healInProgress = true;
+        console.log(chalk.red(`\n🚨 Health check triggered heal (reason: ${reason})`));
+        this.logger.error(EVENT_TYPES.HEALTH_UNRESPONSIVE, `Server unresponsive: ${reason}`, { reason });
+        this.healthMonitor.stop();
 
-      // Kill the hung process — remove exit listener to prevent double-heal
-      if (this.child) {
-        const pid = this.child.pid;
-        this.child.removeAllListeners("exit");
-        this._killProcessTree(pid, "SIGKILL");
-        this.child = null;
+        // Kill the hung process — remove exit listener to prevent double-heal
+        if (this.child) {
+          const pid = this.child.pid;
+          this.child.removeAllListeners("exit");
+          this._killProcessTree(pid, "SIGKILL");
+          this.child = null;
+        }
+
+        // Synthesize error context for the heal pipeline
+        this._stderrBuffer = `Server became unresponsive. Health check failed: ${reason}\n` +
+          `The server was running but stopped responding to HTTP requests.\n` +
+          `Possible causes: infinite loop, deadlock, memory exhaustion, blocked event loop.`;
+
+        this.retryCount++;
+        if (this.retryCount > this.maxRetries) {
+          console.log(chalk.red(`\n🛑 Max retries reached.`));
+          this._logRollbackHint();
+          this.running = false;
+          this._healInProgress = false;
+          return;
+        }
+        // Release lock so _healAndRestart can acquire it
+        this._healInProgress = false;
+        await this._healAndRestart();
+      } catch (err) {
+        // #5: Prevent unhandled errors in health callback from crashing the parent
+        console.log(chalk.red(`  ⚠️  Health callback error: ${err.message}`));
+        this._healInProgress = false;
+        this._healStatus = null;
+        if (this.running) this._spawn();
       }
-
-      // Synthesize error context for the heal pipeline
-      this._stderrBuffer = `Server became unresponsive. Health check failed: ${reason}\n` +
-        `The server was running but stopped responding to HTTP requests.\n` +
-        `Possible causes: infinite loop, deadlock, memory exhaustion, blocked event loop.`;
-
-      this.retryCount++;
-      if (this.retryCount > this.maxRetries) {
-        console.log(chalk.red(`\n🛑 Max retries reached.`));
-        this._logRollbackHint();
-        this.running = false;
-        return;
-      }
-      await this._healAndRestart();
     });
 
     this.child.on("exit", async (code, signal) => {
@@ -541,6 +560,8 @@ class WolverineRunner {
 
   async _healAndRestart() {
     if (this._healInProgress) return;
+    // #9: Bail if stop() was called during the window between crash and heal
+    if (this._shuttingDown) return;
     this._healInProgress = true;
     this._healStatus = { active: true, error: this._stderrBuffer.slice(0, 200), phase: "diagnosing", startedAt: Date.now() };
 
@@ -567,6 +588,8 @@ class WolverineRunner {
     }
 
     try {
+      // #9: Check again before expensive heal — stop() may have been called during loop guard
+      if (this._shuttingDown) { this._healInProgress = false; return; }
       const result = await heal({
         stderr: this._stderrBuffer,
         cwd: this.cwd,
@@ -606,6 +629,8 @@ class WolverineRunner {
         this._healStatus = null;
         // Clear pending errors — the heal fixed the root cause, stale errors are irrelevant
         this._pendingErrorHeal = null;
+        // #9: Don't restart if stop() was called while heal was running
+        if (this._shuttingDown) return;
         // Use restart() to properly kill old child before spawning — prevents EADDRINUSE
         this.restart();
       } else {
@@ -673,6 +698,15 @@ class WolverineRunner {
     }
     this._healInProgress = true;
 
+    // #8: Safety timeout — if heal hangs, force-release the lock after 6 minutes
+    const healTimeout = setTimeout(() => {
+      if (this._healInProgress) {
+        console.log(chalk.red(`  ⚠️  _healFromError safety timeout (6min) — releasing heal lock`));
+        this._healInProgress = false;
+        this._healStatus = null;
+      }
+    }, 360000);
+
     console.log(chalk.yellow(`\n🐺 Wolverine healing caught error on ${routePath}...`));
     this._healStatus = { active: true, route: routePath, error: errorDetails?.message?.slice(0, 200), phase: "diagnosing", startedAt: Date.now() };
     this.logger.info("heal.error_monitor", `Healing caught 500 on ${routePath}`, { route: routePath });
@@ -727,6 +761,7 @@ class WolverineRunner {
         routeContext: { path: routePath, method: errorDetails?.method },
       });
 
+      clearTimeout(healTimeout);
       if (result.healed) {
         console.log(chalk.green(`\n🐺 Wolverine healed ${routePath} via ${result.mode}! Restarting...\n`));
         this.retryCount = 0; // Fresh start after successful heal
@@ -748,6 +783,7 @@ class WolverineRunner {
         this._healStatus = null;
       }
     } catch (err) {
+      clearTimeout(healTimeout);
       console.log(chalk.red(`\n🐺 Error during heal: ${err.message}`));
       this._healInProgress = false;
       this._healStatus = null;

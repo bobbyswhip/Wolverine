@@ -23,6 +23,8 @@ const BOOT_PROBE_TIMEOUT_MS = 10000; // 10 seconds
  */
 function syntaxCheck(scriptPath) {
   return new Promise((resolve) => {
+    // #21: Guard against double resolve from exit + error firing in sequence
+    let settled = false;
     const child = spawn("node", ["--check", scriptPath], {
       stdio: ["ignore", "ignore", "pipe"],
       timeout: 5000,
@@ -32,6 +34,8 @@ function syntaxCheck(scriptPath) {
     child.stderr.on("data", (data) => { stderr += data.toString(); });
 
     child.on("exit", (code) => {
+      if (settled) return;
+      settled = true;
       resolve({
         valid: code === 0,
         error: code !== 0 ? stderr.trim() : undefined,
@@ -39,6 +43,8 @@ function syntaxCheck(scriptPath) {
     });
 
     child.on("error", (err) => {
+      if (settled) return;
+      settled = true;
       resolve({ valid: false, error: err.message });
     });
   });
@@ -71,6 +77,8 @@ function bootProbe(scriptPath, cwd, originalErrorSignature) {
     child.on("exit", (code) => {
       if (settled) return;
       settled = true;
+      // #19: Always ensure the child is killed after settling (handles orphan sub-processes)
+      try { child.kill("SIGTERM"); } catch {}
 
       if (code === 0) {
         resolve({ status: "alive" });
@@ -101,6 +109,8 @@ function bootProbe(scriptPath, cwd, originalErrorSignature) {
     child.on("error", (err) => {
       if (settled) return;
       settled = true;
+      // #19: Always ensure the child is killed after settling
+      try { child.kill("SIGTERM"); } catch {}
       resolve({ status: "crashed", stderr: err.message, sameError: false, exitCode: null });
     });
 
@@ -192,9 +202,10 @@ async function verifyFix(scriptPath, cwd, originalErrorSignature, routeContext) 
     const relPath = path.relative(cwd, changedFile).replace(/\\/g, "/");
     if (relPath.startsWith("server/") && relPath.endsWith(".js")) {
       try {
-        const { execSync } = require("child_process");
+        const { execFileSync } = require("child_process");
+        // #22: Use execFileSync with args array to prevent path injection via relPath
         const testCode = `try{require('./${relPath}');console.log('MODULE_OK')}catch(e){console.error(e.message);process.exit(1)}`;
-        const out = execSync(`node -e "${testCode}"`, {
+        const out = execFileSync("node", ["-e", testCode], {
           cwd, timeout: 5000, encoding: "utf-8",
           env: { ...process.env, NODE_PATH: path.join(cwd, "node_modules") },
         });
@@ -236,6 +247,14 @@ function routeProbe(scriptPath, cwd, routeContext) {
 
     child.stdout.on("data", (d) => { stdout += d.toString(); });
     child.stderr.on("data", (d) => { stderr += d.toString(); });
+
+    // #20: Handle spawn errors (e.g., node binary not found)
+    child.on("error", (err) => {
+      clearInterval(checkPort);
+      if (settled) return;
+      settled = true;
+      resolve({ status: "failed", statusCode: 0, body: err.message });
+    });
 
     child.on("exit", () => {
       if (settled) return;

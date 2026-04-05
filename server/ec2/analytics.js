@@ -33,6 +33,11 @@ const PERIOD_MAP = {
 };
 
 async function routes(fastify) {
+  // This server's own identifiers — used to exclude our own calls from external billing totals
+  const serverApiKey = process.env.WOLVERINE_API_KEY || "";
+  let serverInstanceId = "";
+  try { serverInstanceId = require("fs").readFileSync(require("path").join(process.cwd(), ".wolverine", "instance-id"), "utf-8").trim(); } catch {}
+
   // ── GET / — main analytics dashboard ──
   fastify.get("/", async (request) => {
     const period = PERIOD_MAP[request.query.period] || "24 hours";
@@ -93,7 +98,7 @@ async function routes(fastify) {
       }
     }
 
-    // Merge wolverine usage from api_usage_log
+    // Wolverine costs from api_usage_log (ALL users) — this is the billing source of truth
     const wolverineRes = await pool.query(
       `SELECT COALESCE(SUM(total_tokens), 0) AS tokens,
               COALESCE(SUM(cost), 0) AS cost,
@@ -105,7 +110,7 @@ async function routes(fastify) {
     if (wv.tokens > 0 || wv.calls > 0) {
       if (!byProvider.wolverine) byProvider.wolverine = { tokens: 0, cost: 0, calls: 0 };
       byProvider.wolverine.tokens += parseInt(wv.tokens, 10);
-      byProvider.wolverine.cost += parseFloat(wv.cost);
+      byProvider.wolverine.cost += parseFloat(wv.cost) * 0.01;
       byProvider.wolverine.calls += parseInt(wv.calls, 10);
     }
 
@@ -176,9 +181,11 @@ async function routes(fastify) {
     // Merge local server's own usage (this server doesn't heartbeat to itself)
     const local = getLocalUsage();
     if (local) {
-      // Local byProvider
+      // Local byProvider — only add non-wolverine providers
+      // Wolverine costs are already in api_usage_log (billed through proxy), don't double-count
       if (local.byProvider) {
         for (const [prov, stats] of Object.entries(local.byProvider)) {
+          if (prov === "wolverine") continue; // already in api_usage_log
           if (!byProvider[prov]) byProvider[prov] = { tokens: 0, cost: 0, calls: 0 };
           byProvider[prov].tokens += stats.tokens || stats.total || 0;
           byProvider[prov].cost += stats.cost || 0;
@@ -295,6 +302,7 @@ async function routes(fastify) {
       );
 
       // Per-model overlay from usage_by_model
+      // Exclude wolverine-provider models from our own server (already in local usage.json)
       const modelRes = await pool.query(
         `SELECT ${isLong ? "date_trunc('day', hour)" : "hour"} AS bucket,
                 model, provider,
@@ -302,16 +310,17 @@ async function routes(fastify) {
                 SUM(cost) AS cost,
                 SUM(calls) AS calls
          FROM usage_by_model WHERE hour > NOW() - $1::interval
+           AND NOT (provider = 'wolverine' AND server_id = $2)
          GROUP BY bucket, model, provider ORDER BY bucket`,
-        [period]
+        [period, serverInstanceId]
       );
 
-      // Merge wolverine from api_usage_log
+      // Wolverine costs from api_usage_log (ALL users including this server) — credits → USD
       const wvRes = await pool.query(
         `SELECT ${isLong ? "date_trunc('day', timestamp)" : "date_trunc('hour', timestamp)"} AS bucket,
                 model,
                 SUM(total_tokens) AS tokens,
-                SUM(cost) AS cost,
+                SUM(cost) * 0.01 AS cost,
                 COUNT(*) AS calls
          FROM api_usage_log WHERE timestamp > NOW() - $1::interval
          GROUP BY bucket, model ORDER BY bucket`,
@@ -440,6 +449,11 @@ async function routes(fastify) {
       );
       const repairMap = {};
       for (const r of repairRes.rows) repairMap[r.server_id] = parseInt(r.repair_count, 10);
+      // Add local repair-history count for this server
+      try {
+        const localRepairs = JSON.parse(fs.readFileSync(path.join(process.cwd(), ".wolverine", "repair-history.json"), "utf-8"));
+        repairMap[serverInstanceId] = (repairMap[serverInstanceId] || 0) + localRepairs.length;
+      } catch {}
 
       const breakdown = res.rows.map(r => ({
         server_id: r.server_id,
@@ -474,7 +488,7 @@ async function routes(fastify) {
           models[model].calls += stats.calls || 0;
         }
       }
-      // Add repair counts by model
+      // Add repair counts by model — from DB (remote servers) + local repair-history
       const repairRes = await pool.query(
         `SELECT model, COUNT(*) AS repair_count
          FROM repairs WHERE timestamp > NOW() - $1::interval
@@ -484,6 +498,14 @@ async function routes(fastify) {
       for (const r of repairRes.rows) {
         if (models[r.model]) models[r.model].repair_count = parseInt(r.repair_count, 10);
       }
+      // Local repair-history (this server's own repairs)
+      try {
+        const localRepairs = JSON.parse(fs.readFileSync(path.join(process.cwd(), ".wolverine", "repair-history.json"), "utf-8"));
+        for (const r of localRepairs) {
+          const m = r.model;
+          if (m && models[m]) models[m].repair_count = (models[m].repair_count || 0) + 1;
+        }
+      } catch {}
       const breakdown = Object.values(models).map(m => ({ ...m, repair_count: m.repair_count || 0 }));
       return { groupBy: "model", breakdown };
     }

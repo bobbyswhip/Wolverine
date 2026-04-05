@@ -34,7 +34,15 @@ Module._load = function (request, parent, isMain) {
       _hookFastify(instance);
       return instance;
     };
-    Object.keys(originalFastify).forEach((key) => { wrapped[key] = originalFastify[key]; });
+    // #23: Copy all own properties (including non-enumerable and symbols) to preserve prototype chain
+    for (const key of Object.getOwnPropertyNames(originalFastify)) {
+      if (key !== "length" && key !== "name" && key !== "prototype") {
+        try { wrapped[key] = originalFastify[key]; } catch {}
+      }
+    }
+    for (const sym of Object.getOwnPropertySymbols(originalFastify)) {
+      try { wrapped[sym] = originalFastify[sym]; } catch {}
+    }
     wrapped.default = wrapped; // ESM compat
     return wrapped;
   }
@@ -48,7 +56,15 @@ Module._load = function (request, parent, isMain) {
       _hookExpress(app);
       return app;
     };
-    Object.keys(originalExpress).forEach((key) => { wrapped[key] = originalExpress[key]; });
+    // #23: Copy all own properties (including non-enumerable and symbols)
+    for (const key of Object.getOwnPropertyNames(originalExpress)) {
+      if (key !== "length" && key !== "name" && key !== "prototype") {
+        try { wrapped[key] = originalExpress[key]; } catch {}
+      }
+    }
+    for (const sym of Object.getOwnPropertySymbols(originalExpress)) {
+      try { wrapped[sym] = originalExpress[sym]; } catch {}
+    }
     return wrapped;
   }
 
@@ -94,9 +110,13 @@ function _hookExpress(app) {
   // Wrap app.listen to inject error middleware AFTER all user middleware
   const originalListen = app.listen;
   app.listen = function (...args) {
-    app.use(function _wolverineErrorHook(err, req, res, next) {
-      _reportError(req.originalUrl || req.url, req.method, err);
-      next(err);
+    // #24: Use process.nextTick to ensure our error middleware is added AFTER
+    // any middleware registered synchronously after listen() is called
+    process.nextTick(() => {
+      app.use(function _wolverineErrorHook(err, req, res, next) {
+        _reportError(req.originalUrl || req.url, req.method, err);
+        next(err);
+      });
     });
     return originalListen.apply(this, args);
   };
@@ -114,7 +134,8 @@ function _reportError(url, method, error) {
     let file = null, line = null;
     if (error.stack) {
       for (const frame of error.stack.split("\n")) {
-        const m = frame.match(/\(([^)]+):(\d+):(\d+)\)/) || frame.match(/at\s+([^\s(]+):(\d+):(\d+)/);
+        // #25: Second regex uses (.+) instead of ([^\s(]+) to handle Windows paths with spaces
+        const m = frame.match(/\(([^)]+):(\d+):(\d+)\)/) || frame.match(/at\s+(.+):(\d+):(\d+)/);
         if (m && !m[1].includes("node_modules") && !m[1].includes("node:")) {
           file = m[1]; line = parseInt(m[2], 10); break;
         }

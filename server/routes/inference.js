@@ -20,11 +20,12 @@ const EMBEDDING_URL = process.env.WOLVERINE_EMBEDDING_URL || INFERENCE_URL.repla
 const GPU_KEY = process.env.WOLVERINE_GPU_KEY || "";
 
 // Pricing in CREDITS per million tokens ($1 = 100 credits)
+// wolverine-test-1 priced to match claude-haiku-4-5 ($0.80/$4.00 per 1M)
 const MODEL_PRICING = {
-  "wolverine-test-1":  { input: 1.0, output: 4.0 },   // $0.01/$0.04 per 1M
-  "wolverine-coding":  { input: 1.0, output: 4.0 },
-  "wolverine-reasoning": { input: 2.5, output: 10.0 },
-  "wolverine-embedding-1-test": { input: 0.2, output: 0 }, // embeddings: input only, 5x cheaper than LLM
+  "wolverine-test-1":  { input: 80.0, output: 400.0 },  // $0.80/$4.00 per 1M (= haiku pricing)
+  "wolverine-coding":  { input: 80.0, output: 400.0 },
+  "wolverine-reasoning": { input: 200.0, output: 800.0 }, // premium tier when available
+  "wolverine-embedding-1": { input: 4.0, output: 0 },     // $0.04/1M (2x OpenAI's $0.02/1M)
 };
 
 const MODEL_MAP = {
@@ -232,8 +233,8 @@ async function routes(fastify) {
 
       const latencyMs = Date.now() - startMs;
       const totalTokens = response.usage?.total_tokens || 0;
-      // 2x markup: OpenAI charges $0.02/1M, we charge $0.04/1M = 0.4 credits/1M
-      const cost = (totalTokens / 1_000_000) * 0.4;
+      // OpenAI charges $0.02/1M = 2 credits/1M. We charge 2x = 4 credits/1M = $0.04/1M
+      const cost = (totalTokens / 1_000_000) * 4.0;
 
       // Bill credits
       if (account.owner !== "platform") {

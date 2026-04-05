@@ -165,7 +165,7 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
   // 4c. Pre-heal operational fix — detect common non-code errors
   // Some crashes aren't code bugs (missing npm packages, missing config files).
   // Fix these directly without wasting AI tokens.
-  const opsFix = await tryOperationalFix(parsed, cwd, logger);
+  const opsFix = await tryOperationalFix(parsed, cwd, logger, sandbox);
   if (opsFix.fixed) {
     console.log(chalk.green(`  ⚡ Operational fix applied: ${opsFix.action}`));
     if (logger) logger.info(EVENT_TYPES.HEAL_SUCCESS, `Operational fix: ${opsFix.action}`, { action: opsFix.action });
@@ -297,8 +297,15 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
     goal: `Fix: ${parsed.errorMessage.slice(0, 80)}`,
 
     onAttempt: async (iteration, researchCtx, priorAttempts) => {
-      // Create backup for this attempt
-      const bid = backupManager.createBackup(`heal attempt ${iteration}: ${parsed.errorMessage.slice(0, 60)}`);
+      // #12: Create backup for this attempt — if backup fails, skip the attempt entirely
+      let bid;
+      try {
+        bid = backupManager.createBackup(`heal attempt ${iteration}: ${parsed.errorMessage.slice(0, 60)}`);
+      } catch (backupErr) {
+        console.log(chalk.red(`  ⚠️  Backup creation failed: ${backupErr.message} — skipping attempt`));
+        if (logger) logger.error(EVENT_TYPES.BACKUP_CREATED, `Backup failed: ${backupErr.message}`);
+        return { healed: false, explanation: `Backup creation failed: ${backupErr.message}` };
+      }
       backupManager.setErrorSignature(bid, errorSignature);
       if (logger) logger.info(EVENT_TYPES.BACKUP_CREATED, `Backup ${bid} (iteration ${iteration})`, { backupId: bid });
 
@@ -532,7 +539,7 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
  * Try to fix common operational errors without AI.
  * Returns { fixed: boolean, action: string }
  */
-async function tryOperationalFix(parsed, cwd, logger) {
+async function tryOperationalFix(parsed, cwd, logger, sandbox) {
   const { execSync } = require("child_process");
   const msg = parsed.errorMessage || "";
 
@@ -565,9 +572,14 @@ async function tryOperationalFix(parsed, cwd, logger) {
 
     // Only auto-create if it's inside the project and looks like a config/data file
     const rel = path.relative(cwd, missingFile).replace(/\\/g, "/");
-    if (!rel.startsWith("..") && /\.(json|yaml|yml|toml|ini|conf|cfg|env|log|txt|csv|db|sqlite)$/i.test(missingFile)) {
+    // #18: Validate through sandbox to prevent creating files outside allowed paths
+    let safePath = missingFile;
+    if (sandbox) {
+      try { safePath = sandbox.resolve(missingFile); } catch { safePath = null; }
+    }
+    if (safePath && !rel.startsWith("..") && /\.(json|yaml|yml|toml|ini|conf|cfg|env|log|txt|csv|db|sqlite)$/i.test(missingFile)) {
       try {
-        fs.mkdirSync(path.dirname(missingFile), { recursive: true });
+        fs.mkdirSync(path.dirname(safePath), { recursive: true });
         const ext = path.extname(missingFile).toLowerCase();
 
         // For JSON config files, try to infer expected structure from the code or error message
@@ -600,7 +612,7 @@ async function tryOperationalFix(parsed, cwd, logger) {
           content = defaults[ext] || "";
         }
 
-        fs.writeFileSync(missingFile, content, "utf-8");
+        fs.writeFileSync(safePath, content, "utf-8");
         console.log(chalk.blue(`  📄 Created missing file: ${rel}`));
         return { fixed: true, action: `Created missing file: ${rel} with ${content === "{}" ? "empty" : "inferred"} config` };
       } catch {}
@@ -659,10 +671,13 @@ function _inferJsonConfig(missingFile, cwd, parsed) {
   const sourceFile = parsed.filePath;
   if (!sourceFile) return null;
 
+  // #17: Escape all regex special characters in basename to prevent regex injection
+  const escapedBasename = basename.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
   try {
     const source = fs.readFileSync(sourceFile, "utf-8");
     // Look for property accesses on the loaded config: config.apiUrl, config.timeout, etc.
-    const configVarMatch = source.match(new RegExp(`(?:const|let|var)\\s+(\\w+)\\s*=\\s*(?:require|JSON\\.parse).*${basename.replace(".", "\\.")}`));
+    const configVarMatch = source.match(new RegExp(`(?:const|let|var)\\s+(\\w+)\\s*=\\s*(?:require|JSON\\.parse).*${escapedBasename}`));
     if (!configVarMatch) return null;
 
     const varName = configVarMatch[1];

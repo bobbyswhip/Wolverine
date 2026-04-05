@@ -1,238 +1,231 @@
-const { pool } = require("../lib/db");
-
-function detectProvider(model) {
-  if (!model) return "openai";
-  if (/^wolverine|^gemma/i.test(model)) return "wolverine";
-  if (/^claude|^anthropic/i.test(model)) return "anthropic";
-  if (/^gemini|^google/i.test(model)) return "google";
-  if (/^mistral/i.test(model)) return "mistral";
-  return "openai";
-}
-
 async function routes(fastify) {
-  // POST / — receive heartbeat from wolverine instances
-  fastify.post("/", async (request, reply) => {
-    const b = request.body;
-    if (!b || !b.instanceId) {
-      return reply.code(400).send({ error: "instanceId required" });
+  const { pool } = require("../lib/db");
+
+  function detectProvider(model) {
+    if (!model) return "openai";
+    if (/^wolverine|^gemma/i.test(model)) return "wolverine";
+    if (/^claude|^anthropic/i.test(model)) return "anthropic";
+    if (/^gemini|^google/i.test(model)) return "google";
+    if (/^mistral|^codestral|^pixtral/i.test(model)) return "mistral";
+    if (/^llama|^meta/i.test(model)) return "meta";
+    if (/^deepseek/i.test(model)) return "deepseek";
+    if (/^command|^cohere/i.test(model)) return "cohere";
+    return "openai";
+  }
+
+  // ── Anti-abuse ──
+  const KNOWN_PROVIDERS = new Set(["openai", "anthropic", "wolverine", "google", "mistral", "meta", "deepseek", "cohere"]);
+  const _rateMap = new Map();
+  const MIN_INTERVAL_MS = 25000;
+
+  function validateHeartbeat(b, prev) {
+    const issues = [];
+    const curTokens = b.usage?.totalTokens || 0;
+    const curCost = b.usage?.totalCost || 0;
+    const prevTokens = parseInt(prev?.tokens_total) || 0;
+    const prevCost = parseFloat(prev?.cost_total) || 0;
+
+    if (prevTokens > 0 && curTokens > prevTokens * 10 && curTokens - prevTokens > 100000) {
+      issues.push("token_spike");
     }
+    if (prevCost > 0 && curCost - prevCost > 10) {
+      issues.push("cost_spike");
+    }
+    const byModel = b.usage?.byModel || {};
+    for (const model of Object.keys(byModel)) {
+      if (!KNOWN_PROVIDERS.has(detectProvider(model)) && !/^wolverine|^gpt|^claude|^gemma|^o[1-9]/.test(model)) {
+        issues.push("unknown_model:" + model);
+      }
+    }
+    const mcArr = Array.isArray(b.usage?.byModelCategory) ? b.usage.byModelCategory : Object.values(b.usage?.byModelCategory || {});
+    for (const mc of mcArr) {
+      if (mc.successRate != null && (mc.successRate < 0 || mc.successRate > 100)) {
+        issues.push("invalid_success_rate");
+      }
+    }
+    if (b.process?.memoryMB > 65536) issues.push("memory_impossible");
+    if (b.process?.cpuPercent > 10000) issues.push("cpu_impossible");
+    return issues;
+  }
 
-    const serverId = b.instanceId;
-    const now = b.timestamp || new Date().toISOString();
-    const hourBucket = new Date(now).toISOString().slice(0, 13) + ":00:00Z";
-
-    const client = await pool.connect();
+  let _hbCount = 0;
+  async function cleanupStale() {
     try {
-      await client.query("BEGIN");
+      await pool.query("UPDATE servers SET status = 'down' WHERE status = 'healthy' AND last_heartbeat < NOW() - INTERVAL '5 minutes'");
+      await pool.query("DELETE FROM servers WHERE id IN (SELECT s.id FROM servers s LEFT JOIN heartbeats h ON h.server_id = s.id WHERE h.id IS NULL AND s.first_seen < NOW() - INTERVAL '1 hour')");
+      await pool.query("DELETE FROM servers WHERE last_heartbeat < NOW() - INTERVAL '7 days'");
+    } catch {}
+  }
 
-      // ── Get previous heartbeat for incremental diffs ──
-      const prevRes = await client.query(
-        `SELECT tokens_total, cost_total, routes_total, routes_healthy,
-                routes_unhealthy, repairs_total, repairs_successes, payload
-         FROM heartbeats WHERE server_id = $1
-         ORDER BY timestamp DESC LIMIT 1`,
+  // ── POST / — receive heartbeat ──
+  fastify.post("/", async (request, reply) => {
+    const serverId = request.authenticatedServerId || request.body?.instanceId;
+    if (!serverId) return reply.code(400).send({ error: "No server identified" });
+
+    // Rate limit: 1 heartbeat per 25s per server
+    const now = Date.now();
+    const lastHb = _rateMap.get(serverId) || 0;
+    if (now - lastHb < MIN_INTERVAL_MS) {
+      return reply.code(429).send({ error: "Rate limited", retry_after_ms: MIN_INTERVAL_MS - (now - lastHb) });
+    }
+    _rateMap.set(serverId, now);
+
+    const b = request.body || {};
+    const nowDate = new Date();
+    const hour = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate(), nowDate.getHours());
+
+    try {
+      const prev = await pool.query(
+        "SELECT tokens_total, cost_total, repairs_total, payload FROM heartbeats WHERE server_id = $1 ORDER BY timestamp DESC LIMIT 1",
         [serverId]
       );
-      const prev = prevRes.rows[0] || null;
+      const p = prev.rows[0] || { tokens_total: 0, cost_total: 0, repairs_total: 0 };
 
-      // Current cumulative values
-      const curTokens = (b.usage && b.usage.totalTokens) || 0;
-      const curCost = (b.usage && b.usage.totalCost) || 0;
-      const curCalls = (b.usage && b.usage.totalCalls) || 0;
-      const curRepairs = (b.repairs && b.repairs.total) || 0;
-      const curSuccesses = (b.repairs && b.repairs.successes) || 0;
-
-      // Detect restart: current < previous * 0.5 means counters reset
-      let isRestart = false;
-      if (prev && curTokens < (prev.tokens_total || 0) * 0.5) {
-        isRestart = true;
+      // Validate
+      const issues = validateHeartbeat(b, p);
+      if (issues.length > 0) {
+        console.error("[HB-REJECTED]", serverId, issues.join(", "));
+        await pool.query("UPDATE servers SET status = 'flagged' WHERE id = $1", [serverId]);
+        return reply.code(422).send({ error: "Heartbeat rejected", issues });
       }
 
-      // Compute incremental diffs (skip on restart or first heartbeat)
-      let incTokens = 0;
-      let incCost = 0;
-      let incCalls = 0;
-      if (prev && !isRestart) {
-        incTokens = Math.max(0, curTokens - (prev.tokens_total || 0));
-        incCost = Math.max(0, curCost - (prev.cost_total || 0));
-        // calls from previous payload
-        const prevCalls =
-          (prev.payload && prev.payload.usage && prev.payload.usage.totalCalls) || 0;
-        incCalls = Math.max(0, curCalls - prevCalls);
-      }
+      const prevTokens = parseInt(p.tokens_total) || 0;
+      const prevCost = parseFloat(p.cost_total) || 0;
+      const prevModels = p.payload?.byModel || {};
+      const curTokens = b.usage?.totalTokens || 0;
+      const curCost = b.usage?.totalCost || 0;
+      const isRestart = curTokens < prevTokens * 0.5;
+      const incTokens = isRestart ? 0 : Math.max(0, curTokens - prevTokens);
+      const incCost = isRestart ? 0 : Math.max(0, curCost - prevCost);
 
-      // ── Update servers table ──
-      await client.query(
-        `INSERT INTO servers (id, name, version, first_seen, last_heartbeat, status, config)
-         VALUES ($1, $2, $3, $4, $4, 'healthy', $5)
-         ON CONFLICT (id) DO UPDATE SET
-           last_heartbeat = $4,
-           status = 'healthy',
-           version = COALESCE($3, servers.version),
-           config = COALESCE($5, servers.config),
-           name = COALESCE($2, servers.name)`,
-        [
-          serverId,
-          (b.server && b.server.name) || serverId,
-          b.version || null,
-          now,
-          b.server ? JSON.stringify(b.server) : null,
-        ]
+      await pool.query(
+        `UPDATE servers SET last_heartbeat = NOW(), status = 'healthy',
+          version = COALESCE($2, version), config = COALESCE($3, config)
+         WHERE id = $1`,
+        [serverId, b.version || null, JSON.stringify({
+          port: b.server?.port,
+          provider: b.usage?.byProvider ? Object.keys(b.usage.byProvider).join("+") : null,
+        })]
       );
 
-      // ── Insert heartbeat snapshot (cumulative values + full payload) ──
-      const payloadJson = {
-        byModel: (b.usage && b.usage.byModel) || {},
-        byModelCategory: (b.usage && b.usage.byModelCategory) || {},
-        byProvider: (b.usage && b.usage.byProvider) || {},
-        byCategory: (b.usage && b.usage.byCategory) || {},
-        byTool: (b.usage && b.usage.byTool) || {},
-        brain: b.brain || null,
-        backups: b.backups || null,
-        usage: b.usage || {},
-      };
-
-      await client.query(
-        `INSERT INTO heartbeats
-           (server_id, timestamp, uptime, memory_mb, cpu_percent,
-            routes_total, routes_healthy, routes_unhealthy,
-            tokens_total, cost_total, repairs_total, repairs_successes, payload)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
-        [
-          serverId,
-          now,
-          (b.server && b.server.uptime) || 0,
-          (b.process && b.process.memoryMB) || 0,
-          (b.process && b.process.cpuPercent) || 0,
-          (b.routes && b.routes.total) || 0,
-          (b.routes && b.routes.healthy) || 0,
-          (b.routes && b.routes.unhealthy) || 0,
-          curTokens,
-          curCost,
-          curRepairs,
-          curSuccesses,
-          JSON.stringify(payloadJson),
-        ]
+      await pool.query(
+        `INSERT INTO heartbeats (server_id, timestamp, uptime, memory_mb, cpu_percent,
+          routes_total, routes_healthy, routes_unhealthy,
+          tokens_total, cost_total, repairs_total, repairs_successes, payload)
+         VALUES ($1, NOW(), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [serverId, b.server?.uptime || 0, b.process?.memoryMB || 0, b.process?.cpuPercent || 0,
+         b.routes?.total || 0, b.routes?.healthy || 0, b.routes?.unhealthy || 0,
+         curTokens, curCost, b.repairs?.total || 0, b.repairs?.successes || 0,
+         JSON.stringify({
+           brain: b.brain, backups: b.backups,
+           byCategory: b.usage?.byCategory, byModel: b.usage?.byModel,
+           byTool: b.usage?.byTool, byProvider: b.usage?.byProvider, byModelCategory: b.usage?.byModelCategory,
+         })]
       );
 
-      // ── Upsert INCREMENTAL usage_hourly ──
-      if (incTokens > 0 || incCost > 0 || incCalls > 0) {
-        const incByCategory = {};
-        if (!isRestart && prev && b.usage && b.usage.byCategory) {
-          const prevCat =
-            (prev.payload && prev.payload.byCategory) || {};
-          for (const [cat, val] of Object.entries(b.usage.byCategory)) {
-            const prevVal =
-              (typeof prevCat[cat] === "object" ? prevCat[cat].tokens : prevCat[cat]) || 0;
-            const curVal = typeof val === "object" ? val.tokens : val;
-            const diff = Math.max(0, (curVal || 0) - prevVal);
-            if (diff > 0) incByCategory[cat] = diff;
-          }
-        }
-
-        await client.query(
+      if (incTokens > 0 || incCost > 0) {
+        await pool.query(
           `INSERT INTO usage_hourly (server_id, hour, tokens_total, cost_total, calls_total, tokens_by_category)
-           VALUES ($1, $2::timestamptz, $3, $4, $5, $6)
+           VALUES ($1, $2, $3, $4, $5, $6)
            ON CONFLICT (server_id, hour) DO UPDATE SET
              tokens_total = usage_hourly.tokens_total + $3,
              cost_total = usage_hourly.cost_total + $4,
              calls_total = usage_hourly.calls_total + $5,
-             tokens_by_category = (
-               SELECT jsonb_object_agg(
-                 key,
-                 COALESCE((usage_hourly.tokens_by_category->>key)::int, 0) + (value::text)::int
-               )
-               FROM jsonb_each($6)
-             ) || COALESCE(usage_hourly.tokens_by_category, '{}'::jsonb)`,
-          [serverId, hourBucket, incTokens, incCost, incCalls, JSON.stringify(incByCategory)]
+             tokens_by_category = COALESCE($6, usage_hourly.tokens_by_category)`,
+          [serverId, hour, incTokens, incCost, Math.max(1, Math.round(incTokens / 1200)),
+           JSON.stringify(b.usage?.byCategory || {})]
         );
       }
 
-      // ── Upsert INCREMENTAL usage_by_model ──
-      if (!isRestart && prev && b.usage && b.usage.byModel) {
-        const prevByModel =
-          (prev.payload && prev.payload.byModel) || {};
-        for (const [model, cur] of Object.entries(b.usage.byModel)) {
-          const p = prevByModel[model] || {};
-          const incInput = Math.max(0, (cur.inputTokens || 0) - (p.inputTokens || 0));
-          const incOutput = Math.max(0, (cur.outputTokens || 0) - (p.outputTokens || 0));
-          const incTotal = Math.max(0, (cur.totalTokens || cur.tokens || 0) - (p.totalTokens || p.tokens || 0));
-          const incModelCalls = Math.max(0, (cur.calls || 0) - (p.calls || 0));
-          const incModelCost = Math.max(0, (cur.cost || 0) - (p.cost || 0));
-          const avgLatency = cur.avgLatencyMs || cur.latencyMs || 0;
-          const successRate = cur.successRate != null ? cur.successRate : 1;
-          const cacheSavings = cur.cacheSavings || 0;
+      const byModel = b.usage?.byModel || {};
+      for (const [model, stats] of Object.entries(byModel)) {
+        if (!stats || !model) continue;
+        const pm = prevModels[model] || {};
+        const provider = detectProvider(model);
+        const di = isRestart ? 0 : Math.max(0, (stats.input || 0) - (pm.input || 0));
+        const do_ = isRestart ? 0 : Math.max(0, (stats.output || 0) - (pm.output || 0));
+        const dt = isRestart ? 0 : Math.max(0, (stats.total || 0) - (pm.total || 0));
+        const dc = isRestart ? 0 : Math.max(0, (stats.calls || 0) - (pm.calls || 0));
+        const dco = isRestart ? 0 : Math.max(0, (stats.cost || 0) - (pm.cost || 0));
+        if (dt === 0 && dco === 0) continue;
 
-          if (incTotal > 0 || incModelCalls > 0) {
-            await client.query(
-              `INSERT INTO usage_by_model
-                 (server_id, hour, model, provider, input_tokens, output_tokens,
-                  total_tokens, calls, cost, avg_latency_ms, success_rate, cache_savings)
-               VALUES ($1, $2::timestamptz, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-               ON CONFLICT (server_id, hour, model) DO UPDATE SET
-                 input_tokens = usage_by_model.input_tokens + $5,
-                 output_tokens = usage_by_model.output_tokens + $6,
-                 total_tokens = usage_by_model.total_tokens + $7,
-                 calls = usage_by_model.calls + $8,
-                 cost = usage_by_model.cost + $9,
-                 avg_latency_ms = $10,
-                 success_rate = $11,
-                 cache_savings = usage_by_model.cache_savings + $12`,
-              [
-                serverId, hourBucket, model, detectProvider(model),
-                incInput, incOutput, incTotal, incModelCalls, incModelCost,
-                avgLatency, successRate, cacheSavings,
-              ]
-            );
-          }
-        }
-      }
-
-      // ── Record new repairs (dedup by server_id + timestamp) ──
-      if (b.repairs && b.repairs.lastRepair) {
-        const r = b.repairs.lastRepair;
-        const repairTs = r.timestamp || now;
-        await client.query(
-          `INSERT INTO repairs
-             (server_id, timestamp, error, resolution, success, mode, model, tokens, cost, duration_ms)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-           ON CONFLICT DO NOTHING`,
-          [
-            serverId, repairTs,
-            r.error || null, r.resolution || null,
-            r.success != null ? r.success : true,
-            r.mode || null, r.model || null,
-            r.tokens || 0, r.cost || 0, r.durationMs || r.duration_ms || 0,
-          ]
+        await pool.query(
+          `INSERT INTO usage_by_model (server_id, hour, model, provider, input_tokens, output_tokens, total_tokens, calls, cost, avg_latency_ms, success_rate, cache_savings)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+           ON CONFLICT (server_id, hour, model) DO UPDATE SET
+             input_tokens = usage_by_model.input_tokens + $5,
+             output_tokens = usage_by_model.output_tokens + $6,
+             total_tokens = usage_by_model.total_tokens + $7,
+             calls = usage_by_model.calls + $8,
+             cost = usage_by_model.cost + $9,
+             avg_latency_ms = COALESCE($10, usage_by_model.avg_latency_ms),
+             success_rate = COALESCE($11, usage_by_model.success_rate),
+             cache_savings = usage_by_model.cache_savings + COALESCE($12, 0)`,
+          [serverId, hour, model, provider, di, do_, dt, dc, dco,
+           stats.avgLatencyMs || null,
+           stats.successRate != null ? stats.successRate / 100 : null,
+           Math.max(0, (stats.cacheSavings || 0) - (pm.cacheSavings || 0))]
         );
       }
 
-      // ── Record alerts ──
-      if (b.alerts && Array.isArray(b.alerts) && b.alerts.length > 0) {
-        for (const alert of b.alerts) {
-          await client.query(
-            `INSERT INTO alerts (server_id, type, message, severity, created_at)
-             VALUES ($1, $2, $3, $4, $5)`,
-            [
-              serverId,
-              alert.type || "unknown",
-              alert.message || "",
-              alert.severity || "info",
-              alert.timestamp || now,
-            ]
+      if (b.repairs?.lastRepair && b.repairs.lastRepair.timestamp) {
+        const lr = b.repairs.lastRepair;
+        const repairTs = new Date(lr.timestamp);
+        const exists = await pool.query(
+          "SELECT 1 FROM repairs WHERE server_id = $1 AND timestamp = $2 LIMIT 1",
+          [serverId, repairTs]
+        );
+        if (exists.rows.length === 0) {
+          await pool.query(
+            `INSERT INTO repairs (server_id, timestamp, error, resolution, success, mode, model, tokens, cost, duration_ms)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+            [serverId, repairTs, (lr.error || "").slice(0, 500), (lr.resolution || "").slice(0, 500),
+             lr.success, lr.mode, lr.model, lr.tokens || 0, lr.cost || 0, lr.duration || 0]
           );
         }
       }
 
-      await client.query("COMMIT");
-      return { ok: true, restart: isRestart };
+      if (b.alerts && Array.isArray(b.alerts)) {
+        for (const alert of b.alerts) {
+          await pool.query(
+            "INSERT INTO alerts (server_id, type, message, severity) VALUES ($1, $2, $3, $4)",
+            [serverId, alert.type || "unknown", (alert.error || alert.message || "").slice(0, 500), alert.severity || "medium"]
+          );
+        }
+      }
+
+      _hbCount++;
+      if (_hbCount % 100 === 0) cleanupStale();
+
+      return { status: "ok", timestamp: nowDate.toISOString() };
     } catch (err) {
-      await client.query("ROLLBACK");
-      request.log.error(err);
-      return reply.code(500).send({ error: "heartbeat processing failed" });
-    } finally {
-      client.release();
+      console.error("[HB-ROUTE-ERR]", err.message);
+      return reply.code(500).send({ error: "Heartbeat processing failed" });
     }
+  });
+
+  // ── DELETE /purge/:serverId — admin: dump a bad server and ALL its data ──
+  fastify.delete("/purge/:serverId", async (request, reply) => {
+    const token = request.headers.authorization?.replace("Bearer ", "");
+    let settings = {};
+    try { settings = require("../config/settings.json"); } catch {}
+    if (token !== settings.platform?.apiKey) {
+      return reply.code(403).send({ error: "Admin only" });
+    }
+
+    const { serverId } = request.params;
+    const counts = {};
+    for (const [table, col] of [["heartbeats","server_id"],["usage_hourly","server_id"],["usage_by_model","server_id"],["repairs","server_id"],["alerts","server_id"]]) {
+      const r = await pool.query(`DELETE FROM ${table} WHERE ${col} = $1`, [serverId]);
+      counts[table] = r.rowCount;
+    }
+    try {
+      await pool.query("DELETE FROM servers WHERE id = $1", [serverId]);
+      counts.server = 1;
+    } catch (e) { counts.server_error = e.message; }
+
+    console.log("[PURGE]", serverId, counts);
+    return { purged: serverId, counts };
   });
 }
 

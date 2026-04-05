@@ -6,14 +6,14 @@
   },
 
   "models": {
-    "reasoning": "gpt-4o",
-    "coding": "gpt-4o",
-    "chat": "gpt-4o-mini",
+    "reasoning": "claude-sonnet-4-6",
+    "coding": "claude-sonnet-4-6",
+    "chat": "gpt-5.4-mini",
     "tool": "gpt-4o-mini",
     "classifier": "gpt-4o-mini",
-    "audit": "gpt-4o-mini",
-    "compacting": "gpt-4o-mini",
-    "research": "gpt-4o"
+    "audit": "wolverine-test-1",
+    "compacting": "wolverine-test-1",
+    "research": "claude-sonnet-4-6"
   },
 
   "embedding": "wolverine-embedding-1",
