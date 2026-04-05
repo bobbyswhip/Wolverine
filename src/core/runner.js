@@ -459,6 +459,13 @@ class WolverineRunner {
         return;
       }
 
+      // #28: SIGKILL = likely OOM — synthesize useful stderr for the heal pipeline
+      if (signal === "SIGKILL" && (!this._stderrBuffer.trim() || this._stderrBuffer.trim().length < 10)) {
+        this._stderrBuffer = `Process killed by SIGKILL (possible OOM). Memory limit may have been exceeded. Check memory usage patterns and reduce memory consumption.\nExit code: ${code}, Signal: ${signal}`;
+        console.log(chalk.red(`\n💀 Process killed by SIGKILL (possible OOM)`));
+        this.logger.error(EVENT_TYPES.PROCESS_CRASH, "SIGKILL — possible OOM", { exitCode: code, signal });
+      }
+
       // Killed by signal with no stderr — just restart, don't waste tokens healing
       if (!this._stderrBuffer.trim() || this._stderrBuffer.trim().length < 10) {
         console.log(chalk.yellow(`\n⚠️  Process killed (code: ${code}, signal: ${signal}) — no error to heal, restarting`));
@@ -483,13 +490,28 @@ class WolverineRunner {
       }
 
       this.retryCount++;
-      await this._healAndRestart();
+      // #3: Guard against unhandled rejections — don't let heal errors crash the parent
+      try {
+        await this._healAndRestart();
+      } catch (healErr) {
+        console.log(chalk.red(`  ⚠️  Heal error (recovering): ${healErr.message}`));
+        this._healInProgress = false;
+        this._healStatus = null;
+        if (this.running) this._spawn(); // restart without healing
+      }
     });
 
     this.child.on("error", (err) => {
       console.log(chalk.red(`Failed to start process: ${err.message}`));
       this.logger.error(EVENT_TYPES.PROCESS_CRASH, `Failed to start: ${err.message}`);
-      this.running = false;
+      // #10: Retry spawn after delay instead of permanently dying
+      if (this.running && this.retryCount < this.maxRetries) {
+        this.retryCount++;
+        console.log(chalk.yellow(`   Retrying spawn in 5s (attempt ${this.retryCount}/${this.maxRetries})...`));
+        setTimeout(() => { if (this.running) this._spawn(); }, 5000);
+      } else {
+        this.running = false;
+      }
     });
 
     // IPC channel: child reports caught 500 errors (Fastify/Express)
@@ -626,9 +648,14 @@ class WolverineRunner {
         }
       }
     } catch (err) {
-      console.log(chalk.red(`\n🐺 Wolverine encountered an error: ${err.message}`));
+      // #4: Don't permanently die on transient errors — restart without healing
+      console.log(chalk.red(`\n🐺 Wolverine heal error (recovering): ${err.message}`));
       this._healInProgress = false;
-      this.running = false;
+      this._healStatus = null;
+      if (this.running) {
+        console.log(chalk.yellow("   Restarting without healing..."));
+        this._spawn();
+      }
     }
   }
 

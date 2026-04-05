@@ -35,6 +35,17 @@ async function heal(opts) {
     if (err.message === "timeout") {
       console.log(chalk.red(`\n🐺 Heal timed out after ${HEAL_TIMEOUT_MS / 1000}s`));
       if (opts.logger) opts.logger.error(EVENT_TYPES.HEAL_FAILED, `Heal timed out after ${HEAL_TIMEOUT_MS / 1000}s`);
+      // #11: Rollback on timeout — the background _healImpl may have partially applied patches
+      if (opts.backupManager) {
+        try {
+          const all = opts.backupManager.getAll();
+          const latest = all.find(b => b.status === "unstable");
+          if (latest) {
+            opts.backupManager.rollbackTo(latest.id);
+            console.log(chalk.yellow(`  ↩️  Rolled back to ${latest.id} (timeout cleanup)`));
+          }
+        } catch {}
+      }
       return { healed: false, explanation: `Heal timed out after ${HEAL_TIMEOUT_MS / 1000}s` };
     }
     throw err;
@@ -312,7 +323,7 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
             errorMessage: parsed.errorMessage, stackTrace: parsed.stackTrace,
             extraContext: envContext,
           });
-          rateLimiter.record(errorSignature);
+          // #15: Don't record rate limit until AFTER verification — failed attempts shouldn't exhaust the limit
 
           // Execute shell commands first (npm install, mkdir, etc.)
           if (repair.commands && Array.isArray(repair.commands)) {
@@ -351,6 +362,7 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
           const verification = await verifyFix(parsed.filePath, cwd, errorSignature, routeContext);
           if (verification.verified) {
             backupManager.markVerified(bid);
+            rateLimiter.record(errorSignature);
             rateLimiter.clearSignature(errorSignature);
             // Track tool operations: file read + patch + verify + any commands
             // These are the same operations an agent would do with read_file/write_file/bash_exec
@@ -360,10 +372,11 @@ async function _healImpl({ stderr, cwd, sandbox, notifier, rateLimiter, backupMa
             return { healed: true, explanation: repair.explanation, backupId: bid, mode: "fast" };
           }
 
-          backupManager.rollbackTo(bid);
+          // #13: Safe rollback — wrap in try/catch to prevent rollback-of-rollback loop
+          try { backupManager.rollbackTo(bid); } catch (rbErr) { console.log(chalk.red(`  ⚠️  Rollback failed: ${rbErr.message}`)); }
           return { healed: false, explanation: `Fast path: ${verification.status}` };
         } catch (err) {
-          backupManager.rollbackTo(bid);
+          try { backupManager.rollbackTo(bid); } catch (rbErr) { console.log(chalk.red(`  ⚠️  Rollback failed: ${rbErr.message}`)); }
           return { healed: false, explanation: `Fast path error: ${err.message}` };
         }
       } else if (iteration <= 2) {
