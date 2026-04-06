@@ -1,10 +1,13 @@
 {
+  "_": "Wolverine Server Configuration — edit these settings to customize your server. Docs: https://github.com/bobbyswhip/Wolverine",
+
   "app": {
-    "name": "Wolverine Server",
+    "name": "My Server",
     "version": "1.0.0",
     "env": "development"
   },
 
+  "_models": "AI models for each task. Provider auto-detected from name (claude-* = Anthropic, gpt-* = OpenAI). Using one model across all roles maximizes prompt cache hits. See wolverine dashboard at localhost:PORT+1/analytics for per-role cost/speed metrics.",
   "models": {
     "reasoning": "claude-sonnet-4-6",
     "coding": "claude-sonnet-4-6",
@@ -16,19 +19,23 @@
     "research": "claude-sonnet-4-6"
   },
 
+  "_embedding": "Vector embedding model for brain memory. Requires OPENAI_API_KEY.",
   "embedding": "text-embedding-3-small",
 
+  "_server": "port: server listen port | maxRetries: consecutive crashes before giving up | maxMemoryMB: OOM threshold",
   "server": {
     "port": 3000,
     "maxRetries": 3,
     "maxMemoryMB": 512
   },
 
+  "_telemetry": "Heartbeat reports server health to the dashboard. Disable for fully offline servers.",
   "telemetry": {
     "enabled": true,
     "heartbeatIntervalMs": 60000
   },
 
+  "_rateLimiting": "AI call budget. Prevents runaway costs from heal loops.",
   "rateLimiting": {
     "maxCallsPerWindow": 32,
     "windowMs": 100000,
@@ -36,6 +43,7 @@
     "maxTokensPerHour": 1000000
   },
 
+  "_healthCheck": "Probes server liveness. failThreshold consecutive failures trigger a heal. startDelayMs gives the server time to boot.",
   "healthCheck": {
     "intervalMs": 15000,
     "timeoutMs": 5000,
@@ -43,12 +51,14 @@
     "startDelayMs": 10000
   },
 
+  "_errorMonitor": "Tracks caught 500 errors per route. defaultThreshold: how many 500s before triggering a heal. cooldownMs: minimum time between heals on the same route.",
   "errorMonitor": {
     "defaultThreshold": 1,
     "windowMs": 30000,
     "cooldownMs": 60000
   },
 
+  "_autoUpdate": "Auto-updates wolverine framework from git. Only updates src/ and bin/ — never touches server/ code.",
   "autoUpdate": {
     "enabled": false,
     "intervalMs": 300000
@@ -59,6 +69,7 @@
     "cors": ["http://localhost:3000"]
   },
 
+  "_dashboard": "Dashboard serves on PORT+1. Set WOLVERINE_ADMIN_KEY in .env.local for the agent command interface.",
   "dashboard": {},
 
   "cors": {

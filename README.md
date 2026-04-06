@@ -58,6 +58,49 @@ Each demo:
 
 ---
 
+## x402 Paid APIs
+
+Turn any route into a USDC-paid API with one line of config. Uses the [x402 protocol](https://docs.cdp.coinbase.com/x402/welcome) for server-to-server payments on Base.
+
+### Setup (one-time)
+
+```bash
+wolverine --init-vault                    # Create encrypted wallet
+# Add CDP keys to .env.local (free at https://cdp.coinbase.com):
+# CDP_API_KEY_ID=your-key-id
+# CDP_API_KEY_SECRET=your-key-secret
+```
+
+### Usage
+
+```javascript
+// Free route — no config needed
+fastify.get("/api/data", async () => ({ data: "free" }));
+
+// Paid route — just add x402 config
+fastify.get("/api/premium", {
+  config: { x402: { price: "$0.01", description: "Premium data" } },
+}, async (req) => ({
+  data: "premium",
+  paid: req.x402.amount,
+  txHash: req.x402.txHash,
+}));
+
+// Variable price — caller chooses amount
+fastify.post("/api/purchase", {
+  config: { x402: { variable: true, min: "$1", max: "$1000", priceField: "dollars" } },
+}, async (req) => ({
+  credits: parseFloat(req.x402.amount.replace("$", "")) * 100,
+  txHash: req.x402.txHash,
+}));
+```
+
+The middleware handles everything: 402 responses, wallet signing, CDP facilitator verification, and on-chain USDC settlement. Your handler only runs after payment confirms on Base.
+
+**Requirements:** Node 22+, CDP API keys (free tier: 1,000 tx/month), `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` for healing.
+
+---
+
 ## Architecture
 
 ```

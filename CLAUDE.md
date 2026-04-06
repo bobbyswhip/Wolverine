@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Wolverine is a self-healing Node.js server framework. It wraps a server process, catches crashes AND caught 500 errors, diagnoses them with AI (OpenAI or Anthropic), generates fixes, verifies them, and restarts — automatically. Published as `wolverine-ai` on npm (v5.1.0). 32 agent tools, 7 skills, ~50 injection patterns, adaptive rate limiter, encrypted vault, x402 paid APIs.
+Wolverine is a self-healing Node.js server framework. It wraps a server process, catches crashes AND caught 500 errors, diagnoses them with AI (OpenAI or Anthropic), generates fixes, verifies them, and restarts — automatically. Published as `wolverine-ai` on npm (v6.0.0). 32 agent tools, 7 skills, ~50 injection patterns, adaptive rate limiter, encrypted vault, x402 paid APIs.
 
 ## Commands
 
