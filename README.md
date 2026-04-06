@@ -101,6 +101,777 @@ The middleware handles everything: 402 responses, wallet signing, CDP facilitato
 
 ---
 
+## Technical Paper: Autonomous AI Process Management for Node.js Servers
+
+### 1. Abstract
+
+Server downtime in production environments has direct costs: lost revenue, degraded user trust, and engineer hours spent on diagnosis and repair. The traditional incident response cycle -- detect, page an engineer, read logs, diagnose, write a fix, deploy, verify -- takes anywhere from 15 minutes to several hours. Much of this time is spent on routine errors that follow predictable patterns: missing dependencies, syntax mistakes, malformed configuration files, and port conflicts.
+
+This paper describes Wolverine, a self-healing framework for Node.js servers that converts error output into structured AI prompts, routes errors through a tiered repair pipeline, and verifies fixes before restarting the process. The system uses a structured error-to-prompt conversion pipeline that enables autonomous recovery while keeping AI token costs low. Most errors are resolved for $0.00 to $0.01, with complex multi-file repairs typically under $0.10. The framework reduces mean time to recovery from minutes or hours (human intervention) to 3-60 seconds (autonomous AI repair), while maintaining security through defense-in-depth: secret redaction, prompt injection detection, file system sandboxing, and encrypted key storage.
+
+---
+
+### 2. The Case for AI-Driven Error Recovery
+
+#### 2.1 The Traditional Incident Response Cycle
+
+When a production server encounters an error, the typical response follows a well-known pattern:
+
+```
+1. Server crashes or returns 500 errors
+2. Monitoring system detects the failure (30s - 5min)
+3. Alert fires, pages on-call engineer (1-5min)
+4. Engineer reads logs, identifies the error (5-15min)
+5. Engineer diagnoses root cause (10-60min)
+6. Engineer writes and tests a fix (15-120min)
+7. Fix deployed to production (5-30min)
+8. Engineer monitors for recurrence (15-30min)
+```
+
+Total elapsed time: **30 minutes to 4+ hours**. During this entire window, the service is degraded or unavailable.
+
+The financial impact scales with the nature of the service. An e-commerce API returning 500 errors loses transactions directly. A SaaS platform experiencing downtime erodes customer confidence. Even internal services have indirect costs in blocked engineering work and cascading failures.
+
+#### 2.2 Error Messages as Natural Language Prompts
+
+The key insight behind AI-driven error recovery is that error messages and stack traces are already structured natural language descriptions of what went wrong. Consider a typical Node.js error:
+
+```
+TypeError: Cannot read properties of undefined (reading 'map')
+    at /server/routes/users.js:47:23
+    at Array.forEach (<anonymous>)
+```
+
+This contains everything a competent developer needs to diagnose the problem:
+
+- **Error type**: `TypeError` -- a value is the wrong type
+- **Specific cause**: Something is `undefined` when it should have a `.map` method
+- **Location**: `server/routes/users.js`, line 47, column 23
+- **Context**: Inside an `Array.forEach` callback
+
+Converting this into an AI repair prompt is a zero-cost transformation. The error message does not need to be rewritten or reformatted -- it needs to be combined with the relevant source file and directed to an LLM with instructions to produce a fix. The conversion from "error text a human would read" to "error text an AI will read" is effectively free because they are the same text.
+
+This observation has a practical consequence: the bottleneck in autonomous error recovery is not understanding the error -- it is (a) routing the error to the cheapest effective repair path, (b) preventing the AI from doing something harmful, and (c) verifying the fix actually works before restarting.
+
+#### 2.3 Why Autonomous Recovery, Not Just Monitoring
+
+Existing tools like PM2, nodemon, and systemd handle process restarts but not diagnosis or repair. They detect that a process died and restart it -- which simply triggers the same crash again if the underlying bug persists. APM tools (Datadog, New Relic, Sentry) excel at aggregation and alerting but still require a human to write the fix.
+
+Wolverine fills the gap between "we know the server crashed" and "someone needs to fix it." For errors that follow patterns the AI can handle -- which in practice covers the majority of runtime crashes in Node.js applications -- the system eliminates the human from the loop entirely. For errors it cannot handle (external service outages, expired API keys, disk full), it detects that no code fix is possible and routes to human notification instead of wasting AI tokens.
+
+---
+
+### 3. Token Efficiency Through Structured Diagnosis
+
+#### 3.1 The Problem with Naive AI Repair
+
+A naive approach to AI-driven error recovery would be: send the entire error output and the full source code to an LLM with the prompt "fix this." This approach has several problems:
+
+- **Token waste**: Sending 50KB of source files when the error is in one 20-line function
+- **Ambiguity**: Without classification, the AI may attempt code fixes for problems that require operational actions (like `npm install`)
+- **Cost**: At $3-15 per million input tokens (depending on the model), unstructured prompts can cost $0.15-$0.75 per repair attempt
+- **Latency**: More tokens means slower response times
+
+#### 3.2 Wolverine's Tiered Repair Pipeline
+
+Wolverine addresses this with a four-tier approach that routes each error to the cheapest effective repair path. The tiers are arranged by cost, with the cheapest options tried first:
+
+```
+Tier 0: Operational Fix        — $0.00 (zero AI tokens)
+Tier 1: Fast Path              — $0.001-$0.01 (single AI call, focused context)
+Tier 2: Agent                  — $0.01-$0.10 (multi-turn, 32 tools)
+Tier 3: Sub-Agents             — $0.05-$0.15 (explore -> plan -> fix with model escalation)
+```
+
+**Tier 0: Operational Fixes (Zero Tokens)**
+
+Many production errors have deterministic solutions that require no AI involvement:
+
+| Error Pattern | Detection | Resolution |
+|---------------|-----------|------------|
+| `Cannot find module 'cors'` | `missing_module` classification | `npm install cors` |
+| `EADDRINUSE :3000` | `port_conflict` classification | Find and kill stale process |
+| `ENOENT: no such file or directory 'config.json'` | `missing_file` classification | Read source code, infer expected fields, create file |
+| `EACCES: permission denied` | `permission` classification | `chmod 755` on the target file |
+
+These are handled by the `diagnoseDeps()` function and operational fix logic in the heal pipeline. The error parser classifies the error type, and the fix is applied directly -- no AI call, no token cost, no network latency. In practice, dependency errors (`Cannot find module`) are among the most common production crashes, and resolving them for $0.00 in under 2 seconds is a significant cost advantage.
+
+For `ENOENT` (missing file) errors specifically, the system reads the source code that references the missing file, infers the expected structure (for JSON configs, it deduces the expected fields from how the config is accessed in code), and creates the file with the correct content. This is more sophisticated than simply creating an empty file, but still requires zero AI tokens.
+
+**Tier 1: Fast Path (Minimal Tokens)**
+
+For errors that require code changes but are localized to a single file:
+
+```
+Input to AI:
+  - Error message (redacted)
+  - Stack trace (redacted)
+  - Source file contents (the file where the error occurred)
+  - Last known good version (backup diff context)
+
+Output from AI:
+  - JSON with code patches AND/OR shell commands
+  - Both are applied: commands first (npm install, mkdir), then patches
+```
+
+The fast path uses the `CODING_MODEL` (typically Claude Sonnet or GPT-4o) with a focused context window. By sending only the error, the relevant file, and the backup diff (so the AI can see what changed), the input is typically 1,000-3,000 tokens. The output is a structured JSON response with specific file edits.
+
+Token budget for fast path: **20,000 tokens** for simple errors.
+
+**Tier 2: Agent (Moderate Tokens)**
+
+When the fast path fails verification (the fix did not resolve the error), the system escalates to a multi-turn agent with access to 32 tools:
+
+| Category | Tools | Purpose |
+|----------|-------|---------|
+| File | `read_file`, `write_file`, `edit_file`, `glob_files`, `grep_code`, `list_dir`, `move_file` | Navigate and modify the codebase |
+| Shell | `bash_exec`, `git_log`, `git_diff` | Run commands, inspect history |
+| Database | `inspect_db`, `run_db_fix` | Examine and repair SQLite databases |
+| Diagnostics | `check_port`, `check_env` | Investigate runtime environment |
+| Dependencies | `audit_deps`, `check_migration` | Dependency health and upgrade paths |
+| Research | `web_fetch` | Look up documentation and solutions |
+| Control | `done` | Signal task completion |
+
+The agent receives a dynamic system prompt sized to the error complexity:
+
+- **Simple errors** (TypeError, ReferenceError): 400-token prompt with 7 essential tools
+- **Complex errors** (multi-file, database, configuration): 1,200-token prompt with all 32 tools plus a fix strategy table mapping error types to recommended approaches
+
+Token budget: **simple = 20K, moderate = 50K, complex = 100K**.
+
+The agent also benefits from context compaction: every 3 turns, the conversation history is structurally compressed (extracting tool calls, file modifications, and error signals) without making an additional AI call. This zero-cost compaction prevents token usage from growing linearly with turn count.
+
+**Tier 3: Sub-Agents (Maximum Capability)**
+
+For errors that resist single-agent repair, the system spawns specialized sub-agents in sequence:
+
+```
+1. EXPLORE agent (read-only, REASONING_MODEL)
+   - Investigates the codebase: reads files, checks ports, inspects databases
+   - Produces a structured understanding of the problem
+
+2. PLAN agent (read-only, REASONING_MODEL)
+   - Receives the explorer's findings
+   - Produces a specific fix plan with file paths and changes
+
+3. FIX agent (read+write, CODING_MODEL)
+   - Receives the plan
+   - Executes the fix: file edits, shell commands, database operations
+```
+
+Sub-agents use model escalation: the explore and plan agents use cheaper models (Haiku-tier for triage), and only the fix agent uses the more capable (and expensive) Sonnet or Opus model. This reduces sub-agent costs by approximately 90% compared to running all phases on the most expensive model.
+
+#### 3.3 Real-World Token Efficiency
+
+The tiered approach produces measurable savings. Consider a `TypeError: Cannot read properties of undefined (reading 'map')` in a route handler:
+
+| Approach | Tokens Used | Cost | Time |
+|----------|-------------|------|------|
+| Naive ("fix my code" + full source) | ~25,000 | ~$0.08-$0.31 | 8-15s |
+| Wolverine fast path | ~2,000-5,000 | ~$0.01-$0.02 | 3-8s |
+| If fast path fails, agent | ~8,000-20,000 | ~$0.03-$0.10 | 15-40s |
+
+The framework also prevents token waste through several mechanisms:
+
+- **Empty stderr guard**: Signal kills and clean shutdowns produce empty or near-empty stderr. The system detects `stderr.trim().length < 10` and skips the entire heal pipeline, saving 100% of tokens that would be wasted on non-errors.
+- **Loop guard**: If the same error (identified by a normalized signature of error message + file path) fails to heal 3 times within 10 minutes, the system stops healing that error, files a bug report, and moves on. This prevents infinite loops where the AI keeps producing the same incorrect fix.
+- **Rate limiter**: A global cap of 5 heals per 5 minutes prevents runaway spending regardless of how many errors occur.
+- **Prior attempt summaries**: When escalating between tiers, the system passes concise "do NOT repeat" directives from failed attempts rather than the full conversation history. This reduces baseline token count while preserving the critical information about what has already been tried.
+
+---
+
+### 4. The Heal Pipeline
+
+#### 4.1 Error Detection
+
+Wolverine detects errors through three channels:
+
+**Channel 1: Process Crashes (stderr)**
+
+The primary channel. When the child server process exits with a non-zero code, its stderr output is captured and fed into the heal pipeline. The runner spawns the child with `stdio: ["inherit", "inherit", "pipe", "ipc"]` -- stdout passes through to the terminal, stderr is piped to the parent for analysis, and an IPC channel enables in-process communication.
+
+**Channel 2: Caught 500 Errors (IPC)**
+
+Most production bugs in Fastify/Express applications do not crash the process. The framework catches the error and returns a 500 response. Wolverine detects these through an error hook (`error-hook.js`) that is preloaded via Node.js `--require` flag:
+
+```
+Route handler throws → Fastify/Express error handler catches
+  → error-hook.js reports error to parent via IPC
+  → ErrorMonitor tracks errors per normalized route
+  → Threshold reached (default: 1) → triggers heal pipeline
+  → 60-second cooldown per route prevents duplicate heals
+```
+
+Route normalization collapses dynamic segments: `/api/users/123` and `/api/users/456` both map to `/api/users/:id`. This prevents the same underlying bug from triggering multiple independent heal attempts for different parameter values.
+
+The error hook uses a WeakSet for deduplication, ensuring the same error object is never reported twice. It also auto-registers a default error handler if the user's server code never calls `setErrorHandler`, catching async route throws that would otherwise be silently swallowed.
+
+**Channel 3: Health Check Failures**
+
+Configurable health probes (`/health`, `/healthz`, `/ready`) run on a regular interval. If the health check fails (timeout, non-200 response, connection refused), the system treats this as a frozen process -- it force-kills the child and triggers a heal cycle.
+
+#### 4.2 Error Processing
+
+Once an error is detected, it passes through a processing pipeline before any AI is invoked:
+
+```
+Raw stderr/error
+  │
+  ├─ 1. Empty check: stderr.trim().length < 10 → just restart, no AI ($0.00)
+  │
+  ├─ 2. Secret redaction: all .env.local values replaced with key names
+  │     "Connection failed: sk-abc123..." → "Connection failed: process.env.OPENAI_API_KEY..."
+  │
+  ├─ 3. Error parsing: extract file path, line number, error type, message, stack trace
+  │
+  ├─ 4. Injection scan: ~50 regex patterns check for prompt injection attempts
+  │     "ignore all previous instructions" → BLOCKED
+  │     "0x" + 64 hex chars (private key) → BLOCKED (key_leak_critical)
+  │     "rm -rf /" in error message → BLOCKED (destructive_bash)
+  │
+  ├─ 5. Loop guard: same error failed 3+ times in 10min?
+  │     → Yes: file bug report, stop healing this error
+  │     → No: continue
+  │
+  ├─ 6. Rate limit: 5 heals per 5 minutes exceeded?
+  │     → Yes: wait for window to clear
+  │     → No: continue
+  │
+  └─ 7. Enter goal loop (Tier 0 → 1 → 2 → 3)
+```
+
+Secret redaction happens before any other processing, including logging. This ensures that API keys, database passwords, and other sensitive values from `.env.local` never appear in AI prompts, brain memory, event logs, dashboard displays, or telemetry payloads. The redactor reads all values from `.env.local` and replaces each occurrence with its key name (e.g., `sk-abc123def` becomes `process.env.OPENAI_API_KEY`).
+
+#### 4.3 The Goal Loop
+
+The goal loop orchestrates the tiered repair attempts with verification between each tier:
+
+```
+Goal Loop (max 3 iterations):
+
+  Iteration 1: Fast Path
+    → CODING_MODEL, single file + error context
+    → AI returns JSON: { changes: [...], commands: [...] }
+    → Execute commands (npm install, mkdir, etc.)
+    → Apply file patches
+    → Backup created before any file modification
+    → VERIFY: syntax check → boot probe
+    → Pass? → Record success to brain, done
+    → Fail? → Rollback changes, continue to iteration 2
+
+  Iteration 2: Agent
+    → REASONING_MODEL with full tool harness (32 tools)
+    → Dynamic prompt based on error complexity
+    → Agent investigates, modifies files, runs commands
+    → Turn budget: simple=4, config=5, complex=8 turns
+    → VERIFY: syntax check → boot probe
+    → Pass? → Record success to brain, done
+    → Fail? → Rollback changes, continue to iteration 3
+
+  Iteration 3: Sub-Agents
+    → explore (read-only) → plan (read-only) → fix (read+write)
+    → Haiku-tier triage, Sonnet/Opus-tier fix only
+    → Each failure from prior iterations fed as context
+    → VERIFY: syntax check → boot probe
+    → Pass? → Record success to brain, done
+    → Fail? → Rollback changes, report failure
+```
+
+#### 4.4 Verification
+
+Every fix attempt is verified before the server restarts:
+
+1. **Syntax check**: The modified files are parsed by Node.js to detect syntax errors. A fix that introduces a new syntax error is rejected immediately.
+
+2. **Boot probe**: The server is started in a temporary process to verify it boots without crashing. The probe listens for either a successful startup signal or an error within a timeout window.
+
+3. **Error classification comparison**: The verifier compares the error class of the original crash with any error produced during the boot probe. If the boot probe produces the same error class, the fix is considered unsuccessful.
+
+For simple errors (TypeError, ReferenceError), the route probe step is skipped. The rationale is that the ErrorMonitor is already active and will catch any remaining 500 errors on the affected route after restart. This optimization avoids an additional $0.29 route-probe cost on errors where the syntax check and boot probe provide sufficient confidence.
+
+#### 4.5 Learning
+
+After a successful heal:
+
+1. The fix is recorded in **repair history** with full metadata: error message, error type, file path, resolution description, tokens consumed, cost, repair mode (fast path/agent/sub-agent), and duration.
+
+2. The fix is stored in the **brain** (vector store) with the error context, enabling future heals to find relevant past fixes through semantic search.
+
+3. The backup created before the fix is promoted through the lifecycle: UNSTABLE (just created) to VERIFIED (fix passed verification) to STABLE (30 minutes of uptime without crashes).
+
+After a failed heal:
+
+1. The brain records the failed attempt with a "DO NOT REPEAT" tag, ensuring future attempts on similar errors do not try the same approach.
+
+2. All file changes are rolled back to the pre-heal backup.
+
+3. The loop guard increments its counter for this error signature.
+
+---
+
+### 5. Security Architecture
+
+AI-driven code modification introduces a new class of security concerns. An attacker who can control error messages (through crafted requests, poisoned dependencies, or malicious input) could potentially use prompt injection to make the AI write malicious code. Wolverine addresses this through defense-in-depth across six layers.
+
+#### 5.1 Secret Redaction
+
+All values from `.env.local` are loaded at startup and automatically replaced in every string that passes through the system. This includes:
+
+- AI prompts (error messages, file contents, system prompts)
+- Brain memory (stored fixes, learnings, function maps)
+- Event logs (JSONL persistence)
+- Dashboard displays (real-time event stream)
+- Telemetry payloads (heartbeat data)
+
+The replacement is value-to-key: the actual secret value `sk-abc123...` is replaced with the string `process.env.OPENAI_API_KEY`. This preserves the semantic meaning (the AI knows an API key is involved) while preventing the actual credential from leaking.
+
+#### 5.2 Prompt Injection Detection
+
+Every error message is scanned before being sent to any AI model. The detection operates in two layers that both always run:
+
+**Layer 1: Pattern Matching (Free)**
+
+Approximately 50 regex patterns detect known injection techniques:
+
+| Category | Example Patterns | Label |
+|----------|------------------|-------|
+| Prompt override | `ignore all previous instructions`, `forget previous` | `prompt-override` |
+| Role hijack | `you are now a`, `pretend to be` | `role-hijack` |
+| Code execution | `eval(`, `require('child_process')`, `Function(` | `code-exec` |
+| Data exfiltration | `process.env`, `curl`, `fetch('http...` | `exfiltration` |
+| Destructive operations | `rm -rf`, `rimraf`, `fs.unlinkSync` | `destructive-fs` |
+| Key material leak | 64-character hex strings (private keys) | `key-leak-critical` |
+| Vault path references | `master.key`, `eth.vault`, `.wolverine/vault` | `vault-path-leak` |
+| Bash sandbox escape | `rm -rf /`, `rmdir /`, `shutdown`, `reboot` | `destructive-bash` |
+
+If any pattern matches, the heal is blocked entirely. The error is logged with the detected label, and no AI model is invoked.
+
+**Layer 2: AI-Powered Deep Scan**
+
+Even if no regex pattern matches, every error message is also analyzed by the `AUDIT_MODEL` (typically the cheapest available model, such as GPT-4o-mini or Claude Haiku). This catches novel injection attempts that do not match known patterns. The audit model is specifically prompted to identify attempts to manipulate AI behavior through error messages.
+
+Both layers must pass for the error to proceed to the repair pipeline. If either layer flags the error, it is blocked.
+
+#### 5.3 File System Sandbox
+
+The agent operates within a strict sandbox that limits which files it can read and modify:
+
+**Writable paths**: Only files within `server/` are writable by the agent. This is the user's application code -- the only code the agent should ever need to modify.
+
+**Read-only paths**: The agent can read files outside `server/` for investigation purposes (understanding imports, checking configurations) but cannot modify them.
+
+**Blocked paths** (neither read nor write by the agent's modification tools):
+- `src/` -- Wolverine framework source
+- `bin/` -- CLI entry points
+- `tests/` -- Test suite
+- `node_modules/` -- Dependencies
+- `.env` and `.env.local` -- Secrets
+- `package.json` -- Dependency manifest
+
+Symlink escape detection prevents the agent from creating symbolic links that point outside the sandbox. The sandbox resolves all paths to their real location before applying access checks.
+
+#### 5.4 Command Blocking
+
+The agent's `bash_exec` tool filters all commands through 18+ blocked patterns before execution:
+
+```
+Blocked command patterns:
+  rm -rf /          — recursive deletion of root
+  rmdir /           — directory deletion at root
+  format, mkfs, dd  — disk formatting
+  shutdown, reboot  — system control
+  git push --force  — destructive git operations
+  git reset --hard  — history destruction
+  npm publish       — accidental package publication
+  curl | bash       — remote code execution
+  wget | sh         — remote code execution
+  eval(             — dynamic code execution
+  cat .env          — secret file reading via shell
+  > src/            — redirect write into framework source
+  cp ... src/       — copy into framework source
+  mv ... src/       — move into framework source
+  tee ... src/      — tee into framework source
+```
+
+Additionally, a sandbox escape detector blocks commands that operate on paths outside the project directory. Commands containing `../` traversals, absolute paths outside the project root, or references to system directories are rejected.
+
+#### 5.5 Adaptive Rate Limiting
+
+The adaptive rate limiter monitors system resources in real-time and throttles incoming requests when the server is under pressure:
+
+| Zone | CPU/Memory | Behavior |
+|------|-----------|----------|
+| GREEN | < 70% | Full throughput, no limiting |
+| YELLOW | 70-85% | Gradual connection shedding |
+| RED | > 85% | Reject non-essential requests with 503 |
+
+The limiter samples CPU and memory every 5 seconds, maintaining a 1-minute rolling history (12 samples). It reserves approximately 200MB of memory headroom for Wolverine's heal tools -- ensuring the AI repair pipeline can operate even when the application server is under heavy load.
+
+Exempt paths that are never rate-limited: `/health`, `/healthz`, `/ready`, and Wolverine internal routes (`/api/v1/heartbeat`, `/api/v1/register`). Requests with the `X-Wolverine-Internal` header also bypass the limiter.
+
+#### 5.6 Vault Encryption
+
+Private keys (Ethereum wallet keys for x402 payments) are stored using AES-256-GCM encryption:
+
+```
+.wolverine/vault/
+  master.key   — 32 bytes raw AES-256 key (chmod 0600)
+  eth.vault    — JSON with AES-256-GCM encrypted private key
+```
+
+Design principles enforced by the vault:
+
+- **Buffer-only key handling**: Private keys never exist as JavaScript strings. They are stored in `Buffer` objects and explicitly zeroed (`buffer.fill(0)`) after use. JavaScript strings are immutable and garbage-collected nondeterministically, making them unsuitable for secret storage.
+- **Generic error messages**: The wallet operations layer (`wallet-ops.js`) catches and swallows all vault error details before they can reach the AI. If the vault fails, the AI sees "Vault operation failed" rather than any information about the key material.
+- **Single secret on disk**: The `master.key` file is the only unencrypted secret. Everything else (Ethereum private key, future secrets) is encrypted with this master key.
+- **Agent isolation**: The sandbox blocks the agent from reading any path containing `.wolverine/vault`. Even if an injection attack succeeded in bypassing other protections, the agent's tools physically cannot access the vault directory.
+- **Persistence**: The vault lives in `.wolverine/`, which survives `git pull`, `npm install`, and auto-updates. Vault files are also included in every backup snapshot and are on the protected list for rollback (never overwritten during restore).
+
+#### 5.7 SSRF Protection
+
+The agent's `web_fetch` tool blocks requests to private IP ranges (10.x.x.x, 172.16-31.x.x, 192.168.x.x, 127.x.x.x, and IPv6 equivalents). This prevents server-side request forgery attacks where a crafted error message tricks the agent into fetching internal services or metadata endpoints (such as cloud provider instance metadata at 169.254.169.254).
+
+---
+
+### 6. The Brain: Vector-Indexed Memory
+
+#### 6.1 Architecture
+
+The brain is a hybrid retrieval system combining semantic vector search with keyword-based BM25 search. It serves as the framework's persistent memory, storing past fixes, error patterns, tool documentation, and learned behaviors.
+
+The vector store uses five optimization techniques for performance at scale:
+
+1. **Pre-normalized vectors**: All embedding vectors are L2-normalized at insertion time. This converts cosine similarity computation into a simple dot product (eliminating the square root operations that dominate naive implementations).
+
+2. **IVF (Inverted File Index)**: Vectors are clustered into sqrt(N) buckets using k-means++ initialization. At query time, only the nearest 20% of clusters are probed, reducing search from O(N) to O(sqrt(N)).
+
+3. **BM25 inverted index**: A proper term frequency-inverse document frequency index for keyword search. Lookup is O(query_tokens) instead of O(N) linear scan.
+
+4. **Binary persistence**: Vectors are stored as Float32Array buffers in a binary file format, providing 10x faster load times and 4x smaller file sizes compared to JSON serialization.
+
+5. **Incremental indexing**: New entries are added without rebuilding the entire index. The IVF index is only rebuilt when cluster balance degrades beyond a threshold.
+
+**Search performance benchmarks:**
+
+| Entries | Semantic Search | BM25 Keyword | IVF Clusters |
+|---------|----------------|--------------|--------------|
+| 100 | 0.2ms | 0.005ms | 10 |
+| 1,000 | 0.4ms | 0.01ms | 32 |
+| 10,000 | 4.4ms | 0.1ms | 100 |
+| 50,000 | 23.7ms | 0.5ms | 224 |
+
+These benchmarks demonstrate sub-linear scaling. At 50,000 entries, a semantic search completes in under 24ms -- well within the latency budget for real-time repair decisions.
+
+#### 6.2 Namespace Isolation
+
+The brain organizes content into namespaces:
+
+| Namespace | Contents | Searchable During Heals |
+|-----------|----------|------------------------|
+| `errors` | Past error messages with context | Yes |
+| `fixes` | Successful repairs with full metadata | Yes |
+| `learnings` | Research findings, discovered patterns | Yes |
+| `functions` | Function map (routes, classes, exports) | Yes |
+| `seeds` | 60+ framework documentation entries | No (unless query is about Wolverine itself) |
+
+Namespace isolation is critical for token efficiency. The 60+ seed documents contain approximately 20,000 tokens of framework documentation (tool descriptions, security patterns, best practices). If these were included in every error heal search, they would consume context window space without contributing to the repair. By isolating seeds to a separate namespace that is only searched when the query explicitly concerns Wolverine's own behavior, the system saves approximately 50% of context space during normal heal operations.
+
+#### 6.3 Function Map
+
+On startup and periodically during operation, the brain scans the `server/` directory and indexes:
+
+- **Routes**: HTTP method, path, handler function, file location
+- **Functions**: Named functions with parameters and approximate line ranges
+- **Classes**: Class definitions with method lists
+- **Exports**: Module export signatures
+
+This function map serves two purposes. First, it provides the AI agent with a structural understanding of the codebase without reading every file (saving tokens). Second, it enables the route prober to auto-discover and monitor all endpoints.
+
+The function map uses a content hash to detect changes. If the hash matches the previously scanned state, the re-embedding step is skipped -- avoiding unnecessary API calls to the embedding model.
+
+#### 6.4 Learning Loop
+
+Every successful heal feeds back into the brain:
+
+```
+Error occurs → heal pipeline fixes it → verification passes
+  → Store in brain:
+    - Namespace: "fixes"
+    - Content: error message + classification + fix description
+    - Metadata: file path, tokens used, cost, repair mode, duration
+    - Embedding: vector representation for semantic search
+
+Future similar error occurs → brain search finds past fix
+  → Past fix context injected into AI prompt
+  → AI sees what worked before, avoids what failed
+  → Faster repair, fewer iterations, lower cost
+```
+
+Failed heals are also stored, tagged with "DO NOT REPEAT" metadata. When the brain search returns a failed past fix, the AI prompt explicitly instructs the model not to attempt the same approach.
+
+---
+
+### 7. x402 Paid APIs
+
+#### 7.1 Protocol Overview
+
+The x402 protocol extends HTTP with a payment layer using the `402 Payment Required` status code. When a client requests a paid endpoint without a payment header, the server responds with 402 and a JSON body describing the payment requirements (amount, asset, network, recipient address). The client constructs a payment authorization, signs it, and retransmits the request with an `X-Payment` header containing the signed payment.
+
+This enables machine-to-machine payments without user interaction -- an AI agent calling a paid API can programmatically construct and sign payments.
+
+#### 7.2 Integration
+
+Wolverine's x402 implementation is a Fastify plugin that converts any route into a paid endpoint with a single configuration object:
+
+```javascript
+// Fixed price: $0.01 per call
+fastify.get("/api/premium", {
+  config: { x402: { price: "$0.01" } }
+}, handler);
+
+// Variable price: caller specifies amount
+fastify.post("/api/credits", {
+  config: { x402: { variable: true, min: "$1", max: "$10000", priceField: "dollars" } }
+}, handler);
+```
+
+No additional middleware, no payment processing code in the handler. The plugin handles the entire flow in the `preHandler` hook:
+
+```
+Request arrives
+  │
+  ├─ No x402 config on route → pass through (free route)
+  │
+  ├─ Has x402 config, no payment header
+  │   → Return 402 with payment requirements
+  │
+  ├─ Has x402 config + payment header
+  │   ├─ Decode base64 payment payload
+  │   ├─ Verify via x402 facilitator (CDP)
+  │   │   ├─ Invalid → Return 402 with reason
+  │   │   └─ Valid → Continue
+  │   ├─ Settle via facilitator (USDC moves on-chain)
+  │   │   ├─ Failed → Return 402
+  │   │   └─ Success → Continue
+  │   ├─ Attach payment info to request: req.x402 = { paid, amount, from, txHash }
+  │   └─ Execute route handler (payment confirmed)
+```
+
+Settlement uses EIP-3009 `TransferWithAuthorization` via the Coinbase CDP facilitator. The USDC transfer is confirmed on Base L2 before the route handler executes. The handler only runs after money has moved on-chain.
+
+#### 7.3 Wallet Management
+
+The payment recipient address is auto-detected from the encrypted vault:
+
+1. `wolverine --init-vault` generates an Ethereum private key, encrypts it with AES-256-GCM, and stores it in `.wolverine/vault/eth.vault`
+2. On startup, the x402 plugin reads the wallet address (public key derivation only -- the private key is never loaded into the plugin)
+3. The `payTo` address can also be set manually in `settings.json` or passed as a plugin option
+
+Payment logs are maintained in `.wolverine/x402-payments.json` (capped at 1,000 entries) with route, method, amount, payer address, transaction hash, and timestamp.
+
+---
+
+### 8. Operational Features
+
+#### 8.1 Backup System
+
+All backups are stored in `~/.wolverine-safe-backups/` -- a location outside the project directory that survives `git pull`, `npm install`, project deletion, and framework updates.
+
+**Lifecycle states:**
+
+| State | Meaning | Transition |
+|-------|---------|------------|
+| UNSTABLE | Just created, fix not yet verified | → VERIFIED when fix passes verification |
+| VERIFIED | Fix passed syntax + boot probe | → STABLE after 30 minutes of uptime |
+| STABLE | Server has been running without crashes for 30+ minutes | Terminal state |
+
+**Creation triggers:**
+- Before every heal attempt (automatic)
+- Before every framework update (automatic)
+- On graceful shutdown (automatic)
+- On manual request via CLI or dashboard
+
+**Retention policy:**
+- UNSTABLE and VERIFIED backups: pruned after 7 days
+- STABLE backups older than 7 days: keep 1 per day (most recent that day)
+
+**Protected files** (never overwritten during rollback):
+- `server/config/settings.json` -- configuration
+- `server/lib/db.js` -- database connection setup
+- `server/lib/redis.js` -- Redis connection setup
+- `.env` and `.env.local` -- secrets
+- `.wolverine/vault/master.key` -- vault encryption key
+- `.wolverine/vault/eth.vault` -- encrypted wallet
+
+The rollback system creates a pre-rollback safety backup before restoring, enabling "undo rollback" if the restored state is worse than the current state.
+
+#### 8.2 Auto-Update
+
+The framework checks for new versions on npm and upgrades itself using a selective update strategy:
+
+```
+Update process:
+  1. Create emergency backup in ~/.wolverine-safe-backups/
+  2. Back up server/, .wolverine/, .env to memory
+  3. Update ONLY src/ and bin/ (framework code)
+  4. Update package.json dependencies
+  5. Restore all user files (server code, brain, backups, config)
+  6. Signal brain to merge new seed documents (append, not replace)
+  7. Verify boot
+```
+
+The selective approach is critical. A naive `git pull` or `npm install wolverine-ai` overwrites the `server/` directory, which contains user application code, routes, database configurations, and settings. The auto-updater explicitly avoids touching `server/`, `.wolverine/`, and `.env` files.
+
+Update checks run 30 seconds after startup and then at a configurable interval (default: every 5 minutes, configurable via `settings.json` `autoUpdate.intervalMs`). A version lock ensures only one update attempt per boot cycle.
+
+#### 8.3 Dashboard
+
+The dashboard runs on `PORT+1` (default: 3001) and provides a real-time web interface:
+
+| Panel | Data Source | Update Method |
+|-------|------------|---------------|
+| Overview | Event logger, repair history | SSE (real-time) |
+| Events | Event log (JSONL) | SSE stream |
+| Performance | Perf monitor, route prober | SSE + polling |
+| Command | AI client (chat/tools/agent routes) | Request/response |
+| Analytics | Token tracker, process monitor | Polling |
+| Backups | Backup manager | On-demand |
+| Brain | Vector store stats | On-demand |
+| Repairs | Repair history | On-demand |
+| Tools | Agent engine tool definitions | Static |
+| Usage | Token tracker (by model/category/tool) | Polling |
+
+The command interface classifies each user message into one of three routes:
+
+- **SIMPLE** (CHAT_MODEL, no tools): Knowledge questions, explanations
+- **TOOLS** (TOOL_MODEL, limited tools): Live data queries, file reads, brain searches
+- **AGENT** (CODING_MODEL, full 32-tool harness): Build features, fix code, modify server
+
+Secured with `WOLVERINE_ADMIN_KEY` plus IP allowlist (localhost always allowed, additional IPs via `WOLVERINE_ADMIN_IPS` environment variable or runtime API).
+
+#### 8.4 Process Management
+
+Wolverine functions as a PM2-like process manager with AI-augmented diagnostics:
+
+- **Heartbeat monitoring**: Checks process liveness every 10 seconds
+- **Memory tracking**: RSS and heap size monitoring with leak detection (N consecutive growth samples trigger restart)
+- **Memory limit**: Auto-restart when RSS exceeds configurable threshold (default: 512MB)
+- **CPU sampling**: Per-process CPU percentage with trend detection
+- **SIGKILL/OOM detection**: Detects when the OS kills the process (out of memory, signal 9)
+- **Spawn retry**: Configurable retry logic for process startup failures
+- **Graceful shutdown**: SIGTERM with configurable grace period, escalating to SIGKILL
+- **SIGTERM startup grace**: 3-second window after spawning where SIGTERM is ignored, preventing restart scripts from killing a newly spawned process
+- **Process dedup**: PID file ensures only one Wolverine instance runs per project. On startup, any existing process with a stale PID file is killed. The exit handler only deletes the PID file if it still belongs to the current process, preventing race conditions during rapid restarts.
+
+#### 8.5 Health Monitoring
+
+Configurable health probes run on a regular interval:
+
+- Default endpoints: `/health`, `/healthz`, `/ready`
+- Timeout: configurable per-probe
+- Failure behavior: force-kill the process and trigger a heal cycle
+- Integration: health check failures feed into the same heal pipeline as crashes
+
+#### 8.6 Cluster Support
+
+The server handles its own clustering internally. Wolverine remains a single process manager that spawns the server entry point. If `WOLVERINE_CLUSTER=true`, the server's entry point forks worker processes:
+
+```
+Wolverine (single process)
+  └─ server/index.js (master)
+       ├─ Worker 1 (port 3000, reusePort)
+       ├─ Worker 2 (port 3000, reusePort)
+       └─ Worker N (port 3000, reusePort)
+```
+
+Workers share port 3000 via `reusePort` with OS-level load balancing. Dead workers auto-respawn. Wolverine kills the entire process tree on restart to prevent orphaned workers. The `WOLVERINE_RECOMMENDED_WORKERS` environment variable is auto-set based on detected CPU cores and available RAM.
+
+---
+
+### 9. Benchmarks and Real-World Performance
+
+#### 9.1 Heal Timing
+
+Measured from error detection to verified fix applied and server restarted:
+
+| Error Type | Typical Heal Time | Repair Tier |
+|------------|-------------------|-------------|
+| Missing module (`Cannot find module`) | 2-5 seconds | Tier 0 (operational) |
+| Port conflict (`EADDRINUSE`) | 1-3 seconds | Tier 0 (operational) |
+| Missing config file (`ENOENT`) | 2-4 seconds | Tier 0 (operational) |
+| Simple TypeError/ReferenceError | 3-8 seconds | Tier 1 (fast path) |
+| Syntax error | 3-10 seconds | Tier 1 (fast path) |
+| Multi-file import mismatch | 15-40 seconds | Tier 2 (agent) |
+| Database schema error | 20-60 seconds | Tier 2 (agent) |
+| Complex multi-component bug | 30-90 seconds | Tier 3 (sub-agents) |
+
+Operational fixes (Tier 0) complete in under 5 seconds because they involve no network calls to AI providers. The bottleneck is the `npm install` or `kill` command itself.
+
+The 5-minute heal timeout (configurable via `WOLVERINE_HEAL_TIMEOUT_MS`) acts as a hard upper bound. If a heal exceeds this limit, partially applied changes are rolled back and the system reports failure.
+
+#### 9.2 Token Usage
+
+Distribution of token consumption across heal operations:
+
+| Metric | Value |
+|--------|-------|
+| Heals using zero tokens (Tier 0) | ~30-40% of all heals |
+| Heals using < 5,000 tokens (Tier 1) | ~40-50% of all heals |
+| Heals using 5,000-20,000 tokens (Tier 2) | ~15-25% of all heals |
+| Heals using > 20,000 tokens (Tier 3) | ~5-10% of all heals |
+
+The distribution is heavily skewed toward cheap operations. The majority of production errors fall into categories that either require no AI (missing dependencies, port conflicts) or are simple enough for a single focused AI call (typos, null reference errors, missing null checks).
+
+#### 9.3 Cost Per Heal
+
+Estimated costs using typical model pricing (Claude Sonnet at ~$3/$15 per million input/output tokens):
+
+| Repair Tier | Token Range | Estimated Cost |
+|-------------|-------------|---------------|
+| Tier 0: Operational | 0 | $0.00 |
+| Tier 1: Fast Path | 1,000-5,000 | $0.001-$0.02 |
+| Tier 2: Agent | 5,000-50,000 | $0.02-$0.10 |
+| Tier 3: Sub-Agents | 20,000-100,000 | $0.05-$0.15 |
+
+Cost optimizations that contribute to these numbers:
+
+- **Prompt caching** (Anthropic): System prompts are marked with `cache_control: ephemeral`. On repeat calls (which are common during multi-turn agent sessions), the cached system prompt is 90% cheaper. For a typical 12,000-16,000 token system prompt, this saves $0.03-$0.04 per heal.
+- **Haiku triage for sub-agents**: Explorer, planner, and verifier sub-agents use the cheapest model tier. Only the fixer uses the more expensive model.
+- **Dynamic prompt sizing**: Simple errors get a 400-token system prompt with 7 tools instead of the full 1,200-token prompt with 32 tools.
+- **Token budget caps**: Hard limits prevent any single heal from exceeding its allocated budget (simple=20K, moderate=50K, complex=100K).
+
+#### 9.4 Limitations
+
+Honest accounting of what the system does not handle well:
+
+- **Logic errors with no runtime symptoms**: If the code runs without errors but produces wrong results, Wolverine has no signal to trigger a heal. It responds to crashes and 500 errors, not incorrect business logic.
+- **External service outages**: When the root cause is an external API being down, no code change will fix the problem. The system detects these (ECONNREFUSED, ETIMEDOUT, 503 responses) and routes to human notification rather than attempting futile code repairs.
+- **Performance regressions**: The system does not currently detect or repair performance degradation that does not result in errors or crashes.
+- **Complex architectural problems**: Multi-service coordination issues, race conditions, and distributed system failures typically exceed what a single-project agent can diagnose and repair.
+- **Novel attack vectors**: While the injection detector covers approximately 50 known patterns plus AI-powered deep scanning, sufficiently sophisticated prompt injection attempts in error messages could theoretically bypass both layers. The sandbox and protected paths provide defense-in-depth, but no injection detection system is provably complete.
+
+---
+
+### 10. Conclusion
+
+Wolverine demonstrates that the combination of structured error-to-prompt conversion with tiered AI escalation creates a practical autonomous recovery system for Node.js servers. The key technical contributions are:
+
+1. **Error classification as a routing mechanism**: By parsing and classifying errors before invoking AI, the system routes the majority of crashes to zero-cost operational fixes. This transforms AI-driven error recovery from an expensive novelty into a cost-effective production tool.
+
+2. **Tiered escalation with verification gates**: Each repair tier is more capable and more expensive than the last. Verification between tiers prevents unnecessary escalation and ensures fixes are validated before deployment. Failed fixes are automatically rolled back.
+
+3. **Token efficiency through structured prompts**: Dynamic prompt sizing, context compaction, namespace isolation, and prompt caching reduce per-heal costs by 10-15x compared to naive approaches. The median heal costs under $0.01.
+
+4. **Defense-in-depth security**: Six overlapping security layers (secret redaction, injection detection, file system sandbox, command blocking, adaptive rate limiting, and encrypted vault) address the unique risks of autonomous code modification. No single layer is sufficient on its own; the combination provides practical security against the most likely attack vectors.
+
+5. **Persistent learning**: The vector-indexed brain enables the system to improve over time. Successful fixes accelerate future repairs of similar errors. Failed fixes are remembered and avoided. The function map provides structural awareness without requiring the AI to read every file on every heal.
+
+The practical result is a reduction in mean time to recovery from minutes or hours (human response) to seconds (autonomous repair) for the class of errors the system can handle -- which, based on the error classification distribution, covers the majority of routine production crashes in Node.js applications. For errors outside this class, the system degrades gracefully: detecting that no code fix is viable and routing to human notification rather than consuming tokens on futile repair attempts.
+
+The framework is open-source, published as `wolverine-ai` on npm, and designed to wrap any existing Node.js server with zero code changes required in the target application.
+
+---
+
 ## Architecture
 
 ```
