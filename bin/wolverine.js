@@ -39,6 +39,8 @@ ${chalk.bold("Options:")}
   --info           Show system info and exit
   --init           Scan server/ and build context map (routes, DB, config, deps)
   --restart        Full restart (kills parent + children, re-launches fresh)
+  --claw           Launch wolverine-claw (agentic agent mode)
+  --setup-claw     Guided setup for wolverine-claw (detects OpenClaw, merges config)
   --x402-info      Show x402 payment configuration
 
 ${chalk.bold("Configuration:")}
@@ -241,6 +243,31 @@ if (args.includes("--backups")) {
     console.log("");
   }
   process.exit(0);
+}
+
+// --setup-claw: run claw setup wizard
+if (args.includes("--setup-claw")) {
+  const { setup } = require("../src/claw/setup");
+  const dryRun = args.includes("--dry-run");
+  (async () => {
+    const result = await setup(process.cwd(), { dryRun });
+    process.exit(result.success ? 0 : 1);
+  })();
+  return;
+}
+
+// --claw: launch wolverine-claw instead of server
+if (args.includes("--claw")) {
+  const clawArgs = args.filter(a => a !== "--claw");
+  const { ClawRunner } = require("../src/claw/claw-runner");
+  console.log(chalk.blue.bold("\n  🐾 Wolverine Claw — Agentic Agent with Self-Healing\n"));
+  const clawRunner = new ClawRunner({ cwd: process.cwd() });
+
+  process.on("SIGINT", () => { clawRunner.stop(); process.exit(0); });
+  process.on("SIGTERM", () => { clawRunner.stop(); process.exit(0); });
+
+  clawRunner.start();
+  return;
 }
 
 const scriptPath = args.find(a => !a.startsWith("--")) || "server/index.js";

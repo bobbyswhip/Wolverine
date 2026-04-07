@@ -1615,6 +1615,177 @@ AI summary generated with CHAT_MODEL, secrets redacted, optional webhook deliver
 
 ---
 
+## Wolverine Claw
+
+Agentic AI agent mode powered by [OpenClaw](https://github.com/openclaw/openclaw) with Wolverine self-healing. Run an always-on AI assistant that automatically recovers from crashes, heals its own errors, and learns from past fixes.
+
+### What It Does
+
+Wolverine Claw wraps the OpenClaw gateway (WebSocket control plane + Pi agent runtime) in Wolverine's process manager. When the agent crashes or encounters errors, Wolverine's AI heal pipeline kicks in — diagnoses the error, generates a fix, verifies it, and restarts. The agent gets access to Wolverine's brain (semantic memory), backup system (workspace snapshots), and self-healing tools.
+
+### Setup (Existing OpenClaw Users)
+
+If you already have OpenClaw installed, the setup wizard detects your config and merges it:
+
+```bash
+npm install wolverine-ai
+wolverine-claw --setup
+```
+
+The wizard will:
+1. Detect your OpenClaw installation and `~/.openclaw/config.yml`
+2. Merge your gateway port, model, channels, and security settings with wolverine defaults
+3. Scaffold `wolverine-claw/` with merged config
+4. Validate Node version, API keys, and dependencies
+5. Show next steps
+
+Preview without changes: `wolverine-claw --setup --dry`
+
+### Setup (Fresh Install)
+
+```bash
+git clone https://github.com/bobbyswhip/Wolverine.git
+cd Wolverine
+npm install
+cp .env.example .env.local
+# Edit .env.local — add ANTHROPIC_API_KEY or OPENAI_API_KEY
+wolverine-claw --setup
+npm run claw
+```
+
+### Commands
+
+```bash
+# Start
+npm run claw              # Start with self-healing
+npm run claw:direct       # Start without healing (debugging)
+wolverine --claw          # Same as npm run claw, via main CLI
+
+# Setup & Config
+wolverine-claw --setup    # Guided onboarding wizard
+wolverine-claw --info     # Show configuration and status
+wolverine --setup-claw    # Same setup, from main CLI
+
+# Backups
+wolverine --backup "reason"    # Snapshot workspace
+wolverine --list-backups       # Show all snapshots
+wolverine --rollback-latest    # Restore most recent
+```
+
+### Architecture
+
+```
+wolverine-claw/
+├── config/
+│   └── settings.json              # Gateway, agent, channels, healing, security
+├── index.js                       # Entry point — bootstraps OpenClaw gateway
+├── plugins/
+│   └── wolverine-integration.js   # 7 wolverine tools for the agent
+├── skills/                        # Custom user skills
+└── workspace/                     # Sandboxed agent working directory
+
+src/claw/
+├── claw-runner.js                 # Process manager with healing pipeline
+└── setup.js                       # Setup wizard (detect, merge, scaffold, validate)
+
+bin/wolverine-claw.js              # CLI entry point
+```
+
+### How It Works
+
+1. `ClawRunner` spawns `wolverine-claw/index.js` as a child process with IPC
+2. `index.js` loads OpenClaw via `require("openclaw")` (SDK mode) or falls back to `npx openclaw gateway` (CLI mode)
+3. The wolverine integration plugin injects 7 tools into the OpenClaw agent
+4. On crash/error, `ClawRunner` catches via IPC or exit event
+5. Wolverine's AI heal pipeline runs: diagnose → backup → fix → verify → restart
+6. Gateway health monitored via TCP probe on WebSocket port every 30s
+
+### Wolverine Tools for the Agent
+
+The integration plugin gives the OpenClaw agent access to wolverine capabilities:
+
+| Tool | What It Does |
+|------|-------------|
+| `wolverine_backup` | Create a workspace snapshot |
+| `wolverine_rollback` | Restore to a previous backup |
+| `wolverine_brain_search` | Search semantic memory for past fixes and patterns |
+| `wolverine_brain_learn` | Store new learnings in the brain |
+| `wolverine_health` | Get system health status (memory, uptime, backups) |
+| `wolverine_list_backups` | List all available snapshots |
+| `wolverine_self_heal` | Trigger the heal pipeline on a specific error |
+
+### Configuration
+
+Edit `wolverine-claw/config/settings.json`:
+
+```json
+{
+  "gateway": { "port": 18789, "host": "127.0.0.1" },
+  "agent": { "model": "claude-sonnet-4-6", "maxTurns": 25 },
+  "channels": {
+    "terminal": { "enabled": true },
+    "discord": { "enabled": false, "token": "" },
+    "slack": { "enabled": false, "botToken": "", "appToken": "" },
+    "telegram": { "enabled": false, "botToken": "" }
+  },
+  "healing": {
+    "enabled": true,
+    "maxHealsPerWindow": 5,
+    "windowMs": 300000,
+    "loopMaxAttempts": 3
+  },
+  "skills": {
+    "codingAgent": { "enabled": true, "sandbox": true },
+    "browserControl": { "enabled": false },
+    "cron": { "enabled": true, "maxJobs": 10 }
+  },
+  "workspace": { "path": "wolverine-claw/workspace" },
+  "security": {
+    "dmPairing": true,
+    "sandbox": true,
+    "blockedCommands": ["rm -rf /", "format", "shutdown"]
+  }
+}
+```
+
+Channel tokens go in `.env.local` (never in settings.json):
+
+```bash
+# wolverine-claw channel tokens
+DISCORD_BOT_TOKEN=your-token
+SLACK_BOT_TOKEN=xoxb-your-token
+SLACK_APP_TOKEN=xapp-your-token
+TELEGRAM_BOT_TOKEN=123456:ABC-your-token
+```
+
+### Self-Healing Pipeline
+
+Same pipeline as server healing, adapted for the claw environment:
+
+```
+Claw crashes or IPC error received
+  → Empty stderr? → Just restart ($0.00)
+  → Rate limit: 5 heals per 5min
+  → Loop guard: 3 failed heals on same error → stop + bug report
+  → AI heal: diagnose → backup → fix → verify → restart
+  → Success: retry count reset, learning stored in brain
+  → Fail: rollback to pre-heal backup, next retry
+  → Max retries: rollback to startup snapshot, stop
+```
+
+### Editable Scope
+
+The claw agent can only modify files in `wolverine-claw/`. Protected paths:
+
+- `src/` — wolverine framework code
+- `bin/` — CLI entry points
+- `server/` — user server code
+- `node_modules/` — dependencies
+- `.env`, `.env.local` — secrets
+- `.wolverine/vault/` — encrypted keys
+
+---
+
 ## License
 
 MIT

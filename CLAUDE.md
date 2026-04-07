@@ -4,13 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Is
 
-Wolverine is a self-healing Node.js server framework. It wraps a server process, catches crashes AND caught 500 errors, diagnoses them with AI (OpenAI or Anthropic), generates fixes, verifies them, and restarts — automatically. Published as `wolverine-ai` on npm (v6.0.0). 32 agent tools, 7 skills, ~50 injection patterns, adaptive rate limiter, encrypted vault, x402 paid APIs.
+Wolverine is a self-healing Node.js server framework. It wraps a server process, catches crashes AND caught 500 errors, diagnoses them with AI (OpenAI or Anthropic), generates fixes, verifies them, and restarts — automatically. Published as `wolverine-ai` on npm (v6.2.0). 32 agent tools, 7 skills, ~50 injection patterns, adaptive rate limiter, encrypted vault, x402 paid APIs, **Wolverine Claw** (OpenClaw agentic agent with self-healing).
 
 ## Commands
 
 ```bash
 npm start                        # Run server/index.js under wolverine (self-healing)
 npm run server                   # Run server/index.js directly (no healing)
+npm run claw                     # Run wolverine-claw with self-healing
+npm run claw:direct              # Run wolverine-claw without healing
+npm run claw:info                # Show claw configuration
+wolverine-claw --setup           # Guided claw onboarding wizard
+wolverine --setup-claw           # Same setup, from main CLI
+wolverine --claw                 # Launch claw via main CLI
 npm run test:pentest             # Security scan for secret leakage
 npm run demo:list                # List demo scenarios
 npm run demo -- 01               # Run specific demo
@@ -140,6 +146,37 @@ Heartbeats every 60s. Stable instance ID (persisted to `.wolverine/instance-id`)
 
 The startup backup system snapshots `server/` before first spawn. If the server crashes immediately after a bad update, wolverine auto-rollbacks to the startup snapshot after max retries.
 
+## Wolverine Claw (OpenClaw Integration)
+
+Agentic AI agent mode — wraps OpenClaw gateway in Wolverine's self-healing process manager.
+
+### Claw Pipeline
+
+```
+wolverine-claw --setup (or wolverine --setup-claw)
+  → Detect OpenClaw (npm, global, ~/.openclaw/config.yml)
+  → Merge OpenClaw config with wolverine defaults
+  → Scaffold wolverine-claw/ (config, plugins, workspace)
+  → Validate (Node 22+, API keys, entry point, plugin)
+  → Ready: npm run claw
+
+npm run claw (or wolverine --claw)
+  → ClawRunner spawns wolverine-claw/index.js with IPC
+  → index.js loads OpenClaw SDK or falls back to npx openclaw
+  → Plugin registers 7 wolverine tools into agent
+  → Gateway health probed via TCP every 30s
+  → On crash/error: IPC → heal pipeline → backup → AI fix → verify → restart
+```
+
+### Key Constraints (Claw-specific)
+
+- **Gateway port is 18789 by default.** Configurable in wolverine-claw/config/settings.json.
+- **Workspace sandboxed to `wolverine-claw/workspace/`.** Agent cannot write outside.
+- **Same heal limits as server:** 5 heals per 5min, loop guard at 3 attempts.
+- **OpenClaw as optional dep.** Falls back to `npx openclaw gateway` if not installed.
+- **Channel tokens in `.env.local` only.** Never in settings.json.
+- **wolverine-claw/ is protected from auto-update.** Only src/ and bin/ are updated.
+
 ## Configuration
 
 - **Secrets:** `.env.local` (OPENAI_API_KEY, ANTHROPIC_API_KEY, WOLVERINE_ADMIN_KEY)
@@ -164,3 +201,8 @@ The startup backup system snapshots `server/` before first spawn. If the server 
 | `src/skills/update.js` | Safe upgrade, emergency backup, brain seed merge |
 | `src/platform/auto-update.js` | Version lock, dep verification, max 1 attempt per boot |
 | `server/config/settings.json` | Provider selection, 3 model presets, all config |
+| `src/claw/claw-runner.js` | Claw process manager, IPC, gateway probe, heal pipeline |
+| `src/claw/setup.js` | Claw setup wizard: detect OpenClaw, merge config, scaffold |
+| `wolverine-claw/index.js` | Claw entry point, OpenClaw gateway bootstrap |
+| `wolverine-claw/config/settings.json` | Claw config: gateway, channels, agent, healing |
+| `wolverine-claw/plugins/wolverine-integration.js` | 7 wolverine tools for OpenClaw agent |

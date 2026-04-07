@@ -278,6 +278,26 @@ const SEED_DOCS = [
     metadata: { topic: "auto-update" },
   },
   {
+    text: "Wolverine Claw: agentic AI agent mode powered by OpenClaw with Wolverine self-healing. Wraps the OpenClaw gateway (WebSocket control plane + Pi agent runtime) in Wolverine's process manager for automatic crash recovery, AI-powered healing, and workspace backup. Architecture: wolverine-claw/index.js bootstraps OpenClaw (tries require('openclaw') SDK first, falls back to npx openclaw CLI). ClawRunner (src/claw/claw-runner.js) spawns the claw process with IPC, monitors for crashes and gateway errors, triggers heal pipeline on failures. Gateway health monitored via TCP probe on WebSocket port (default 18789). Config: wolverine-claw/config/settings.json with gateway, agent, channels, healing, skills, workspace, security sections. CLI: wolverine-claw --setup (guided onboarding), npm run claw (start with healing), wolverine --claw (same via main CLI), wolverine-claw --direct (no healing). Workspace: wolverine-claw/workspace/ is the sandboxed agent working directory.",
+    metadata: { topic: "wolverine-claw" },
+  },
+  {
+    text: "Wolverine Claw setup: guided onboarding for OpenClaw users (wolverine-claw --setup). 8-step flow: (1) Detect environment — Node version, OpenClaw installation (checks local node_modules, global install, package.json dep, ~/.openclaw/config.yml), API keys, wolverine core. (2) Abort if Node < 22. (3) Merge config — reads user's OpenClaw YAML config (gateway port, model, channels, security) and overlays onto wolverine-claw defaults. OpenClaw values win, wolverine fills gaps. (4) Scaffold — creates wolverine-claw/ with config/settings.json, plugins/wolverine-integration.js, workspace/, skills/. Never overwrites existing files. (5) Environment — ensures .env.local has claw-specific key templates (DISCORD_BOT_TOKEN, SLACK_BOT_TOKEN, etc). (6) Install — npm install openclaw --save-optional (falls back to npx). (7) Validate — 7 checks: Node, OpenClaw, API keys, config, entry point, plugin, wolverine core. (8) Next steps. Also available as wolverine --setup-claw from main CLI. Dry run: wolverine-claw --setup --dry.",
+    metadata: { topic: "wolverine-claw-setup" },
+  },
+  {
+    text: "Wolverine Claw integration plugin (wolverine-claw/plugins/wolverine-integration.js): registers 7 wolverine tools into the OpenClaw agent toolkit. Tools: wolverine_backup (create workspace snapshot), wolverine_rollback (restore to previous backup), wolverine_brain_search (semantic search of wolverine's memory for past fixes/patterns), wolverine_brain_learn (store new learnings in brain), wolverine_health (system health status), wolverine_list_backups (list all snapshots), wolverine_self_heal (trigger heal pipeline on a specific error). Plugin hooks into gateway events (error, agent:error, skill:error) to report errors to wolverine parent via IPC for automatic healing. Sends heartbeat every 30s. Registered via gateway.registerTools(), gateway.addTools(), or gateway.skills.register() depending on OpenClaw API version.",
+    metadata: { topic: "wolverine-claw-plugin" },
+  },
+  {
+    text: "Wolverine Claw configuration (wolverine-claw/config/settings.json): gateway (port 18789, host 127.0.0.1), agent (model claude-sonnet-4-6, maxTurns 25, timeoutMs 120000), models (reasoning/coding/chat/embedding per-task), channels (terminal enabled by default, discord/slack/telegram/whatsapp configurable with tokens in .env.local), healing (enabled, healTimeoutMs 300000, maxHealsPerWindow 5, loopMaxAttempts 3), skills (codingAgent with sandbox+allowedPaths, browserControl, cron, canvas), workspace (path wolverine-claw/workspace, maxFileSizeMB 50), security (dmPairing true, sandbox true, blockedCommands, maxConcurrentSessions 5), logging, remoteAccess (disabled, tailscale method), backup (stabilityMs 1800000, retentionDays 7). Editable scope: only wolverine-claw/ files can be modified by the claw agent. src/, bin/, server/ are protected.",
+    metadata: { topic: "wolverine-claw-config" },
+  },
+  {
+    text: "Wolverine Claw channels: OpenClaw supports 20+ messaging platforms. Configure in wolverine-claw/config/settings.json channels section. Terminal: always enabled (local CLI). Discord: set enabled:true, add DISCORD_BOT_TOKEN to .env.local. Slack: set enabled:true, add SLACK_BOT_TOKEN + SLACK_APP_TOKEN to .env.local. Telegram: set enabled:true, add TELEGRAM_BOT_TOKEN to .env.local. WhatsApp: set enabled:true, requires WhatsApp Business API setup. Each channel's tokens go in .env.local (never in settings.json). The claw setup wizard (--setup) detects existing OpenClaw channel config from ~/.openclaw/config.yml and merges it automatically.",
+    metadata: { topic: "wolverine-claw-channels" },
+  },
+  {
     text: "Loop guard: detects infinite heal loops and stops burning tokens. Tracks heal attempts by error signature — if 3+ heals fail on same error in 10 minutes, STOPS healing and generates a bug report. Bug report sent to platform backend for human review (security scanned for injection/secrets first). 30-minute cooldown after bug report filed. Process dedup via PID file (.wolverine/wolverine.pid) ensures only one wolverine instance runs — kills old process on startup. Config: WOLVERINE_LOOP_MAX_ATTEMPTS (default 3), WOLVERINE_LOOP_WINDOW_MS (default 600000).",
     metadata: { topic: "loop-guard" },
   },

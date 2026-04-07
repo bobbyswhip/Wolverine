@@ -1,0 +1,115 @@
+{
+  "_": "Wolverine Claw Configuration — OpenClaw agentic agent powered by Wolverine self-healing. Docs: https://github.com/bobbyswhip/Wolverine",
+
+  "_gateway": "OpenClaw gateway settings. port: WebSocket control plane port. host: bind address (127.0.0.1 = local only, 0.0.0.0 = all interfaces).",
+  "gateway": {
+    "port": 18789,
+    "host": "127.0.0.1"
+  },
+
+  "_agent": "Pi agent runtime settings. model: default LLM for agent tasks. maxTurns: max tool-use iterations per request. timeoutMs: max time per agent call.",
+  "agent": {
+    "model": "claude-sonnet-4-6",
+    "maxTurns": 25,
+    "timeoutMs": 120000
+  },
+
+  "_models": "AI models for different claw tasks. Provider auto-detected from name (claude-* = Anthropic, gpt-* = OpenAI).",
+  "models": {
+    "reasoning": "claude-sonnet-4-6",
+    "coding": "claude-sonnet-4-6",
+    "chat": "claude-sonnet-4-6",
+    "embedding": "text-embedding-3-small"
+  },
+
+  "_channels": "Messaging channel integrations. Enable channels by adding their config. Each channel needs its own API keys in .env.local.",
+  "channels": {
+    "terminal": {
+      "enabled": true
+    },
+    "discord": {
+      "enabled": false,
+      "token": "",
+      "allowedChannels": []
+    },
+    "slack": {
+      "enabled": false,
+      "botToken": "",
+      "appToken": "",
+      "allowedChannels": []
+    },
+    "telegram": {
+      "enabled": false,
+      "botToken": "",
+      "allowedUsers": []
+    },
+    "whatsapp": {
+      "enabled": false
+    }
+  },
+
+  "_healing": "Wolverine self-healing settings for the claw process. Same pipeline as server healing.",
+  "healing": {
+    "enabled": true,
+    "healTimeoutMs": 300000,
+    "maxHealsPerWindow": 5,
+    "windowMs": 300000,
+    "loopMaxAttempts": 3,
+    "loopWindowMs": 600000
+  },
+
+  "_skills": "OpenClaw skills configuration. Enable/disable built-in and custom skills.",
+  "skills": {
+    "codingAgent": {
+      "enabled": true,
+      "defaultAgent": "pi",
+      "sandbox": true,
+      "allowedPaths": ["wolverine-claw/workspace/"]
+    },
+    "browserControl": {
+      "enabled": false
+    },
+    "cron": {
+      "enabled": true,
+      "maxJobs": 10
+    },
+    "canvas": {
+      "enabled": false
+    }
+  },
+
+  "_workspace": "Working directory for the claw agent. Files created/modified by the agent go here. Protected from wolverine auto-update.",
+  "workspace": {
+    "path": "wolverine-claw/workspace",
+    "maxFileSizeMB": 50,
+    "allowedExtensions": ["*"]
+  },
+
+  "_security": "Security settings for the claw agent. dmPairing: require pairing for unknown senders. sandbox: restrict agent file access.",
+  "security": {
+    "dmPairing": true,
+    "sandbox": true,
+    "blockedCommands": ["rm -rf /", "format", "shutdown", "reboot"],
+    "maxConcurrentSessions": 5
+  },
+
+  "_logging": "Logging configuration.",
+  "logging": {
+    "level": "info",
+    "logFile": ".wolverine/claw.log",
+    "maxLogSizeMB": 50
+  },
+
+  "_remoteAccess": "Remote access via Tailscale or SSH tunnel. Disabled by default for security.",
+  "remoteAccess": {
+    "enabled": false,
+    "method": "tailscale"
+  },
+
+  "_backup": "Backup settings for claw workspace and config.",
+  "backup": {
+    "enabled": true,
+    "stabilityMs": 1800000,
+    "retentionDays": 7
+  }
+}
