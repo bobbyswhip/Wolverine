@@ -523,6 +523,79 @@ function ensureEnvFile(cwd, env) {
 }
 
 /**
+ * Ensure wolverine-ai is installed as a dependency.
+ * Skips if we're running from the wolverine repo itself.
+ */
+function ensureWolverineDep(cwd) {
+  // If we're inside the wolverine repo, skip
+  const pkgPath = path.join(cwd, "package.json");
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+    if (pkg.name === "wolverine-ai") {
+      return { installed: true, isRepo: true, alreadyPresent: true };
+    }
+    // Already a dependency?
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    if (deps["wolverine-ai"]) {
+      return { installed: true, alreadyPresent: true };
+    }
+  } catch {}
+
+  // Install it
+  if (!fs.existsSync(pkgPath)) {
+    return { installed: false, reason: "no package.json" };
+  }
+
+  try {
+    console.log(chalk.gray("  Installing wolverine-ai..."));
+    execSync("npm install wolverine-ai@latest 2>&1", {
+      cwd,
+      encoding: "utf-8",
+      timeout: 120000,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    return { installed: true, alreadyPresent: false };
+  } catch (err) {
+    return { installed: false, reason: `npm install failed: ${err.message?.split("\n")[0]}` };
+  }
+}
+
+/**
+ * Add claw-related npm scripts to the user's package.json.
+ */
+function addClawScripts(cwd) {
+  const pkgPath = path.join(cwd, "package.json");
+  if (!fs.existsSync(pkgPath)) return { added: 0 };
+
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+    if (!pkg.scripts) pkg.scripts = {};
+
+    const toAdd = {
+      "claw": "wolverine-claw",
+      "claw:direct": "wolverine-claw --direct",
+      "claw:info": "wolverine-claw --info",
+    };
+
+    let added = 0;
+    for (const [name, cmd] of Object.entries(toAdd)) {
+      if (!pkg.scripts[name]) {
+        pkg.scripts[name] = cmd;
+        added++;
+      }
+    }
+
+    if (added > 0) {
+      fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
+    }
+
+    return { added, skipped: added === 0 };
+  } catch {
+    return { added: 0 };
+  }
+}
+
+/**
  * Ensure openclaw is installed as a dependency.
  */
 function ensureOpenClawDep(cwd) {
@@ -781,9 +854,21 @@ async function setup(cwd, options = {}) {
 
   log("");
 
-  // ── Step 6: Install OpenClaw ────────────────────────────────
+  // ── Step 6: Install dependencies ─────────────────────────────
+  log(chalk.bold("  Dependencies...\n"));
+
+  // 6a: Install wolverine-ai itself if not already a dep
+  const wolverineDepResult = ensureWolverineDep(cwd);
+  if (wolverineDepResult.installed) {
+    log(chalk.green(`  ✅ wolverine-ai ${wolverineDepResult.alreadyPresent ? "already installed" : "installed"}`));
+  } else if (wolverineDepResult.isRepo) {
+    log(chalk.gray("  ○ wolverine-ai (running from repo)"));
+  } else {
+    log(chalk.yellow(`  ⚠️  wolverine-ai: ${wolverineDepResult.reason}`));
+  }
+
+  // 6b: Install openclaw if not already present
   if (!env.openclaw.localInstall) {
-    log(chalk.bold("  Dependencies...\n"));
     const depResult = ensureOpenClawDep(cwd);
     if (depResult.installed) {
       log(chalk.green(`  ✅ openclaw ${depResult.alreadyPresent ? "already installed" : "installed"}`));
@@ -793,8 +878,17 @@ async function setup(cwd, options = {}) {
         log(chalk.gray(`     ${depResult.fallback}`));
       }
     }
-    log("");
   }
+
+  // 6c: Add claw npm scripts to user's package.json
+  const scriptsResult = addClawScripts(cwd);
+  if (scriptsResult.added > 0) {
+    log(chalk.green(`  ✅ Added ${scriptsResult.added} npm scripts (claw, claw:info, claw:direct)`));
+  } else if (scriptsResult.skipped) {
+    log(chalk.gray("  ○ npm scripts already present"));
+  }
+
+  log("");
 
   // ── Step 7: Validate ───────────────────────────────────────
   log(chalk.bold("  Validating...\n"));
@@ -924,4 +1018,6 @@ module.exports = {
   validate,
   ensureEnvFile,
   ensureOpenClawDep,
+  ensureWolverineDep,
+  addClawScripts,
 };

@@ -179,7 +179,26 @@ for (const check of checks) {
   }
 }
 
-// ── Test 5: Idempotency (re-run scaffold) ───────────────────────
+// ── Test 5: npm scripts injection ────────────────────────────
+
+console.log("\n  --- npm Scripts ---");
+
+const { addClawScripts } = require("../src/claw/setup");
+const scriptsResult = addClawScripts(tmpDir);
+assert(scriptsResult.added === 3, `Added ${scriptsResult.added} npm scripts`);
+
+// Verify package.json was updated
+const updatedPkg = JSON.parse(fs.readFileSync(path.join(tmpDir, "package.json"), "utf-8"));
+assertEq(updatedPkg.scripts.claw, "wolverine-claw", "claw script added");
+assertEq(updatedPkg.scripts["claw:direct"], "wolverine-claw --direct", "claw:direct script added");
+assertEq(updatedPkg.scripts["claw:info"], "wolverine-claw --info", "claw:info script added");
+
+// Idempotency — running again shouldn't add duplicates
+const scriptsResult2 = addClawScripts(tmpDir);
+assertEq(scriptsResult2.added, 0, "No duplicate scripts on re-run");
+assert(scriptsResult2.skipped === true, "Scripts skipped on re-run");
+
+// ── Test 6: Idempotency (re-run scaffold) ────────────────────────
 
 console.log("\n  --- Idempotency ---");
 
@@ -192,7 +211,7 @@ assertEq(scaffoldResult2.errors.length, 0, "Second scaffold has no errors");
 const writtenConfig2 = JSON.parse(fs.readFileSync(path.join(tmpDir, "wolverine-claw", "config", "settings.json"), "utf-8"));
 assertEq(writtenConfig2.gateway.port, 19222, "Config preserved on re-scaffold");
 
-// ── Test 6: Live AI call (optional) ─────────────────────────────
+// ── Test 7: Live AI call (optional) ─────────────────────────────
 
 const liveMode = process.argv.includes("--live");
 if (liveMode) {
