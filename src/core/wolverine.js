@@ -32,7 +32,9 @@ const { getSummary: getServerContextSummary } = require("./server-context");
  * The engine tries fast path first. If that fails verification, it escalates to the agent.
  */
 async function heal(opts) {
-  const HEAL_TIMEOUT_MS = parseInt(process.env.WOLVERINE_HEAL_TIMEOUT_MS, 10) || 300000; // 5 min
+  const { loadConfig } = require("./config");
+  const _cfg = loadConfig();
+  const HEAL_TIMEOUT_MS = _cfg.heal?.healTimeoutMs || 300000;
   try {
     return await Promise.race([
       _healImpl(opts),

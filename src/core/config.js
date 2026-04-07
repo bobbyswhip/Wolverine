@@ -98,6 +98,36 @@ function loadConfig() {
       windowMs: parseInt(process.env.WOLVERINE_ERROR_WINDOW_MS, 10) || fileConfig.errorMonitor?.windowMs || 30000,
       cooldownMs: parseInt(process.env.WOLVERINE_ERROR_COOLDOWN_MS, 10) || fileConfig.errorMonitor?.cooldownMs || 60000,
     },
+
+    heal: {
+      healTimeoutMs:    parseInt(process.env.WOLVERINE_HEAL_TIMEOUT_MS, 10)         || fileConfig.heal?.healTimeoutMs    || 300000,
+      globalMaxHeals:   parseInt(process.env.WOLVERINE_RATE_MAX_GLOBAL_HEALS, 10)   || fileConfig.heal?.globalMaxHeals   || 5,
+      globalWindowMs:   parseInt(process.env.WOLVERINE_RATE_GLOBAL_WINDOW_MS, 10)   || fileConfig.heal?.globalWindowMs   || 300000,
+      loopMaxAttempts:  parseInt(process.env.WOLVERINE_LOOP_MAX_ATTEMPTS, 10)       || fileConfig.heal?.loopMaxAttempts  || 3,
+      loopWindowMs:     parseInt(process.env.WOLVERINE_LOOP_WINDOW_MS, 10)          || fileConfig.heal?.loopWindowMs     || 600000,
+    },
+
+    agent: {
+      aiCallTimeoutMs: parseInt(process.env.WOLVERINE_AI_CALL_TIMEOUT_MS, 10) || fileConfig.agent?.aiCallTimeoutMs || 90000,
+      maxTurns:        parseInt(process.env.WOLVERINE_AGENT_MAX_TURNS, 10)    || fileConfig.agent?.maxTurns        || 8,
+      tokenBudget: {
+        simple:   fileConfig.agent?.tokenBudget?.simple   || 20000,
+        moderate: fileConfig.agent?.tokenBudget?.moderate  || 50000,
+        complex:  fileConfig.agent?.tokenBudget?.complex   || 100000,
+      },
+    },
+
+    adaptiveLimiter: {
+      thresholdYellow: fileConfig.adaptiveLimiter?.thresholdYellow || 70,
+      thresholdRed:    fileConfig.adaptiveLimiter?.thresholdRed    || 85,
+      reserveMB:       fileConfig.adaptiveLimiter?.reserveMB       || 200,
+    },
+
+    backup: {
+      stabilityMs:   fileConfig.backup?.stabilityMs   || 1800000,
+      retentionDays: fileConfig.backup?.retentionDays  || 7,
+      maxFileSizeMB: fileConfig.backup?.maxFileSizeMB  || 10,
+    },
   };
 
   // Migrate old settings.json to new format + ensure defaults

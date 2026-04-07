@@ -69,8 +69,8 @@ class WolverineRunner {
       windowMs: cfg.rateLimiting.windowMs,
       minGapMs: cfg.rateLimiting.minGapMs,
       maxTokensPerHour: cfg.rateLimiting.maxTokensPerHour,
-      maxGlobalHealsPerWindow: parseInt(process.env.WOLVERINE_RATE_MAX_GLOBAL_HEALS, 10) || 5,
-      globalWindowMs: parseInt(process.env.WOLVERINE_RATE_GLOBAL_WINDOW_MS, 10) || 300000,
+      maxGlobalHealsPerWindow: cfg.heal?.globalMaxHeals || 5,
+      globalWindowMs: cfg.heal?.globalWindowMs || 300000,
     });
     this.backupManager = new BackupManager(this.cwd);
     this.logger = new EventLogger(this.cwd);

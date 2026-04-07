@@ -1,13 +1,11 @@
 {
   "_": "Wolverine Server Configuration — edit these settings to customize your server. Docs: https://github.com/bobbyswhip/Wolverine",
-
   "app": {
     "name": "My Server",
     "version": "1.0.0",
     "env": "development"
   },
-
-  "_models": "AI models for each task. Provider auto-detected from name (claude-* = Anthropic, gpt-* = OpenAI). Using one model across all roles maximizes prompt cache hits. See wolverine dashboard at localhost:PORT+1/analytics for per-role cost/speed metrics.",
+  "_models": "AI models for each task. Provider auto-detected from name (claude-* = Anthropic, gpt-* = OpenAI). Using one model across all roles maximizes prompt cache hits. Dashboard at localhost:PORT+1/analytics shows per-role cost/speed.",
   "models": {
     "reasoning": "claude-sonnet-4-6",
     "coding": "claude-sonnet-4-6",
@@ -18,31 +16,44 @@
     "compacting": "claude-sonnet-4-6",
     "research": "claude-sonnet-4-6"
   },
-
   "_embedding": "Vector embedding model for brain memory. Requires OPENAI_API_KEY.",
   "embedding": "text-embedding-3-small",
-
-  "_server": "port: server listen port | maxRetries: consecutive crashes before giving up | maxMemoryMB: OOM threshold",
+  "_server": "port: listen port (3000) | maxRetries: crashes before giving up | maxMemoryMB: OOM kill threshold",
   "server": {
     "port": 3000,
     "maxRetries": 3,
     "maxMemoryMB": 512
   },
-
+  "_heal": "Controls the self-healing pipeline. healTimeoutMs: max time for entire heal attempt. globalMaxHeals/globalWindowMs: rate limit across ALL errors (prevents runaway costs). loopMaxAttempts/loopWindowMs: same-error loop guard (stops after N failures on the same error).",
+  "heal": {
+    "healTimeoutMs": 300000,
+    "globalMaxHeals": 5,
+    "globalWindowMs": 300000,
+    "loopMaxAttempts": 3,
+    "loopWindowMs": 600000
+  },
+  "_agent": "Controls the AI agent. aiCallTimeoutMs: max time per AI API call. maxTurns: agent tool-use iterations per heal. tokenBudget: max tokens per heal attempt (simple/moderate/complex auto-selected).",
+  "agent": {
+    "aiCallTimeoutMs": 90000,
+    "maxTurns": 8,
+    "tokenBudget": {
+      "simple": 20000,
+      "moderate": 50000,
+      "complex": 100000
+    }
+  },
   "_telemetry": "Heartbeat reports server health to the dashboard. Disable for fully offline servers.",
   "telemetry": {
     "enabled": true,
     "heartbeatIntervalMs": 60000
   },
-
-  "_rateLimiting": "AI call budget. Prevents runaway costs from heal loops.",
+  "_rateLimiting": "AI call budget per window. Prevents runaway costs from heal loops.",
   "rateLimiting": {
     "maxCallsPerWindow": 32,
     "windowMs": 100000,
     "minGapMs": 5000,
     "maxTokensPerHour": 1000000
   },
-
   "_healthCheck": "Probes server liveness. failThreshold consecutive failures trigger a heal. startDelayMs gives the server time to boot.",
   "healthCheck": {
     "intervalMs": 15000,
@@ -50,36 +61,50 @@
     "failThreshold": 3,
     "startDelayMs": 10000
   },
-
-  "_errorMonitor": "Tracks caught 500 errors per route. defaultThreshold: how many 500s before triggering a heal. cooldownMs: minimum time between heals on the same route.",
+  "_errorMonitor": "Tracks caught 500 errors per route. defaultThreshold: how many 500s trigger a heal. cooldownMs: min time between heals on same route.",
   "errorMonitor": {
     "defaultThreshold": 1,
     "windowMs": 30000,
     "cooldownMs": 60000
   },
-
+  "_adaptiveLimiter": "CPU/memory-based request throttling. thresholdYellow: start shedding 30% of requests. thresholdRed: reject all non-essential. reserveMB: memory reserved for heal tools.",
+  "adaptiveLimiter": {
+    "thresholdYellow": 70,
+    "thresholdRed": 85,
+    "reserveMB": 200
+  },
+  "_backup": "Server snapshots. stabilityMs: time before backup is marked STABLE. retentionDays: auto-delete old backups. maxFileSizeMB: skip files larger than this.",
+  "backup": {
+    "stabilityMs": 1800000,
+    "retentionDays": 7,
+    "maxFileSizeMB": 10
+  },
   "_autoUpdate": "Auto-updates wolverine framework from git. Only updates src/ and bin/ — never touches server/ code.",
   "autoUpdate": {
     "enabled": false,
     "intervalMs": 300000
   },
-
   "platform": {
     "apiKey": "",
-    "cors": ["http://localhost:3000"]
+    "cors": [
+      "http://localhost:3000"
+    ]
   },
-
   "_dashboard": "Dashboard serves on PORT+1. Set WOLVERINE_ADMIN_KEY in .env.local for the agent command interface.",
   "dashboard": {},
-
   "cors": {
     "enabled": true,
-    "origins": ["http://localhost:3000"]
+    "origins": [
+      "http://localhost:3000"
+    ]
   },
-
   "logging": {
     "level": "info",
     "requests": true,
     "responseTime": true
+  },
+  "cluster": {
+    "enabled": false,
+    "workers": 0
   }
 }
