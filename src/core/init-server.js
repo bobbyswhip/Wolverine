@@ -89,4 +89,47 @@ function ensureX402Deps(cwd) {
   }
 }
 
-module.exports = { initServer, ensureX402Deps };
+/**
+ * Run security audit on startup — detect and auto-fix CVEs.
+ * Only runs if node_modules exists. Non-blocking (doesn't prevent startup).
+ */
+function securityAudit(cwd) {
+  if (!fs.existsSync(path.join(cwd, "node_modules"))) return;
+
+  try {
+    const { audit } = require("../skills/deps");
+    const result = audit(cwd);
+
+    if (result.vulnerabilities === 0) return;
+
+    const severity = result.critical > 0 ? "critical" : result.high > 0 ? "high" : "moderate";
+    console.log(chalk.yellow(`  🛡️  Security: ${result.vulnerabilities} vulnerabilities (${result.critical} critical, ${result.high} high, ${result.moderate} moderate)`));
+
+    // Auto-fix if possible (non-breaking only)
+    if (result.critical > 0 || result.high > 0) {
+      console.log(chalk.blue("  🛡️  Running npm audit fix..."));
+      try {
+        const { execSync } = require("child_process");
+        const output = execSync("npm audit fix 2>&1", { cwd, encoding: "utf-8", timeout: 60000 });
+        const changed = output.match(/changed (\d+) package/);
+        if (changed) {
+          console.log(chalk.green(`  ✅ Fixed: ${changed[0]}`));
+        } else {
+          console.log(chalk.gray("  🛡️  No auto-fixable vulnerabilities (may need --force or manual update)"));
+        }
+      } catch (e) {
+        console.log(chalk.gray(`  🛡️  npm audit fix: ${e.message?.slice(0, 80)}`));
+      }
+
+      // Re-check
+      const after = audit(cwd);
+      if (after.vulnerabilities < result.vulnerabilities) {
+        console.log(chalk.green(`  ✅ Reduced from ${result.vulnerabilities} to ${after.vulnerabilities} vulnerabilities`));
+      } else if (after.critical > 0 || after.high > 0) {
+        console.log(chalk.yellow(`  ⚠️  ${after.critical + after.high} critical/high vulnerabilities remain — run 'npm audit' for details`));
+      }
+    }
+  } catch {}
+}
+
+module.exports = { initServer, ensureX402Deps, securityAudit };
