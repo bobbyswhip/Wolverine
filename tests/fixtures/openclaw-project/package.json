@@ -1,0 +1,13 @@
+{
+  "name": "my-openclaw-bot",
+  "version": "1.0.0",
+  "description": "My OpenClaw AI assistant",
+  "main": "index.js",
+  "scripts": {
+    "start": "openclaw gateway",
+    "dev": "openclaw gateway --verbose"
+  },
+  "dependencies": {
+    "openclaw": "^2026.4.0"
+  }
+}

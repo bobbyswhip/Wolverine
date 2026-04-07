@@ -247,18 +247,40 @@ function detectWolverine(cwd) {
     brainExists: fs.existsSync(path.join(cwd, ".wolverine", "brain")),
   };
 
+  // Check if we're inside the wolverine repo itself
   try {
     const pkg = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf-8"));
-    if (pkg.name === "wolverine-ai" || pkg.dependencies?.["wolverine-ai"]) {
-      result.installed = true;
-      result.version = pkg.version || pkg.dependencies?.["wolverine-ai"];
-    }
-    // Also check if we're inside the wolverine repo itself
-    if (fs.existsSync(path.join(cwd, "src", "core", "wolverine.js"))) {
+    if (pkg.name === "wolverine-ai") {
       result.installed = true;
       result.version = pkg.version;
+      return result;
+    }
+    // Check if wolverine-ai is a dependency
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies, ...pkg.optionalDependencies };
+    if (deps["wolverine-ai"]) {
+      result.installed = true;
+      result.version = deps["wolverine-ai"];
     }
   } catch {}
+
+  // Check if wolverine.js exists in src/ (repo checkout)
+  if (fs.existsSync(path.join(cwd, "src", "core", "wolverine.js"))) {
+    result.installed = true;
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(cwd, "package.json"), "utf-8"));
+      result.version = pkg.version;
+    } catch {}
+  }
+
+  // Check node_modules
+  if (!result.installed) {
+    try {
+      const pkgPath = require.resolve("wolverine-ai/package.json", { paths: [cwd] });
+      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+      result.installed = true;
+      result.version = pkg.version;
+    } catch {}
+  }
 
   return result;
 }
@@ -326,11 +348,46 @@ function mergeConfig(openclawConfig, defaults) {
 // ── Scaffolding ─────────────────────────────────────────────────
 
 /**
+ * Find the wolverine-ai template directory.
+ * Works whether wolverine is the project root OR installed in node_modules.
+ */
+function _findTemplateDir() {
+  // 1. Relative to this file (we're in src/claw/setup.js → ../../wolverine-claw/)
+  const fromSrc = path.join(__dirname, "..", "..", "wolverine-claw");
+  if (fs.existsSync(path.join(fromSrc, "index.js"))) return fromSrc;
+
+  // 2. Via require.resolve (works when wolverine-ai is a node_modules dep)
+  try {
+    const pkgPath = require.resolve("wolverine-ai/package.json");
+    const pkgDir = path.dirname(pkgPath);
+    const fromPkg = path.join(pkgDir, "wolverine-claw");
+    if (fs.existsSync(path.join(fromPkg, "index.js"))) return fromPkg;
+  } catch {}
+
+  // 3. Check common node_modules locations
+  const candidates = [
+    path.join(process.cwd(), "node_modules", "wolverine-ai", "wolverine-claw"),
+    path.join(os.homedir(), "node_modules", "wolverine-ai", "wolverine-claw"),
+  ];
+  for (const c of candidates) {
+    if (fs.existsSync(path.join(c, "index.js"))) return c;
+  }
+
+  return null;
+}
+
+/**
  * Scaffold the wolverine-claw directory from template + merged config.
  */
 function scaffold(cwd, mergedConfig, env) {
   const clawDir = path.join(cwd, "wolverine-claw");
+  const templateDir = _findTemplateDir();
   const results = { created: [], skipped: [], errors: [] };
+
+  if (!templateDir) {
+    results.errors.push("Could not find wolverine-ai templates. Is wolverine-ai installed?");
+    return results;
+  }
 
   // Create directories
   const dirs = ["config", "plugins", "workspace", "skills"];
@@ -352,12 +409,11 @@ function scaffold(cwd, mergedConfig, env) {
   }
 
   // Copy index.js from template
-  const indexSrc = path.join(cwd, "wolverine-claw", "index.js");
-  if (!fs.existsSync(indexSrc)) {
-    // Copy from our built-in template
-    const templateIndex = path.join(__dirname, "..", "..", "wolverine-claw", "index.js");
-    if (fs.existsSync(templateIndex)) {
-      fs.copyFileSync(templateIndex, indexSrc);
+  const indexDest = path.join(clawDir, "index.js");
+  if (!fs.existsSync(indexDest)) {
+    const indexSrc = path.join(templateDir, "index.js");
+    if (fs.existsSync(indexSrc)) {
+      fs.copyFileSync(indexSrc, indexDest);
       results.created.push("index.js");
     }
   } else {
@@ -367,15 +423,10 @@ function scaffold(cwd, mergedConfig, env) {
   // Copy plugin
   const pluginDest = path.join(clawDir, "plugins", "wolverine-integration.js");
   if (!fs.existsSync(pluginDest)) {
-    const pluginSrc = path.join(cwd, "wolverine-claw", "plugins", "wolverine-integration.js");
+    const pluginSrc = path.join(templateDir, "plugins", "wolverine-integration.js");
     if (fs.existsSync(pluginSrc)) {
-      results.skipped.push("plugins/wolverine-integration.js (already exists at source)");
-    } else {
-      const templatePlugin = path.join(__dirname, "..", "..", "wolverine-claw", "plugins", "wolverine-integration.js");
-      if (fs.existsSync(templatePlugin)) {
-        fs.copyFileSync(templatePlugin, pluginDest);
-        results.created.push("plugins/wolverine-integration.js");
-      }
+      fs.copyFileSync(pluginSrc, pluginDest);
+      results.created.push("plugins/wolverine-integration.js");
     }
   } else {
     results.skipped.push("plugins/wolverine-integration.js (already exists)");

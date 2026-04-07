@@ -1,0 +1,31 @@
+# Simulated OpenClaw config — a user who has been running openclaw
+# and now wants to add wolverine self-healing
+
+gateway:
+  port: 19222
+  host: "0.0.0.0"
+
+agent:
+  model: "claude-sonnet-4-6"
+  maxTurns: 30
+
+channels:
+  terminal:
+    enabled: true
+  discord:
+    token: "FAKE_DISCORD_TOKEN_FOR_TESTING"
+    allowedChannels: ["general", "dev-bot"]
+  telegram:
+    botToken: "123456:ABC-FAKE-TELEGRAM-TOKEN"
+    allowedUsers: ["admin"]
+
+skills:
+  codingAgent:
+    enabled: true
+    defaultAgent: "pi"
+  browserControl:
+    enabled: true
+
+security:
+  dmPairing: false
+  sandbox: true
