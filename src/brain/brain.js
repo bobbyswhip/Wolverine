@@ -202,6 +202,10 @@ const SEED_DOCS = [
     metadata: { topic: "x402-troubleshooting" },
   },
   {
+    text: "settings.json configuration — all wolverine behavior is configurable in server/config/settings.json. Sections: (1) models: 8 task-specific AI model slots (reasoning, coding, chat, tool, classifier, audit, compacting, research). Provider auto-detected from model name. (2) embedding: vector embedding model for brain. (3) server: port, maxRetries, maxMemoryMB. (4) heal: healTimeoutMs (default 300000/5min), globalMaxHeals (5 heals per globalWindowMs 300000/5min — prevents runaway costs), loopMaxAttempts (3 failed heals on same error in loopWindowMs 600000/10min = stop + bug report). (5) agent: aiCallTimeoutMs (90000/90s per AI call), maxTurns (8 agent iterations per heal), tokenBudget by complexity (simple: 20000, moderate: 50000, complex: 100000). (6) rateLimiting: maxCallsPerWindow (32), windowMs, minGapMs (5000), maxTokensPerHour (1000000). (7) healthCheck: intervalMs (15000), timeoutMs (5000), failThreshold (3), startDelayMs (10000). (8) errorMonitor: defaultThreshold (1 = single 500 triggers heal), windowMs (30000), cooldownMs (60000). (9) adaptiveLimiter: thresholdYellow (70% CPU/mem = start shedding 30% requests), thresholdRed (85% = reject all non-essential), reserveMB (200MB reserved for heal tools). (10) backup: stabilityMs (1800000/30min before STABLE), retentionDays (7), maxFileSizeMB (10). (11) autoUpdate: enabled, intervalMs. (12) telemetry: enabled, heartbeatIntervalMs. All values accept env var overrides (e.g. WOLVERINE_HEAL_TIMEOUT_MS). Description fields prefixed with _ explain each section inline.",
+    metadata: { topic: "configuration" },
+  },
+  {
     text: "MCP integration: connect external tools via Model Context Protocol. Configure in .wolverine/mcp.json with per-server tool allowlists. Security: arg sanitization (secrets redacted before sending to MCP servers), result injection scanning, rate limiting per server, audit logging. Tools appear as mcp__server__tool in the agent. Supports stdio and HTTP transports.",
     metadata: { topic: "mcp" },
   },

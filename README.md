@@ -1307,12 +1307,62 @@ Wolverine minimizes AI spend through 7 techniques:
 
 ## Configuration
 
-```
-.env.local                     ← Secrets only (API keys, admin key)
-server/config/settings.json    ← Everything else (models, port, clustering, telemetry, limits)
-```
+All settings are in `server/config/settings.json`. Each section has a `_` prefixed description field.
 
-`settings.json` is inside `server/` so the agent can read and edit it. Config loader priority: **env vars > settings.json > defaults**.
+### Settings Reference
+
+| Section | Key | Default | Description |
+|---------|-----|---------|-------------|
+| **models** | reasoning, coding, chat, tool, classifier, audit, compacting, research | `claude-sonnet-4-6` | AI model per task. Provider auto-detected from name. |
+| **embedding** | — | `text-embedding-3-small` | Vector embedding model for brain memory. |
+| **server** | port | `3000` | Server listen port. |
+| | maxRetries | `3` | Consecutive crashes before giving up. |
+| | maxMemoryMB | `512` | OOM kill threshold. |
+| **heal** | healTimeoutMs | `300000` (5 min) | Max time for entire heal attempt. |
+| | globalMaxHeals | `5` | Max heals across all errors per window. |
+| | globalWindowMs | `300000` (5 min) | Window for global heal rate limit. |
+| | loopMaxAttempts | `3` | Same-error failures before stop + bug report. |
+| | loopWindowMs | `600000` (10 min) | Window for loop guard. |
+| **agent** | aiCallTimeoutMs | `90000` (90 sec) | Timeout per AI API call. |
+| | maxTurns | `8` | Agent tool-use iterations per heal. |
+| | tokenBudget.simple | `20000` | Token budget for simple errors. |
+| | tokenBudget.moderate | `50000` | Token budget for moderate errors. |
+| | tokenBudget.complex | `100000` | Token budget for complex errors. |
+| **rateLimiting** | maxCallsPerWindow | `32` | AI calls allowed per window. |
+| | windowMs | `100000` | Rate limit window. |
+| | minGapMs | `5000` | Min delay between AI calls. |
+| | maxTokensPerHour | `1000000` | Hard token ceiling. |
+| **healthCheck** | intervalMs | `15000` (15 sec) | Health probe frequency. |
+| | timeoutMs | `5000` | Timeout per probe. |
+| | failThreshold | `3` | Consecutive failures before heal. |
+| | startDelayMs | `10000` | Grace period after boot. |
+| **errorMonitor** | defaultThreshold | `1` | 500 errors before triggering heal. |
+| | windowMs | `30000` | Error counting window. |
+| | cooldownMs | `60000` | Min time between heals on same route. |
+| **adaptiveLimiter** | thresholdYellow | `70` | CPU/memory % to start shedding 30% of requests. |
+| | thresholdRed | `85` | CPU/memory % to reject all non-essential requests. |
+| | reserveMB | `200` | Memory reserved for heal tools. |
+| **backup** | stabilityMs | `1800000` (30 min) | Time before backup marked STABLE. |
+| | retentionDays | `7` | Auto-delete old backups. |
+| | maxFileSizeMB | `10` | Skip files larger than this. |
+| **autoUpdate** | enabled | `false` | Auto-update framework from git. |
+| | intervalMs | `300000` (5 min) | Update check frequency. |
+| **telemetry** | enabled | `true` | Send heartbeats to dashboard. |
+| | heartbeatIntervalMs | `60000` (1 min) | Heartbeat frequency. |
+
+All values accept environment variable overrides (e.g., `WOLVERINE_HEAL_TIMEOUT_MS=600000`).
+
+### Secrets
+
+Secrets go in `.env.local` (never committed):
+
+```bash
+OPENAI_API_KEY=           # Required for OpenAI models
+ANTHROPIC_API_KEY=        # Required for Claude models
+WOLVERINE_ADMIN_KEY=      # Dashboard agent command interface
+CDP_API_KEY_ID=           # x402 payments (free at cdp.coinbase.com)
+CDP_API_KEY_SECRET=       # x402 payments
+```
 
 ---
 
