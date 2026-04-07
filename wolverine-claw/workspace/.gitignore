@@ -1,0 +1,5 @@
+# Wolverine Claw workspace — agent-generated files
+# Keep .gitkeep but ignore everything else
+*
+!.gitkeep
+!.gitignore

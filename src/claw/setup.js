@@ -511,12 +511,17 @@ function ensureOpenClawDep(cwd) {
 function validate(cwd, env) {
   const checks = [];
 
-  // Node version
+  // Node version — not critical since standalone agent works on Node 20+
+  const nodeMinOk = env.node.major >= 20;
   checks.push({
-    name: "Node.js >= 22",
-    pass: env.node.ok,
-    detail: env.node.ok ? env.node.version : `${env.node.version} (need >= 22)`,
-    critical: true,
+    name: "Node.js",
+    pass: nodeMinOk,
+    detail: env.node.ok
+      ? `${env.node.version} (full OpenClaw support)`
+      : nodeMinOk
+        ? `${env.node.version} (standalone agent mode — upgrade to 22+ for OpenClaw)`
+        : `${env.node.version} (need >= 20)`,
+    critical: !nodeMinOk,
   });
 
   // OpenClaw available
@@ -646,10 +651,10 @@ async function setup(cwd, options = {}) {
 
   log("");
 
-  // ── Step 2: Abort if Node too old ───────────────────────────
+  // ── Step 2: Node version check ──────────────────────────────
   if (!env.node.ok) {
-    log(chalk.red("  ❌ Node.js 22+ is required. Please upgrade Node.js.\n"));
-    return { success: false, reason: "node-version", env };
+    log(chalk.yellow("  ⚠️  Node.js 22+ recommended (required for OpenClaw multi-channel)."));
+    log(chalk.gray("     Standalone agent mode works on Node 20+.\n"));
   }
 
   if (dryRun) {

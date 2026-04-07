@@ -131,10 +131,12 @@ if (args.includes("--info")) {
     } catch {
       try {
         const { execSync } = require("child_process");
-        const ver = execSync("npx openclaw --version 2>/dev/null", { encoding: "utf-8" }).trim();
+        const ver = execSync("npx --yes openclaw --version", {
+          encoding: "utf-8", timeout: 10000, stdio: ["pipe", "pipe", "pipe"],
+        }).trim();
         openclawVersion = ver || "available via npx";
       } catch {
-        openclawVersion = "not installed (will use npx)";
+        openclawVersion = "not installed (standalone agent mode)";
       }
     }
     console.log(chalk.gray(`  OpenClaw:     ${openclawVersion}`));

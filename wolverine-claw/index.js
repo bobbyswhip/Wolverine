@@ -95,14 +95,39 @@ async function start() {
 
   } catch (err) {
     if (err.code === "MODULE_NOT_FOUND" && err.message.includes("openclaw")) {
-      console.log("[CLAW] OpenClaw not installed, falling back to CLI mode...");
-      await startClawCLI(gatewayPort, gatewayHost);
+      console.log("[CLAW] OpenClaw not installed, starting standalone agent...");
+      await startStandaloneAgent();
     } else {
       console.error(`[CLAW] Startup failed: ${err.message}`);
       console.error(err.stack);
       reportHealth("error", err.message);
       process.exit(1);
     }
+  }
+}
+
+/**
+ * Fallback: start wolverine's built-in standalone agent.
+ * No external deps needed — uses wolverine's own AI client + tools.
+ */
+async function startStandaloneAgent() {
+  try {
+    // Load dotenv for AI keys
+    const dotenv = require("dotenv");
+    dotenv.config({ path: path.resolve(__dirname, "..", ".env.local") });
+    dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
+
+    const { startRepl } = require("../src/claw/standalone-agent");
+    reportHealth("running");
+    await startRepl(config, { cwd: path.resolve(__dirname, "..") });
+  } catch (err) {
+    console.error(`[CLAW] Standalone agent failed: ${err.message}`);
+    console.error(err.stack);
+
+    // Last resort: try CLI mode
+    const gatewayPort = config.gateway?.port || 18789;
+    const gatewayHost = config.gateway?.host || "127.0.0.1";
+    await startClawCLI(gatewayPort, gatewayHost);
   }
 }
 
