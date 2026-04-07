@@ -222,14 +222,18 @@ if (liveMode) {
   dotenv.config({ path: path.resolve(__dirname, "..", ".env.local") });
   dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
 
-  const { buildTools } = require("../src/claw/standalone-agent");
+  const { TOOL_DEFINITIONS, AgentEngine } = require("../src/agent/agent-engine");
   const { aiCallWithHistory } = require("../src/core/ai-client");
 
-  const tools = buildTools(tmpDir, path.join(tmpDir, "wolverine-claw/workspace"), merged);
-  const toolDefs = tools.map(t => ({
-    type: "function",
-    function: { name: t.name, description: t.description, parameters: t.input_schema },
-  }));
+  assert(TOOL_DEFINITIONS.length === 32, `All 32 tools available (got ${TOOL_DEFINITIONS.length})`);
+
+  // Create agent engine with real sandbox for tool execution
+  const { Sandbox } = require("../src/security/sandbox");
+  const engine = new AgentEngine({
+    cwd: tmpDir,
+    sandbox: new Sandbox(tmpDir),
+    maxTurns: 5,
+  });
 
   (async () => {
     try {
@@ -239,7 +243,7 @@ if (liveMode) {
           { role: "system", content: "You are a test agent. Use list_dir to check the project root, then use done." },
           { role: "user", content: "List the files in this directory and confirm wolverine-claw was set up." },
         ],
-        tools: toolDefs,
+        tools: TOOL_DEFINITIONS,
         maxTokens: 1024,
         category: "tool",
       });
@@ -252,12 +256,13 @@ if (liveMode) {
         const toolName = tcs[0].function?.name;
         assert(toolName === "list_dir" || toolName === "done", `AI used tool: ${toolName}`);
 
-        // Execute the tool
-        const args = JSON.parse(tcs[0].function?.arguments || "{}");
-        const tool = tools.find(t => t.name === toolName);
-        const result = tool.execute(args);
-        assert(result.includes("wolverine-claw") || toolName === "done", "Tool result references wolverine-claw");
-        console.log(`  Tool result: ${result.slice(0, 100)}...`);
+        // Execute via AgentEngine — same as real claw
+        const result = await engine._executeTool({
+          function: { name: toolName, arguments: tcs[0].function?.arguments || "{}" },
+        });
+        const content = typeof result === "string" ? result : (result?.content || JSON.stringify(result));
+        assert(content.includes("wolverine-claw") || toolName === "done", "Tool result references wolverine-claw");
+        console.log(`  Tool result: ${content.slice(0, 100)}...`);
       } else {
         assert(msg.content && msg.content.length > 0, "AI text response received");
       }

@@ -30,6 +30,7 @@ const NEVER_ROLLBACK = [
   "server/config/settings.json",
   "server/lib/db.js",
   "server/lib/redis.js",
+  "wolverine-claw/config/settings.json",
   ".env",
   ".env.local",
   ".wolverine/vault/master.key",
@@ -352,10 +353,9 @@ class BackupManager {
   }
 
   _collectServerFiles() {
-    const serverDir = path.join(this.projectRoot, "server");
-    if (!fs.existsSync(serverDir)) return [];
     const files = [];
     const SKIP = new Set(["node_modules", ".git", ".wolverine"]);
+    const maxFileSize = 10 * 1024 * 1024; // 10MB
 
     const walk = (dir) => {
       let entries;
@@ -365,11 +365,39 @@ class BackupManager {
         const fullPath = path.join(dir, entry.name);
         if (entry.isDirectory()) walk(fullPath);
         else {
-          try { if (fs.statSync(fullPath).size <= 10 * 1024 * 1024) files.push(fullPath); } catch {}
+          try { if (fs.statSync(fullPath).size <= maxFileSize) files.push(fullPath); } catch {}
         }
       }
     };
-    walk(serverDir);
+
+    // 1. server/ — user server code (original behavior)
+    const serverDir = path.join(this.projectRoot, "server");
+    if (fs.existsSync(serverDir)) walk(serverDir);
+
+    // 2. wolverine-claw/ — claw config, plugins, custom skills
+    //    Skip workspace/ (agent-generated files, can be large/numerous)
+    const clawDir = path.join(this.projectRoot, "wolverine-claw");
+    if (fs.existsSync(clawDir)) {
+      const clawSubdirs = ["config", "plugins", "skills"];
+      for (const sub of clawSubdirs) {
+        const subDir = path.join(clawDir, sub);
+        if (fs.existsSync(subDir)) walk(subDir);
+      }
+      // Also back up wolverine-claw/index.js directly
+      const clawIndex = path.join(clawDir, "index.js");
+      if (fs.existsSync(clawIndex)) files.push(clawIndex);
+    }
+
+    // 3. .openclaw/ — OpenClaw config (if user has one)
+    const openclawDir = path.join(this.projectRoot, ".openclaw");
+    if (fs.existsSync(openclawDir)) walk(openclawDir);
+
+    // 4. Top-level openclaw config files
+    for (const cfgName of ["openclaw.yml", "openclaw.yaml", ".openclaw.yml"]) {
+      const cfgPath = path.join(this.projectRoot, cfgName);
+      if (fs.existsSync(cfgPath)) files.push(cfgPath);
+    }
+
     return files;
   }
 }
