@@ -6,6 +6,8 @@ Wolverine watches your server process, catches crashes, diagnoses errors with AI
 
 Built on patterns from [claw-code](https://github.com/instructkr/claw-code) — the open-source Claude Code harness.
 
+[Website](https://wolverine.dev) · [Twitter](https://x.com/wolverinelabs) · [API](https://api.wolverinenode.xyz) · [npm](https://www.npmjs.com/package/wolverine-ai) · [GitHub](https://github.com/bobbyswhip/Wolverine)
+
 ---
 
 ## Quick Start

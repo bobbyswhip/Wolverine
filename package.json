@@ -1,6 +1,6 @@
 {
   "name": "wolverine-ai",
-  "version": "6.1.1",
+  "version": "6.1.2",
   "description": "Self-healing Node.js server framework powered by AI. Catches crashes, diagnoses errors, generates fixes, verifies, and restarts — automatically.",
   "main": "src/index.js",
   "bin": {
@@ -40,7 +40,7 @@
     "type": "git",
     "url": "https://github.com/bobbyswhip/Wolverine.git"
   },
-  "homepage": "https://github.com/bobbyswhip/Wolverine#readme",
+  "homepage": "https://wolverine.dev",
   "bugs": {
     "url": "https://github.com/bobbyswhip/Wolverine/issues"
   },
