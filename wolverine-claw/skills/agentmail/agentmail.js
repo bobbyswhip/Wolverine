@@ -120,8 +120,10 @@ function buildTools(projectRoot) {
     if (global.wolverine) {
       wolverineApi = global.wolverine;
     } else {
-      const { init } = require(path.join(projectRoot, "src", "claw", "wolverine-api"));
-      wolverineApi = init(projectRoot);
+      let initFn;
+      try { initFn = require(path.join(projectRoot, "src", "claw", "wolverine-api")).init; }
+      catch { initFn = require("wolverine-ai/src/claw/wolverine-api").init; }
+      wolverineApi = initFn(projectRoot);
     }
   } catch {}
 
