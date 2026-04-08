@@ -596,24 +596,25 @@ function addClawScripts(cwd) {
       if (typeof cmd !== "string") continue;
       // Skip scripts we just added
       if (name.startsWith("claw")) continue;
+      // Already patched
+      if (cmd.includes("bootstrap.js")) continue;
 
-      // Find scripts that run openclaw (start, dev, gateway, etc.)
-      const isOpenClawScript = cmd.includes("openclaw") || cmd.includes("open-claw");
-      // Also patch plain node scripts that start a gateway/agent
-      const isNodeScript = cmd.startsWith("node ") && !cmd.includes("wolverine");
+      // Only patch scripts that actually run openclaw
+      const isOpenClawCLI = cmd.includes("openclaw") && !cmd.includes("wolverine");
+      // Or node scripts that start an openclaw entry point (not wolverine's own scripts)
+      const isOpenClawNode = cmd.startsWith("node ") &&
+        !cmd.includes("wolverine") &&
+        !cmd.includes("bin/") &&
+        !cmd.includes("examples/") &&
+        !cmd.includes("tests/") &&
+        (cmd.includes("gateway") || cmd.includes("openclaw") || cmd.includes("index.js"));
 
-      if ((isOpenClawScript || isNodeScript) && !cmd.includes("bootstrap.js")) {
-        // Inject --require before the main script/command
-        if (cmd.startsWith("node ")) {
-          // node index.js → node --require ./wolverine-claw/bootstrap.js index.js
-          pkg.scripts[name] = cmd.replace("node ", `node ${BOOTSTRAP} `);
-          patched++;
-        } else if (cmd.startsWith("openclaw ") || cmd.startsWith("npx openclaw")) {
-          // For CLI commands, use NODE_OPTIONS to inject --require
-          // npm scripts inherit env vars, so this works cross-platform
-          pkg.scripts[name] = `NODE_OPTIONS="${BOOTSTRAP}" ${cmd}`;
-          patched++;
-        }
+      if (isOpenClawCLI) {
+        pkg.scripts[name] = `NODE_OPTIONS="${BOOTSTRAP}" ${cmd}`;
+        patched++;
+      } else if (isOpenClawNode) {
+        pkg.scripts[name] = cmd.replace("node ", `node ${BOOTSTRAP} `);
+        patched++;
       }
     }
 

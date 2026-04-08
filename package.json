@@ -1,6 +1,6 @@
 {
   "name": "wolverine-ai",
-  "version": "6.4.2",
+  "version": "6.4.3",
   "description": "Self-healing Node.js server framework powered by AI. Catches crashes, diagnoses errors, generates fixes, verifies, and restarts — automatically.",
   "main": "src/index.js",
   "bin": {
@@ -12,9 +12,9 @@
     "dev": "node bin/wolverine.js server/index.js",
     "wolverine": "node bin/wolverine.js",
     "server": "node server/index.js",
-    "claw": "node bin/wolverine-claw.js",
-    "claw:direct": "node bin/wolverine-claw.js --direct",
-    "claw:info": "node bin/wolverine-claw.js --info",
+    "claw": "wolverine-claw",
+    "claw:direct": "wolverine-claw --direct",
+    "claw:info": "wolverine-claw --info",
     "demo": "node examples/run-demo.js",
     "demo:list": "node examples/run-demo.js --list",
     "test:pentest": "node tests/pentest-secrets.js"
