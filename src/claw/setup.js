@@ -565,12 +565,13 @@ function ensureWolverineDep(cwd) {
  */
 function addClawScripts(cwd) {
   const pkgPath = path.join(cwd, "package.json");
-  if (!fs.existsSync(pkgPath)) return { added: 0 };
+  if (!fs.existsSync(pkgPath)) return { added: 0, patched: 0 };
 
   try {
     const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
     if (!pkg.scripts) pkg.scripts = {};
 
+    // 1. Add wolverine-claw management scripts
     const toAdd = {
       "claw": "wolverine-claw",
       "claw:direct": "wolverine-claw --direct",
@@ -585,13 +586,44 @@ function addClawScripts(cwd) {
       }
     }
 
-    if (added > 0) {
+    // 2. Patch existing openclaw start scripts to inject --require bootstrap
+    //    This is the key integration: the bootstrap preload auto-initializes
+    //    wolverine for the entire process — no code changes in skills/plugins.
+    const BOOTSTRAP = "--require ./wolverine-claw/bootstrap.js";
+    let patched = 0;
+
+    for (const [name, cmd] of Object.entries(pkg.scripts)) {
+      if (typeof cmd !== "string") continue;
+      // Skip scripts we just added
+      if (name.startsWith("claw")) continue;
+
+      // Find scripts that run openclaw (start, dev, gateway, etc.)
+      const isOpenClawScript = cmd.includes("openclaw") || cmd.includes("open-claw");
+      // Also patch plain node scripts that start a gateway/agent
+      const isNodeScript = cmd.startsWith("node ") && !cmd.includes("wolverine");
+
+      if ((isOpenClawScript || isNodeScript) && !cmd.includes("bootstrap.js")) {
+        // Inject --require before the main script/command
+        if (cmd.startsWith("node ")) {
+          // node index.js → node --require ./wolverine-claw/bootstrap.js index.js
+          pkg.scripts[name] = cmd.replace("node ", `node ${BOOTSTRAP} `);
+          patched++;
+        } else if (cmd.startsWith("openclaw ") || cmd.startsWith("npx openclaw")) {
+          // For CLI commands, use NODE_OPTIONS to inject --require
+          // npm scripts inherit env vars, so this works cross-platform
+          pkg.scripts[name] = `NODE_OPTIONS="${BOOTSTRAP}" ${cmd}`;
+          patched++;
+        }
+      }
+    }
+
+    if (added > 0 || patched > 0) {
       fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + "\n");
     }
 
-    return { added, skipped: added === 0 };
+    return { added, patched, skipped: added === 0 && patched === 0 };
   } catch {
-    return { added: 0 };
+    return { added: 0, patched: 0 };
   }
 }
 
@@ -884,8 +916,13 @@ async function setup(cwd, options = {}) {
   const scriptsResult = addClawScripts(cwd);
   if (scriptsResult.added > 0) {
     log(chalk.green(`  ✅ Added ${scriptsResult.added} npm scripts (claw, claw:info, claw:direct)`));
-  } else if (scriptsResult.skipped) {
-    log(chalk.gray("  ○ npm scripts already present"));
+  }
+  if (scriptsResult.patched > 0) {
+    log(chalk.green(`  ✅ Patched ${scriptsResult.patched} start script(s) with wolverine bootstrap`));
+    log(chalk.gray("     Your existing commands now auto-load wolverine (global.wolverine)"));
+  }
+  if (scriptsResult.added === 0 && (scriptsResult.patched || 0) === 0) {
+    log(chalk.gray("  ○ npm scripts already configured"));
   }
 
   log("");

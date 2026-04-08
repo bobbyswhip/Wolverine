@@ -193,10 +193,15 @@ assertEq(updatedPkg.scripts.claw, "wolverine-claw", "claw script added");
 assertEq(updatedPkg.scripts["claw:direct"], "wolverine-claw --direct", "claw:direct script added");
 assertEq(updatedPkg.scripts["claw:info"], "wolverine-claw --info", "claw:info script added");
 
-// Idempotency — running again shouldn't add duplicates
+// Verify existing openclaw scripts were patched with --require bootstrap
+assert(scriptsResult.patched > 0, `Patched ${scriptsResult.patched} existing script(s)`);
+const patchedStart = updatedPkg.scripts.start;
+assert(patchedStart && patchedStart.includes("bootstrap.js"), `start script patched: ${patchedStart}`);
+
+// Idempotency — running again shouldn't add duplicates or double-patch
 const scriptsResult2 = addClawScripts(tmpDir);
 assertEq(scriptsResult2.added, 0, "No duplicate scripts on re-run");
-assert(scriptsResult2.skipped === true, "Scripts skipped on re-run");
+assertEq(scriptsResult2.patched, 0, "No double-patching on re-run");
 
 // ── Test 6: Idempotency (re-run scaffold) ────────────────────────
 
