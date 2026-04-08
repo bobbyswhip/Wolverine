@@ -63,6 +63,23 @@ class WolverineRunner {
     // Core subsystems
     this.sandbox = new Sandbox(this.cwd);
     this.redactor = initRedactor(this.cwd);
+
+    // Code Guard — runtime injection detection
+    try {
+      const { start: startCodeGuard, onInjection } = require("../security/code-guard");
+      const { improvementLoop } = require("../security/self-improve");
+      startCodeGuard(this.cwd);
+      onInjection(async (event) => {
+        console.log(chalk.red(`\n  🛡️  CODE INJECTION BLOCKED: ${event.file}`));
+        for (const t of event.threats || []) {
+          console.log(chalk.red(`     [${t.severity}] ${t.label} line ${t.line}`));
+        }
+        // Run self-improvement loop
+        try { await improvementLoop(event, this.cwd); } catch {}
+      });
+    } catch (e) {
+      console.warn(chalk.yellow(`  ⚠️  Code guard init: ${e.message}`));
+    }
     const cfg = loadConfig();
     this.rateLimiter = new RateLimiter({
       maxCallsPerWindow: cfg.rateLimiting.maxCallsPerWindow,
