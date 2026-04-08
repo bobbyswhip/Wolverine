@@ -1623,21 +1623,28 @@ Agentic AI agent mode powered by [OpenClaw](https://github.com/openclaw/openclaw
 
 Wolverine Claw wraps the OpenClaw gateway (WebSocket control plane + Pi agent runtime) in Wolverine's process manager. When the agent crashes or encounters errors, Wolverine's AI heal pipeline kicks in — diagnoses the error, generates a fix, verifies it, and restarts. The agent gets access to Wolverine's brain (semantic memory), backup system (workspace snapshots), and self-healing tools.
 
-### Setup (Existing OpenClaw Users)
-
-If you already have OpenClaw installed, the setup wizard detects your config and merges it:
+### Setup (Existing OpenClaw Users) — One Command
 
 ```bash
-npm install wolverine-ai
-wolverine-claw --setup
+npx wolverine-ai@latest --setup-claw
 ```
 
-The wizard will:
-1. Detect your OpenClaw installation and `~/.openclaw/config.yml`
-2. Merge your gateway port, model, channels, and security settings with wolverine defaults
-3. Scaffold `wolverine-claw/` with merged config
-4. Validate Node version, API keys, and dependencies
-5. Show next steps
+That's it. One command. Zero code changes. Your existing `npm start` now runs with wolverine.
+
+What it does automatically:
+1. Detects your `.openclaw/config.yml` — merges gateway port, model, channels, security
+2. Installs `wolverine-ai` as a dependency
+3. Scaffolds `wolverine-claw/` with merged config, plugin, and workspace
+4. **Patches your start scripts** — injects `--require ./wolverine-claw/bootstrap.js` so wolverine loads automatically when your gateway starts
+5. Adds `claw`, `claw:info`, `claw:direct` npm scripts
+6. Validates everything (Node, API keys, config, entry point)
+
+```
+Before: "start": "openclaw gateway"
+After:  "start": "NODE_OPTIONS=\"--require ./wolverine-claw/bootstrap.js\" openclaw gateway"
+```
+
+Your skills, plugins, and gateway code are never modified. The bootstrap preload handles everything at the process level.
 
 Preview without changes: `wolverine-claw --setup --dry`
 
@@ -1676,29 +1683,42 @@ wolverine --rollback-latest    # Restore most recent
 
 ```
 wolverine-claw/
+├── bootstrap.js                   # --require preload (auto-injected into start scripts)
 ├── config/
 │   └── settings.json              # Gateway, agent, channels, healing, security
 ├── index.js                       # Entry point — bootstraps OpenClaw gateway
 ├── plugins/
-│   └── wolverine-integration.js   # 7 wolverine tools for the agent
+│   └── wolverine-integration.js   # 8 tools + 8 Plugin SDK hooks
 ├── skills/                        # Custom user skills
 └── workspace/                     # Sandboxed agent working directory
 
 src/claw/
 ├── claw-runner.js                 # Process manager with healing pipeline
-└── setup.js                       # Setup wizard (detect, merge, scaffold, validate)
+├── setup.js                       # Setup wizard (detect, merge, scaffold, validate, patch)
+├── standalone-agent.js            # Built-in agent (32 tools) when openclaw not installed
+└── wolverine-api.js               # Unified API — 85 access points across 13 subsystems
 
 bin/wolverine-claw.js              # CLI entry point
 ```
 
-### How It Works
+### How It Works (Zero-Code Integration)
 
-1. `ClawRunner` spawns `wolverine-claw/index.js` as a child process with IPC
-2. `index.js` loads OpenClaw via `require("openclaw")` (SDK mode) or falls back to `npx openclaw gateway` (CLI mode)
-3. The wolverine integration plugin injects 7 tools into the OpenClaw agent
-4. On crash/error, `ClawRunner` catches via IPC or exit event
-5. Wolverine's AI heal pipeline runs: diagnose → backup → fix → verify → restart
-6. Gateway health monitored via TCP probe on WebSocket port every 30s
+```
+npx wolverine-ai@latest --setup-claw
+  → Detects .openclaw/config.yml, merges settings
+  → Patches "start": "openclaw gateway"
+       into "start": "NODE_OPTIONS=\"--require ./wolverine-claw/bootstrap.js\" openclaw gateway"
+
+npm start (user's existing command)
+  → Node loads bootstrap.js before anything else
+  → global.wolverine = full API (85 access points, lazy-loaded)
+  → Module._load patched → require("openclaw") auto-registers wolverine plugin
+  → Process error handlers → report to wolverine heal pipeline via IPC
+  → Gateway starts with wolverine plugin (8 tools + 8 hooks)
+  → On crash: ClawRunner catches → AI heal → backup → fix → verify → restart
+```
+
+No skills, plugins, or gateway code are ever modified. Everything is injected at the process entry point.
 
 ### Wolverine Tools for the Agent
 
@@ -1713,6 +1733,44 @@ The integration plugin gives the OpenClaw agent access to wolverine capabilities
 | `wolverine_health` | Get system health status (memory, uptime, backups) |
 | `wolverine_list_backups` | List all available snapshots |
 | `wolverine_self_heal` | Trigger the heal pipeline on a specific error |
+| `wolverine_error_stats` | Error counts from all OpenClaw subsystems |
+
+### Plugin Hooks (Automatic Error Pipeline)
+
+The plugin registers 8 hooks into OpenClaw's Plugin SDK — errors from every subsystem flow to wolverine automatically:
+
+| Hook | What It Catches |
+|------|----------------|
+| `after_tool_call` | Skill and tool execution failures |
+| `agent_end` | Agent crashes, timeouts, completion errors |
+| `before_tool_call` | Tool loop detection (before it burns tokens) |
+| `message_sent` | Channel send failures (Discord, Slack, etc.) |
+| `llm_output` | Provider errors, failovers, billing blocks (402) |
+| `subagent_ended` | Subagent failures and timeouts |
+| `gateway_start/stop` | Lifecycle tracking with error stats |
+| `session_end` | Session-level errors |
+
+### Wolverine API (for Custom Skills)
+
+If you write custom OpenClaw skills that want wolverine features, they're available globally — no imports needed:
+
+```javascript
+// In any OpenClaw skill (after setup, global.wolverine is auto-available):
+
+// Scan user input for prompt injection
+const scan = wolverine.scanText(userMessage);
+if (!scan.safe) return "Blocked: injection detected";
+
+// Search past fixes
+const fixes = await wolverine.brain.search("ECONNREFUSED redis");
+
+// Diagnose an error
+const diag = wolverine.diagnoseError(errorText);
+// → { type: "missing_module", tools: {...}, humanRequired: false }
+
+// Create backup before risky operation
+wolverine.backup.create("before database migration");
+```
 
 ### Configuration
 

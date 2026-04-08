@@ -150,22 +150,33 @@ The startup backup system snapshots `server/` before first spawn. If the server 
 
 Agentic AI agent mode — wraps OpenClaw gateway in Wolverine's self-healing process manager.
 
+### One-Command Setup (for OpenClaw users)
+
+```
+npx wolverine-ai@latest --setup-claw
+  → Detects .openclaw/config.yml → merges gateway, model, channels, security
+  → Installs wolverine-ai, scaffolds wolverine-claw/
+  → Patches start scripts: "openclaw gateway" → NODE_OPTIONS="--require bootstrap.js" openclaw gateway
+  → Adds claw npm scripts
+  → Zero code changes — existing npm start now runs with wolverine
+```
+
+### Bootstrap Preload (wolverine-claw/bootstrap.js)
+
+Auto-injected via `--require`. Makes wolverine transparent to the entire OpenClaw process:
+- `global.wolverine` = full API (85 access points, 13 subsystems)
+- `Module._load` patched → auto-registers wolverine plugin on `require("openclaw")`
+- Process error handlers → report to wolverine heal pipeline
+- `wolverine.middleware.injectionGuard` for route protection
+
 ### Claw Pipeline
 
 ```
-wolverine-claw --setup (or wolverine --setup-claw)
-  → Detect OpenClaw (npm, global, ~/.openclaw/config.yml)
-  → Merge OpenClaw config with wolverine defaults
-  → Scaffold wolverine-claw/ (config, plugins, workspace)
-  → Validate (Node 22+, API keys, entry point, plugin)
-  → Ready: npm run claw
-
-npm run claw (or wolverine --claw)
-  → ClawRunner spawns wolverine-claw/index.js with IPC
-  → index.js loads OpenClaw SDK or falls back to npx openclaw
-  → Plugin registers 7 wolverine tools into agent
-  → Gateway health probed via TCP every 30s
-  → On crash/error: IPC → heal pipeline → backup → AI fix → verify → restart
+npm start (user's existing command)
+  → bootstrap.js loads → global.wolverine initialized
+  → require("openclaw") intercepted → plugin auto-registered (8 tools + 8 hooks)
+  → Gateway starts with wolverine watching all subsystems
+  → On crash: ClawRunner catches → AI heal → backup → fix → verify → restart
 ```
 
 ### Key Constraints (Claw-specific)
@@ -173,9 +184,10 @@ npm run claw (or wolverine --claw)
 - **Gateway port is 18789 by default.** Configurable in wolverine-claw/config/settings.json.
 - **Workspace sandboxed to `wolverine-claw/workspace/`.** Agent cannot write outside.
 - **Same heal limits as server:** 5 heals per 5min, loop guard at 3 attempts.
-- **OpenClaw as optional dep.** Falls back to `npx openclaw gateway` if not installed.
+- **OpenClaw as optional dep.** Falls back to standalone agent (32 tools) if not installed.
 - **Channel tokens in `.env.local` only.** Never in settings.json.
 - **wolverine-claw/ is protected from auto-update.** Only src/ and bin/ are updated.
+- **Backup covers claw files:** config/, plugins/, skills/, index.js, .openclaw/ all backed up. workspace/ skipped.
 
 ## Configuration
 
