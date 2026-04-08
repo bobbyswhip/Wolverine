@@ -16,3 +16,6 @@ Thumbs.db
 # Local dev docs (not tracked in git)
 *.md
 !README.md
+
+# Project-local claw skills (not part of framework)
+wolverine-claw/skills/agentmail/
