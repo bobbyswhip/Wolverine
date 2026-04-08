@@ -1844,6 +1844,59 @@ The claw agent can only modify files in `wolverine-claw/`. Protected paths:
 
 ---
 
+## Code Guard
+
+Runtime injection detection that intercepts malicious code **before it executes**. Auto-starts with wolverine.
+
+### How It Works
+
+```
+New .js file loaded via require() or file watcher
+  → 33 static analysis patterns scanned
+  → Critical threat? → BLOCK (empty module returned, code never runs)
+  → File quarantined to .wolverine/security/quarantine/
+  → Forensic log: full code, SHA-256 hash, stack trace, timestamp
+  → Attack vector traced through call stack to find entry point
+  → Self-improvement loop: AI analyzes → recommends hardening → auto-applies safe fixes
+```
+
+### What It Catches
+
+| Category | Patterns | Severity |
+|----------|----------|----------|
+| **Code execution** | `eval(req.body)`, `new Function(input)`, `vm.runInThisContext` | Critical |
+| **Command injection** | `execSync(req.query.cmd)`, `spawn(req.body.command)` | Critical |
+| **Dynamic require** | `require(req.query.module)`, template literal requires | Critical |
+| **Prototype pollution** | `__proto__[key] = value`, `Object.assign(Object.prototype)` | Critical |
+| **File system injection** | `writeFileSync(req.body.path)`, `unlink(req.params.file)` | Critical |
+| **SQL injection setup** | `"SELECT * FROM " + req.query.id` | High |
+| **SSRF** | `fetch(req.query.url)`, `axios.get(req.body.target)` | Critical |
+| **Reverse shells** | `spawn("/bin/sh")`, `net.Socket().connect()` | High |
+| **Environment attacks** | `process.env[req.body.key] = value` | Critical |
+| **Obfuscation** | `String.fromCharCode(114,101,...)`, base64/hex payloads | Critical |
+
+### Execution Boundary
+
+Any `require()` from **outside the project root** is blocked entirely. Prevents escape attacks where injected code writes to `/tmp/` and then loads it.
+
+### Self-Improvement Pipeline
+
+When an attack is blocked:
+1. **Analyze** — AI examines the attack code and entry vector (cheapest model)
+2. **Harden** — generates defense recommendations
+3. **Apply** — safe fixes auto-applied (max 3/hour), risky fixes deferred to human
+4. **Log** — full audit trail in `.wolverine/security/improvement-log.jsonl`
+
+### Forensic Log
+
+Every blocked attack is logged to `.wolverine/security/injection-log.jsonl`:
+- Full source code of the injected file
+- SHA-256 hash for forensic matching
+- Complete call stack showing how the injection entered
+- Timestamp and threat classification
+
+---
+
 ## License
 
 MIT

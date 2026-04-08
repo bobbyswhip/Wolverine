@@ -189,6 +189,24 @@ npm start (user's existing command)
 - **wolverine-claw/ is protected from auto-update.** Only src/ and bin/ are updated.
 - **Backup covers claw files:** config/, plugins/, skills/, index.js, .openclaw/ all backed up. workspace/ skipped.
 
+## Code Guard (Runtime Injection Detection)
+
+Intercepts code injection attacks before execution. Auto-starts with wolverine.
+
+```
+New .js file loaded (require/file change)
+  → 33 static patterns scanned (eval, cmd injection, proto pollution, etc.)
+  → Critical? → Block (empty module), quarantine file, forensic log, trace stack
+  → Outside project root? → Block entirely (prevents /tmp escape)
+  → Non-critical? → Warn, allow
+  → Self-improvement loop: AI analyzes attack → recommends hardening → auto-applies safe fixes
+```
+
+- **Forensic log:** `.wolverine/security/injection-log.jsonl` (code, hash, stack, timestamp)
+- **Quarantine:** `.wolverine/security/quarantine/` (malicious files moved here)
+- **Lockdown mode:** `enterLockdown()` blocks ALL new file loads during active attack
+- **Self-improvement:** max 3 auto-fixes/hour, risky changes deferred to human
+
 ## Configuration
 
 - **Secrets:** `.env.local` (OPENAI_API_KEY, ANTHROPIC_API_KEY, WOLVERINE_ADMIN_KEY)
@@ -218,3 +236,5 @@ npm start (user's existing command)
 | `wolverine-claw/index.js` | Claw entry point, OpenClaw gateway bootstrap |
 | `wolverine-claw/config/settings.json` | Claw config: gateway, channels, agent, healing |
 | `wolverine-claw/plugins/wolverine-integration.js` | 7 wolverine tools for OpenClaw agent |
+| `src/security/code-guard.js` | Runtime injection detection, 33 patterns, quarantine, forensics |
+| `src/security/self-improve.js` | AI attack analysis + defense hardening loop |
