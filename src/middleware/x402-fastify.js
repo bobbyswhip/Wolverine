@@ -46,11 +46,11 @@ async function x402Plugin(fastify, opts) {
 
   // Initialize v2 x402 SDK with @coinbase/x402 facilitator auth
   try {
-    const { facilitator } = require("@coinbase/x402");
     const { x402ResourceServer, HTTPFacilitatorClient } = require("@x402/core/server");
     const { ExactEvmScheme } = require("@x402/evm/exact/server");
-
-    const client = new HTTPFacilitatorClient(facilitator);
+    let client;
+    try { const { facilitator } = require("@coinbase/x402"); client = new HTTPFacilitatorClient(facilitator); }
+    catch (e) { client = new HTTPFacilitatorClient({ url: "https://www.x402.org/facilitator" }); } // public facilitator (www avoids 308; no cdp-sdk/jose)
     _x402Server = new x402ResourceServer(client);
     _x402Server.register("eip155:*", new ExactEvmScheme());
     console.log(`  💰 x402: v2 SDK loaded (ExactEvmScheme + CDP facilitator)`);

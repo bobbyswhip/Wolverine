@@ -25,6 +25,10 @@ class ProcessMonitor {
     this.maxMemoryMB = options.maxMemoryMB || parseInt(process.env.WOLVERINE_MAX_MEMORY_MB, 10) || 512;
     this.leakSamples = options.leakSamples || 10;   // consecutive growing samples = leak
     this.sampleIntervalMs = options.sampleIntervalMs || 10000; // sample every 10s
+    // A leak is flagged only when growth is BOTH sustained (leakSamples) AND large
+    // (>= leakMinGrowthMB). Without this magnitude gate, ordinary warmup heap growth
+    // (+~30MB over 10 samples) tripped a restart every ~2 min — a false-positive loop.
+    this.leakMinGrowthMB = options.leakMinGrowthMB || parseInt(process.env.WOLVERINE_LEAK_MIN_GROWTH_MB, 10) || 200;
 
     // State
     this._samples = [];        // { timestamp, rss, heap, cpu }
@@ -168,7 +172,8 @@ class ProcessMonitor {
           this._consecutiveGrowth = 0;
         }
 
-        if (this._consecutiveGrowth >= this.leakSamples) {
+        const _leakGrowth = this._consecutiveGrowth >= this.leakSamples ? (sample.rss - this._samples[this._samples.length - this.leakSamples].rss) : 0;
+        if (this._consecutiveGrowth >= this.leakSamples && _leakGrowth >= this.leakMinGrowthMB) {
           const growth = sample.rss - this._samples[this._samples.length - this.leakSamples].rss;
           console.log(chalk.yellow(`  ⚠️  Memory leak detected: +${growth}MB over ${this.leakSamples} samples`));
           if (this.logger) {
